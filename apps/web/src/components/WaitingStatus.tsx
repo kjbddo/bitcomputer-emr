@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import styles from "./WaitingStatus.module.css";
-import { getAccessToken } from "@/lib/auth/token";
 import { PatientInfo } from "./PatientInfoBar";
 
 interface WaitingPatient {
@@ -304,17 +303,13 @@ export default function WaitingStatus({ onPatientSelect }: WaitingStatusProps = 
         apiUrl = `http://localhost:8080/api/waiting/entry/${waitingId}/hold`;
       }
 
-      const token = getAccessToken();
       const headers: HeadersInit = {
         "Content-Type": "application/json",
       };
 
-      if (token) {
-        headers["Authorization"] = `Bearer ${token}`;
-      }
-
       const response = await fetch(apiUrl, {
         method: "PUT",
+        credentials: "include",
         headers,
       });
 
@@ -333,16 +328,13 @@ export default function WaitingStatus({ onPatientSelect }: WaitingStatusProps = 
 
   const deleteWaitingEntry = async (waitingId: number) => {
     try {
-      const token = getAccessToken();
       const headers: HeadersInit = {
         "Content-Type": "application/json",
       };
-      if (token) {
-        headers["Authorization"] = `Bearer ${token}`;
-      }
 
       const response = await fetch(`http://localhost:8080/api/waiting/entry/${waitingId}`, {
         method: "DELETE",
+        credentials: "include",
         headers,
       });
 

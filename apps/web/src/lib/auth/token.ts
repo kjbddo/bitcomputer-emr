@@ -1,57 +1,17 @@
-export const ACCESS_TOKEN_KEY = "access_token";
-export const REFRESH_TOKEN_KEY = "refresh_token";
+/**
+ * 인증 토큰은 서버가 HttpOnly 쿠키로 관리한다.
+ *
+ * JS 에서 토큰 값을 읽거나 저장하지 않는다 — XSS 로 탈취되는 경로를 막기
+ * 위해서다. 로그인 여부 판정은 서버 응답(401)으로 한다.
+ */
 
-export function getAccessToken(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return window.localStorage.getItem(ACCESS_TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
-
-export function getRefreshToken(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return window.localStorage.getItem(REFRESH_TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
-
-export function setAccessToken(token: string | null): void {
+/** 서버 로그아웃 후 클라이언트 상태를 비운다. 쿠키 삭제는 서버가 한다. */
+export function clearClientAuthState(): void {
   if (typeof window === "undefined") return;
   try {
-    if (token) {
-      window.localStorage.setItem(ACCESS_TOKEN_KEY, token);
-      // also sync as a cookie for middleware/server checks (non-HttpOnly)
-      document.cookie = `${ACCESS_TOKEN_KEY}=${encodeURIComponent(token)}; path=/; samesite=lax`;
-    } else {
-      window.localStorage.removeItem(ACCESS_TOKEN_KEY);
-      // clear cookie
-      document.cookie = `${ACCESS_TOKEN_KEY}=; path=/; max-age=0; samesite=lax`;
-    }
+    window.localStorage.removeItem("access_token");
+    window.localStorage.removeItem("refresh_token");
   } catch {
-    // ignore storage errors
+    // storage 접근 실패는 무시한다
   }
 }
-
-export function setRefreshToken(token: string | null): void {
-  if (typeof window === "undefined") return;
-  try {
-    if (token) {
-      window.localStorage.setItem(REFRESH_TOKEN_KEY, token);
-    } else {
-      window.localStorage.removeItem(REFRESH_TOKEN_KEY);
-    }
-  } catch {
-    // ignore storage errors
-  }
-}
-
-export function clearTokens(): void {
-  setAccessToken(null);
-  setRefreshToken(null);
-}
-
-

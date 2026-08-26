@@ -1,21 +1,12 @@
-import type { AxiosInstance, InternalAxiosRequestConfig, AxiosError } from "axios";
-import type { TokenGetter } from "./types";
+import type { AxiosInstance, AxiosError } from "axios";
 import { HttpError } from "./types";
 
-export function attachInterceptors(instance: AxiosInstance, getToken?: TokenGetter): void {
-  instance.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
-    if (getToken) {
-      const token = await getToken();
-      if (token) {
-        config.headers = {
-          ...(config.headers ?? {}),
-          Authorization: `Bearer ${token}`,
-        } as typeof config.headers;
-      }
-    }
-    return config;
-  });
-
+/**
+ * 인증은 HttpOnly 쿠키(withCredentials)로 전달되므로 Authorization 헤더를
+ * 붙이지 않는다. CSRF 토큰은 axios 의 xsrfCookieName/xsrfHeaderName 설정이
+ * 자동으로 처리한다.
+ */
+export function attachInterceptors(instance: AxiosInstance): void {
   instance.interceptors.response.use(
     (response) => response,
     (error: AxiosError) => {
@@ -27,7 +18,11 @@ export function attachInterceptors(instance: AxiosInstance, getToken?: TokenGett
         typeof detail === "string"
           ? detail
           : Array.isArray(detail)
-            ? detail.map((x) => (typeof x === "object" && x && "msg" in x ? String((x as { msg: unknown }).msg) : String(x))).join("; ")
+            ? detail
+                .map((x) =>
+                  typeof x === "object" && x && "msg" in x ? String((x as { msg: unknown }).msg) : String(x)
+                )
+                .join("; ")
             : "";
       const message =
         detailStr ||
@@ -43,5 +38,3 @@ export function attachInterceptors(instance: AxiosInstance, getToken?: TokenGett
     }
   );
 }
-
-

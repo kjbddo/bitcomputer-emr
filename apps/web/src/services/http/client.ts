@@ -1,9 +1,8 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig } from "axios";
 import { attachInterceptors } from "./interceptors";
-import type { HttpClientOptions, TokenGetter } from "./types";
+import type { HttpClientOptions } from "./types";
 
 let sharedInstance: AxiosInstance | null = null;
-let sharedTokenGetter: TokenGetter | undefined;
 let interceptorsAttached = false;
 
 function createInstance(options?: HttpClientOptions): AxiosInstance {
@@ -28,18 +27,12 @@ function createInstance(options?: HttpClientOptions): AxiosInstance {
     },
   });
 
-  // 인터셉터는 한 번만 추가하고, 내부에서 sharedTokenGetter를 참조
+  // 인터셉터는 한 번만 추가한다
   if (!interceptorsAttached) {
-    attachInterceptors(instance, async () => {
-      return sharedTokenGetter ? await sharedTokenGetter() : null;
-    });
+    attachInterceptors(instance);
     interceptorsAttached = true;
   }
   return instance;
-}
-
-export function setAuthTokenGetter(getter: TokenGetter): void {
-  sharedTokenGetter = getter;
 }
 
 export function http(options?: HttpClientOptions): AxiosInstance {

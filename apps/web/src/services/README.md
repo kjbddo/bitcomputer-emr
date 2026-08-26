@@ -29,15 +29,12 @@ http({
 });
 ```
 
-### 토큰 주입기 설정 (선택)
+### 인증
 
-요청 헤더에 `Authorization: Bearer <token>`을 자동으로 추가합니다.
-
-```ts
-import { setAuthTokenGetter } from "@services";
-
-setAuthTokenGetter(async () => localStorage.getItem("token"));
-```
+인증은 서버가 내려주는 HttpOnly 쿠키(`access_token`)로 처리됩니다. 클라이언트는
+토큰 값을 읽거나 저장하지 않으며, `withCredentials: true` 설정으로 쿠키가
+자동으로 요청에 실립니다. CSRF 토큰도 `xsrfCookieName`/`xsrfHeaderName` 설정으로
+자동 처리됩니다.
 
 ### 요청 헬퍼 사용
 

@@ -8,7 +8,6 @@ import {
   HttpError,
   saveDocumentCertificate,
 } from "@/services";
-import { setAccessToken, setRefreshToken } from "@/lib/auth/token";
 import styles from "./MedicalCertificate.module.css";
 import { CertificateItem, CertificateType } from "./CertificateList";
 import type { CertificatePatientInfo } from "./CertificatePatientSearch";
@@ -31,11 +30,6 @@ interface TemplateControl {
 type AiModalResolution =
   | { accepted: true; proposedText: string }
   | { accepted: false; proposedText: string };
-
-interface TokenEnvelope {
-  accessToken?: string;
-  refreshToken?: string;
-}
 
 const PDF_MIN_FONT_SIZE_PX = 6;
 const PDF_MAX_FONT_SIZE_PX = 12;
@@ -329,13 +323,6 @@ export default function MedicalCertificate({
     return currentOpinion === resolvedAiRound.proposedText.trim() ? "APPROVE" : "MODIFY";
   };
 
-  const applySaveResponseTokens = (payload: unknown) => {
-    if (!payload || typeof payload !== "object") return;
-    const envelope = payload as TokenEnvelope;
-    if (envelope.accessToken) setAccessToken(envelope.accessToken);
-    if (envelope.refreshToken) setRefreshToken(envelope.refreshToken);
-  };
-
   const handleAiGenerate = async () => {
     if (!selected) return;
     const historyId = diagnosisApply?.historyId;
@@ -417,8 +404,7 @@ export default function MedicalCertificate({
       );
       formData.append("savedMedicalCertificate", savedOpinion);
       formData.append("feedbackType", getFeedbackType());
-      const response = await saveDocumentCertificate(formData);
-      applySaveResponseTokens(response);
+      await saveDocumentCertificate(formData);
       setNoticeModal("진단서 내용이 DB에 저장되었습니다.");
     } catch (error: unknown) {
       console.error("진단서 저장 실패", error);

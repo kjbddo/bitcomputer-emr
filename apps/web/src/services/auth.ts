@@ -1,6 +1,6 @@
 import { Role } from "@/types/user";
 import { post, get } from "./http/client";
-import { clearTokens, getRefreshToken, setAccessToken, setRefreshToken } from "@/lib/auth/token";
+import { clearClientAuthState } from "@/lib/auth/token";
 
 export interface LoginRequestBody {
   username: string;
@@ -36,15 +36,10 @@ export interface DoctorProfile {
   username: string;
 }
 
-interface LogoutRequestBody {
-  refreshToken: string;
-}
-
 export async function login(body: LoginRequestBody): Promise<LoginResponseBody> {
-  const data = await post<LoginResponseBody, LoginRequestBody>("/api/user/login", body);
-  setAccessToken(data.accessToken ?? null);
-  setRefreshToken(data.refreshToken ?? null);
-  return data;
+  // 서버가 HttpOnly 쿠키로 access token 을 내려준다. 응답 본문에는 토큰이
+  // 없으므로(Task 8) 여기서는 로그인 성공 여부만 확인한다.
+  return post<LoginResponseBody, LoginRequestBody>("/api/user/login", body);
 }
 
 export async function signup(body: SignupRequestBody): Promise<void> {
@@ -52,14 +47,12 @@ export async function signup(body: SignupRequestBody): Promise<void> {
 }
 
 export async function logout(): Promise<void> {
-  const refreshToken = getRefreshToken();
-
   try {
-    if (refreshToken) {
-      await post<void, LogoutRequestBody>("/api/user/logout", { refreshToken });
-    }
+    // 서버가 쿠키(HttpOnly access_token)를 읽어 Redis 블랙리스트에 등록하고
+    // Set-Cookie 로 만료시킨다. 요청 바디는 필요 없다.
+    await post<void>("/api/user/logout");
   } finally {
-    clearTokens();
+    clearClientAuthState();
   }
 }
 

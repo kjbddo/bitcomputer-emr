@@ -1,9 +1,6 @@
-export type TokenGetter = () => string | null | Promise<string | null>;
-
 export interface HttpClientOptions {
   baseURL?: string;
   timeoutMs?: number;
-  getAuthToken?: TokenGetter;
 }
 
 export interface ErrorResponseBody {
