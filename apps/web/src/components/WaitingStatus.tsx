@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import styles from "./WaitingStatus.module.css";
 import { PatientInfo } from "./PatientInfoBar";
+import { get, post, put, del } from "@/services/http/client";
 
 interface WaitingPatient {
   id: number;
@@ -68,17 +69,11 @@ export default function WaitingStatus({ onPatientSelect }: WaitingStatusProps = 
 
     for (const patientId of patientIds) {
       try {
-        const response = await fetch(`http://localhost:8080/api/patients/search_patient/${patientId}`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          }
-        });
-        
-        if (response.ok) {
-          const patientInfo: PatientDetail = await response.json();
-          patientMap.set(patientId, patientInfo);
-        }
+        const patientInfo = await post<PatientDetail>(
+          `/api/patients/search_patient/${patientId}`,
+          {}
+        );
+        patientMap.set(patientId, patientInfo);
       } catch (error) {
         console.error(`환자 정보 조회 실패 (ID: ${patientId}):`, error);
       }
@@ -93,13 +88,7 @@ export default function WaitingStatus({ onPatientSelect }: WaitingStatusProps = 
       setIsLoading(true);
       console.log("대기 목록 조회 시작");
 
-      const response = await fetch("http://localhost:8080/api/waiting/get_list");
-      
-      if (!response.ok) {
-        throw new Error(`대기 목록 조회 실패: ${response.status}`);
-      }
-
-      const data: WaitingPatient[] = await response.json();
+      const data = await get<WaitingPatient[]>("/api/waiting/get_list");
       console.log("대기 목록 조회 성공:", data);
       
       setWaitingList(data);
@@ -296,26 +285,14 @@ export default function WaitingStatus({ onPatientSelect }: WaitingStatusProps = 
   // 상태 변경 함수
   const updatePatientStatus = async (waitingId: number, newState: "hold" | "completed") => {
     try {
-      let apiUrl = "";
+      let apiPath = "";
       if (newState === "completed") {
-        apiUrl = `http://localhost:8080/api/waiting/entry/${waitingId}/complete`;
+        apiPath = `/api/waiting/entry/${waitingId}/complete`;
       } else if (newState === "hold") {
-        apiUrl = `http://localhost:8080/api/waiting/entry/${waitingId}/hold`;
+        apiPath = `/api/waiting/entry/${waitingId}/hold`;
       }
 
-      const headers: HeadersInit = {
-        "Content-Type": "application/json",
-      };
-
-      const response = await fetch(apiUrl, {
-        method: "PUT",
-        credentials: "include",
-        headers,
-      });
-
-      if (!response.ok) {
-        throw new Error(`상태 변경 실패: ${response.status}`);
-      }
+      await put(apiPath);
 
       closeContextMenu();
       // 목록 새로고침
@@ -328,20 +305,7 @@ export default function WaitingStatus({ onPatientSelect }: WaitingStatusProps = 
 
   const deleteWaitingEntry = async (waitingId: number) => {
     try {
-      const headers: HeadersInit = {
-        "Content-Type": "application/json",
-      };
-
-      const response = await fetch(`http://localhost:8080/api/waiting/entry/${waitingId}`, {
-        method: "DELETE",
-        credentials: "include",
-        headers,
-      });
-
-      if (!response.ok) {
-        throw new Error(`내원 정보 삭제 실패: ${response.status}`);
-      }
-
+      await del(`/api/waiting/entry/${waitingId}`);
       await fetchWaitingList();
     } catch (error) {
       console.error("내원 정보 삭제 실패:", error);

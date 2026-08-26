@@ -2,6 +2,7 @@
 
 import { useState, forwardRef, useImperativeHandle } from "react";
 import styles from "./PatientForm.module.css";
+import { post } from "@/services/http/client";
 
 interface PatientData {
   name: string;
@@ -68,28 +69,11 @@ const PatientForm = forwardRef<PatientFormRef>((props, ref) => {
     try {
       console.log("환자 등록 요청 시작:", patientData);
 
-      const response = await fetch(
-        "http://localhost:8080/api/patients/get_patient_id",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(patientData),
-        }
+      const result = await post<{ patientId: number }>(
+        "/api/patients/get_patient_id",
+        patientData
       );
 
-      console.log("응답 상태:", response.status);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("서버 오류 응답:", errorText);
-        throw new Error(
-          `HTTP error! status: ${response.status}, message: ${errorText}`
-        );
-      }
-
-      const result = await response.json();
       console.log("환자 등록 성공:", result);
       return result.patientId;
     } catch (error) {
@@ -125,24 +109,7 @@ const PatientForm = forwardRef<PatientFormRef>((props, ref) => {
         state: "waiting"
       };
 
-      const response = await fetch("http://localhost:8080/api/waiting/register", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(waitingData),
-      });
-
-      console.log("대기 등록 응답 상태:", response.status);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("대기 등록 오류:", errorText);
-        console.error("요청 데이터:", waitingData);
-        throw new Error(`대기 등록 실패: ${response.status} - ${errorText}`);
-      }
-
-      const result = await response.json();
+      const result = await post("/api/waiting/register", waitingData);
       console.log("대기 등록 성공:", result);
       return result;
     } catch (error) {

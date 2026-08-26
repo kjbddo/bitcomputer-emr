@@ -3,6 +3,7 @@
 import { ReactNode, useState, useEffect } from "react";
 import styles from "./SearchPatientModal.module.css";
 import { PatientInfo } from "./PatientInfoBar";
+import { get } from "@/services/http/client";
 
 interface Patient {
   id: number;
@@ -86,13 +87,7 @@ export default function SearchPatientModal({ isOpen, onClose, title, onSelectPat
   const fetchAllPatients = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch("http://localhost:8080/api/patients/get_all");
-      
-      if (!response.ok) {
-        throw new Error(`환자 목록 조회 실패: ${response.status}`);
-      }
-
-      const data: Patient[] = await response.json();
+      const data = await get<Patient[]>("/api/patients/get_all");
       setPatients(data);
       setFilteredPatients(data); // 초기에는 모든 환자 표시
     } catch (error) {

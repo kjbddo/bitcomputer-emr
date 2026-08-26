@@ -27,6 +27,7 @@ import { MedicalSelectionProvider, useMedicalSelection } from "@store/medicalSel
 import { ClinicVisitContext } from "@/types/clinic";
 import { Role } from "@/types/user";
 import { getMe, getRole } from "@/services/auth";
+import { post } from "@/services/http/client";
 import styles from "./page.module.css";
 import {
   createHistory,
@@ -384,26 +385,10 @@ export default function DashboardPage() {
 
       console.log("환자 등록 요청 시작:", patientPayload);
 
-      const patientResponse = await fetch(
-        "http://localhost:8080/api/patients/get_patient_id",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(patientPayload),
-        }
+      const patientResult = await post<{ patientId: number }>(
+        "/api/patients/get_patient_id",
+        patientPayload
       );
-
-      if (!patientResponse.ok) {
-        const errorText = await patientResponse.text();
-        console.error("서버 오류 응답:", errorText);
-        throw new Error(
-          `HTTP error! status: ${patientResponse.status}, message: ${errorText}`
-        );
-      }
-
-      const patientResult = await patientResponse.json();
       const patientId = patientResult.patientId;
       console.log("환자 등록 성공:", patientResult);
 
@@ -427,24 +412,7 @@ export default function DashboardPage() {
 
       console.log("대기 목록 등록 시작:", waitingData);
 
-      const waitingResponse = await fetch(
-        "http://localhost:8080/api/waiting/register",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(waitingData),
-        }
-      );
-
-      if (!waitingResponse.ok) {
-        const errorText = await waitingResponse.text();
-        console.error("대기 등록 오류:", errorText);
-        throw new Error(`대기 등록 실패: ${waitingResponse.status} - ${errorText}`);
-      }
-
-      const waitingResult = await waitingResponse.json();
+      const waitingResult = await post("/api/waiting/register", waitingData);
       console.log("대기 등록 성공:", waitingResult);
 
       alert(
