@@ -5,6 +5,7 @@ import com.example.bitcomputer.jwt.JwtTokenProvider;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -51,6 +52,7 @@ class SecurityConfigTest {
     }
 
     @Test
+    @DirtiesContext(methodMode = DirtiesContext.MethodMode.AFTER_METHOD)
     void receptionistCannotCallAgentApi() throws Exception {
         mockMvc.perform(post("/api/agent/prescription/recommend")
                        .cookie(cookieFor(Role.RECEPTIONIST))
@@ -61,6 +63,7 @@ class SecurityConfigTest {
     }
 
     @Test
+    @DirtiesContext(methodMode = DirtiesContext.MethodMode.AFTER_METHOD)
     void nurseCannotCallAgentApi() throws Exception {
         mockMvc.perform(post("/api/agent/prescription/recommend")
                        .cookie(cookieFor(Role.NURSE))
@@ -71,6 +74,7 @@ class SecurityConfigTest {
     }
 
     @Test
+    @DirtiesContext(methodMode = DirtiesContext.MethodMode.AFTER_METHOD)
     void doctorReachesAgentApi() throws Exception {
         mockMvc.perform(post("/api/agent/prescription/recommend")
                        .cookie(cookieFor(Role.DOCTOR))

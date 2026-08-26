@@ -50,6 +50,8 @@ class AuditLogTest {
     }
 
     @Test
+    @org.springframework.test.annotation.DirtiesContext(
+            methodMode = org.springframework.test.annotation.DirtiesContext.MethodMode.AFTER_METHOD)
     void deniedAgentCallIsRecorded() throws Exception {
         mockMvc.perform(post("/api/agent/prescription/recommend")
                        .cookie(cookieFor(Role.RECEPTIONIST, "front.lee"))
