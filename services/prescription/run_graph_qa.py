@@ -98,7 +98,7 @@ from lc_arango_chain import build_arango_graph_qa_chain
 
 REPO_ROOT = SCRIPT_DIR.parent.parent
 SPRING_LOCAL = (
-    REPO_ROOT / "Back-End" / "src" / "main" / "resources" / "application-local.properties"
+    REPO_ROOT / "apps" / "api" / "src" / "main" / "resources" / "application-local.properties"
 )
 
 # ---------------------------------------------------------------------------

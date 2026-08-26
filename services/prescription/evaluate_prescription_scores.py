@@ -334,13 +334,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--train-csv",
         type=Path,
-        default=Path(__file__).resolve().parents[1] / "data_normalize" / "train_dataset" / "train.csv",
+        default=Path(__file__).resolve().parents[2] / "packages" / "graph-etl" / "train_dataset" / "train.csv",
         help="학습 통계 생성용 train CSV",
     )
     p.add_argument(
         "--test-csv",
         type=Path,
-        default=Path(__file__).resolve().parents[1] / "data_normalize" / "test_dataset" / "test.csv",
+        default=Path(__file__).resolve().parents[2] / "packages" / "graph-etl" / "test_dataset" / "test.csv",
         help="최종 평가 대상 test CSV",
     )
     p.add_argument(

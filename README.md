@@ -103,7 +103,7 @@ python .\Back-End\scripts\import_master_codes.py --target diagnose
 적재 확인:
 
 ```powershell
-docker exec bit-mysql mysql -uroot -pDd905925@ -D bitcomputer -e "SELECT COUNT(*) AS disease_count FROM disease; SELECT COUNT(*) AS diagnose_count FROM diagnose;"
+docker exec bit-mysql mysql -uroot -p<YOUR_MYSQL_ROOT_PASSWORD> -D bitcomputer -e "SELECT COUNT(*) AS disease_count FROM disease; SELECT COUNT(*) AS diagnose_count FROM diagnose;"
 curl "http://localhost:8080/api/diseases?page=0&size=5"
 curl "http://localhost:8080/api/diagnoses?page=0&size=5"
 ```
@@ -202,7 +202,7 @@ python -m pip install -r requirements.txt
 $env:ARANGO_HOST="localhost"
 $env:ARANGO_PORT="8529"
 $env:ARANGO_USER="root"
-$env:ARANGO_PASSWORD="Dd905925@"
+$env:ARANGO_PASSWORD="<YOUR_ARANGO_ROOT_PASSWORD>"
 $env:ARANGO_DATABASE="bitcomputer_graph"
 
 python import_to_arango.py --database bitcomputer_graph --batch 1000

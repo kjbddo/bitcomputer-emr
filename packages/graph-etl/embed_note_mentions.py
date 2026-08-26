@@ -21,7 +21,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
-SPRING_LOCAL = REPO_ROOT / "Back-End" / "src" / "main" / "resources" / "application-local.properties"
+SPRING_LOCAL = REPO_ROOT / "apps" / "api" / "src" / "main" / "resources" / "application-local.properties"
 
 try:
     from arango import ArangoClient
@@ -77,7 +77,7 @@ def load_arango_config() -> dict[str, str | int]:
 def load_dotenv_langchain() -> None:
     if not load_dotenv:
         return
-    for p in (SCRIPT_DIR / ".env", REPO_ROOT / "GraphDB" / "langchain_graph_qa" / ".env"):
+    for p in (SCRIPT_DIR / ".env", REPO_ROOT / "services" / "prescription" / ".env"):
         if p.is_file():
             load_dotenv(p)
             return

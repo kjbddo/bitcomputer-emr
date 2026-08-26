@@ -264,7 +264,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mysql-host", default=os.environ.get("MYSQL_HOST", "127.0.0.1"))
     parser.add_argument("--mysql-port", default=os.environ.get("MYSQL_PORT", "3307"))
     parser.add_argument("--mysql-user", default=os.environ.get("MYSQL_USER", "root"))
-    parser.add_argument("--mysql-password", default=os.environ.get("MYSQL_PASSWORD", "Dd905925@"))
+    parser.add_argument("--mysql-password", default=os.environ.get("MYSQL_PASSWORD"))
     parser.add_argument("--mysql-database", default=os.environ.get("MYSQL_DATABASE", "bitcomputer"))
     return parser.parse_args()
 
@@ -290,6 +290,10 @@ def main() -> int:
 
     if args.convert_only:
         return 0
+
+    if not args.mysql_password:
+        print("MYSQL_PASSWORD 환경변수(또는 --mysql-password)가 설정되지 않았습니다.", file=sys.stderr)
+        return 1
 
     with MysqlRunner(args) as runner:
         for target in targets:

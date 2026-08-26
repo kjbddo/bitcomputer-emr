@@ -38,7 +38,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "output"
 SPRING_LOCAL = (
-    REPO_ROOT / "Back-End" / "src" / "main" / "resources" / "application-local.properties"
+    REPO_ROOT / "apps" / "api" / "src" / "main" / "resources" / "application-local.properties"
 )
 
 # 문서 컬렉션 (기존 Patient / Disease / Diagnose 와 이름 충돌 없음)

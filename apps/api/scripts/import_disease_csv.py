@@ -69,7 +69,10 @@ def main() -> None:
     port = os.environ.get("MYSQL_PORT", "3307")
     user = os.environ.get("MYSQL_USER", "root")
     # compose.yaml MYSQL_ROOT_PASSWORD 와 동기화 (application.properties 5776 은 로컬 전용일 수 있음)
-    password = os.environ.get("MYSQL_PASSWORD", "Dd905925@")
+    password = os.environ.get("MYSQL_PASSWORD")
+    if not password:
+        print("MYSQL_PASSWORD 환경변수가 설정되지 않았습니다.", file=sys.stderr)
+        sys.exit(1)
     database = os.environ.get("MYSQL_DATABASE", "bitcomputer")
 
     cnf_path: str | None = None
