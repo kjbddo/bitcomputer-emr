@@ -220,7 +220,7 @@ bitcomputer/
 
 `SecurityConfig`의 주석 해제만으로는 부족하다. 아래를 함께 처리한다.
 
-1. `jwt.secret` 하드코딩 제거 → `${JWT_SECRET}`. 부팅 시 길이 검증(HS256 최소 256bit). 현재 `Keys.hmacShaKeyFor(secretKey.getBytes())`는 짧으면 런타임에 실패하므로, 시작 시점에 잡는다.
+1. `jwt.secret` 하드코딩 제거 → `${JWT_SECRET}`. 부팅 시 길이 검증. 현재 서명 알고리즘은 `SignatureAlgorithm.HS512`이므로 최소 512bit(64바이트)가 필요하다. `Keys.hmacShaKeyFor(secretKey.getBytes())`는 짧으면 런타임에 실패하므로, 시작 시점에 잡는다.
 2. access token을 **HttpOnly + Secure + SameSite=Lax 쿠키**로 전달. 프론트 `localStorage` 저장 제거.
 3. 로그아웃 시 Redis 블랙리스트 등록, 필터에서 확인.
 4. CORS `allowedOrigins`의 리터럴 `"클라이언트 주소"` 제거, 환경변수화.
