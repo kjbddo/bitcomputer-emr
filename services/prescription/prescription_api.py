@@ -133,6 +133,7 @@ class PrescriptionRecommendResponse(BaseModel):
     used_cohort_rx: bool = False
     cohort_rx_count: int = 0
     toolTrace: List[Dict[str, Any]] = Field(default_factory=list)
+    engineStatus: str = "real"
 
 
 class PrescriptionFeedbackItem(BaseModel):
@@ -669,6 +670,7 @@ def recommend(
         used_cohort_rx=used_cohort,
         cohort_rx_count=cohort_count,
         toolTrace=tool_trace if eval_trace_enabled else [],
+        engineStatus=resolve_provider(),
     )
 
 

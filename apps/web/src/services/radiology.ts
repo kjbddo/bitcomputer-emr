@@ -16,6 +16,7 @@ export interface RadiologyReportResponse {
   heatmapUrl: string | null;
   predictedDiseases: PredictedDisease[];
   warning: string | null;
+  engineStatus?: string;
 }
 
 export interface PredictedDisease {

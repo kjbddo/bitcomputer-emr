@@ -31,6 +31,7 @@ export default function AIReport({
   const [resultImage, setResultImage] = useState<string | null>(null);
   const [predictedDiseases, setPredictedDiseases] = useState<PredictedDisease[]>([]);
   const [warning, setWarning] = useState<string | null>(null);
+  const [engineStatus, setEngineStatus] = useState<string | null>(null);
   const [view, setView] = useState<XrayView>("PA");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +71,7 @@ export default function AIReport({
     setResultImage(null);
     setPredictedDiseases([]);
     setWarning(null);
+    setEngineStatus(null);
     setError(null);
     selectedFileRef.current = null;
     if (fileInputRef.current) {
@@ -106,6 +108,7 @@ export default function AIReport({
       setResultImage(response.heatmapUrl || uploadedImage);
       setPredictedDiseases(getVisiblePredictedDiseases(response.predictedDiseases));
       setWarning(response.warning || null);
+      setEngineStatus(response.engineStatus || null);
     } catch (err: unknown) {
       console.error("AI 분석 오류:", err);
       const apiError = err as { response?: { data?: { error?: string } }; message?: string };
@@ -199,6 +202,22 @@ export default function AIReport({
         {(predictedDiseases.length > 0 || warning) && (
           <div className={styles.resultTextSection}>
             <div className={styles.resultContent}>
+              {engineStatus && engineStatus !== "real" && (
+                <div
+                  role="status"
+                  style={{
+                    background: "#fff4e5",
+                    border: "1px solid #ffa726",
+                    borderRadius: 4,
+                    padding: "8px 12px",
+                    marginBottom: 12,
+                    fontSize: 13,
+                  }}
+                >
+                  이 결과는 <strong>{engineStatus}</strong> 엔진에서 생성되었습니다. 실제 모델
+                  추론이 아니므로 임상 판단에 사용할 수 없습니다.
+                </div>
+              )}
               <span className={styles.resultLabel}>추론된 상병:</span>
               {predictedDiseases.length > 0 ? (
                 <ul className={styles.predictionList}>

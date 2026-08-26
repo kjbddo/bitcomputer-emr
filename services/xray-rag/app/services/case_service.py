@@ -210,6 +210,7 @@ class CaseService:
             explanation=explanation,
             heatmapPath=heatmap_url,
             warning=self.settings.SAFETY_NOTICE,
+            engineStatus=self.settings.engine_status(),
         )
 
     def _storage_url(self, path: Path) -> str:

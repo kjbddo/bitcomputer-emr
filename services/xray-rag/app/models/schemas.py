@@ -114,6 +114,7 @@ class InferenceResponse(BaseModel):
     explanation: Dict[str, Any]
     heatmapPath: Optional[str] = None
     warning: str
+    engineStatus: str = "mock"
 
 
 # ---------- Feedback ----------

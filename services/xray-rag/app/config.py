@@ -133,6 +133,18 @@ class Settings:
         for p in (self.images_dir, self.recon_dir, self.heatmap_dir):
             p.mkdir(parents=True, exist_ok=True)
 
+    def engine_status(self) -> str:
+        """실행 중인 추론 엔진이 실제 모델인지 mock 인지 알린다.
+
+        USE_TORCH_ROI 는 실 어댑터가 없어(factory 가 항상 MockROIModel 을 쓴다)
+        판정에서 제외한다.
+
+        클래스 변수는 import 시점에 고정되므로 여기서는 os.environ 을 직접 읽는다.
+        """
+        anomaly = _bool(os.environ.get("USE_TORCH_ANOMALY"), False)
+        embedding = _bool(os.environ.get("USE_TORCH_EMBEDDING"), False)
+        return "real" if (anomaly and embedding) else "mock"
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
