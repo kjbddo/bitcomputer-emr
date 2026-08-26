@@ -213,6 +213,10 @@ def main() -> int:
 
     # ------------- LIVE 등록 -------------
     # 컨테이너 lazy import (ArangoDB 미실행 시 에러를 여기서 명확히 노출)
+    from app.env_check import require_env
+
+    require_env(["ARANGO_PASSWORD"])
+
     try:
         from app.api.dependencies import get_container
     except Exception as e:

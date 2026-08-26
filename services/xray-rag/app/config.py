@@ -59,7 +59,7 @@ class Settings:
     ARANGO_URL: str = os.environ.get("ARANGO_URL", "http://localhost:8529")
     ARANGO_DB_NAME: str = os.environ.get("ARANGO_DB_NAME", "xray_graph_db")
     ARANGO_USERNAME: str = os.environ.get("ARANGO_USERNAME", "root")
-    ARANGO_PASSWORD: str = os.environ.get("ARANGO_PASSWORD", "password")
+    ARANGO_PASSWORD: str = os.environ.get("ARANGO_PASSWORD", "")
     ARANGO_GRAPH_NAME: str = os.environ.get("ARANGO_GRAPH_NAME", "xray_graph")
 
     # Vector index. ArangoDB 3.12+에서 vector type 인덱스 지원.

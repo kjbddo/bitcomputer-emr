@@ -32,6 +32,9 @@ from app.db.schema import (  # noqa: E402
     ensure_vector_indexes,
     seed_defaults,
 )
+from app.env_check import require_env  # noqa: E402
+
+require_env(["ARANGO_PASSWORD"])
 
 
 def main() -> int:
