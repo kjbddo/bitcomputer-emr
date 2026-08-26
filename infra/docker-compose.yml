@@ -114,6 +114,7 @@ services:
     environment:
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      LLM_PROVIDER: ${LLM_PROVIDER:-real}
     ports:
       - "5001:5001"
     healthcheck:
@@ -136,6 +137,7 @@ services:
       ARANGO_USER: root
       ARANGO_PASSWORD: ${ARANGO_PASSWORD}
       ARANGO_DATABASE: ${ARANGO_DATABASE:-bitcomputer_graph}
+      LLM_PROVIDER: ${LLM_PROVIDER:-real}
     ports:
       - "8001:8001"
     depends_on:
@@ -164,6 +166,7 @@ services:
       RABBITMQ_PASSWORD: guest
       VALIDATION_RABBITMQ_REQUEST_QUEUE: validation.prescription.request
       VALIDATION_RABBITMQ_RESULT_QUEUE: validation.prescription.result
+      LLM_PROVIDER: ${LLM_PROVIDER:-real}
     ports:
       - "8002:8002"
     depends_on:

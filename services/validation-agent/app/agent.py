@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 
+from .llm_provider import resolve_provider, stub_tool_decision
 from .models import ValidationAgentRequest, ValidationAgentResponse
 from .tools import (
     disease_validator,
@@ -211,6 +212,8 @@ def _decide_next_tool(
     pubmed_queries: List[str],
     iteration: int,
 ) -> Dict[str, Any]:
+    if resolve_provider() == "stub":
+        return stub_tool_decision(iteration)
     if os.environ.get("OPENAI_API_KEY"):
         decision = _llm_tool_decision(state, reasoning_trace, pubmed_queries, iteration)
         if decision:

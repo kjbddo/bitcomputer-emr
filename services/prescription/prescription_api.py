@@ -43,6 +43,8 @@ except ImportError:
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 
+from llm_provider import resolve_provider, stub_prescription_response
+
 from prescription_agent import (
     build_prescription_agent_prompt,
     parse_prescriptions_llm_response,
@@ -578,7 +580,10 @@ def recommend(
     )
 
     try:
-        if _is_openai_model(model_id):
+        if resolve_provider() == "stub":
+            raw = stub_prescription_response(effective_top_rx)
+            trace_tool("llm_generate", True, status="success", model="stub", temperature=0.0)
+        elif _is_openai_model(model_id):
             raw = _invoke_openai_json(model_id, temperature, SYSTEM_PRESCRIPTION, user_msg)
         else:
             llm = ChatGoogleGenerativeAI(model=model_id, temperature=temperature)
