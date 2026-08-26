@@ -131,11 +131,13 @@ X-ray 추론 응답과 처방 추천 응답에 현재 엔진 상태를 나타내
 
 | 서비스 | 파생 기준 | 가능한 값 |
 |---|---|---|
-| `xray-rag` | `USE_TORCH_ANOMALY` && `USE_TORCH_EMBEDDING` | 둘 다 true면 `real`, 아니면 `mock` |
+| `xray-rag` | `build_models()` 가 실제로 구성한 모델 | 이상탐지·임베딩 **둘 다 torch 어댑터로 생성됐을 때만** `real`, 아니면 `mock` |
 | `prescription` | `LLM_PROVIDER` | `stub` 또는 `real` |
 | `validation-agent` | `LLM_PROVIDER` | `stub` 또는 `real` |
 
 `xray-rag`는 `stub`을 쓰지 않고(LLM 미사용), `prescription`·`validation-agent`는 `mock`을 쓰지 않는다.
+
+**`xray-rag`의 판정 기준은 환경변수 토글이 아니라 실제 구성 결과다.** `USE_TORCH_*`는 요청일 뿐이고, `build_torch_anomaly_model()`·`build_torch_embedding_model()`은 가중치 누락·의존성 부재·로드 실패 시 `None`을 반환해 `factory.build_models()`가 조용히 mock으로 폴백한다. 토글만 보고 판정하면 로드에 실패한 상태에서 `real`이라고 보고하게 되는데, 그것이 바로 이 필드가 막으려는 상황이다. `build_models()`가 무엇을 만들었는지를 함께 반환하고, 그 값으로 판정한다.
 
 프론트는 이 값이 `real`이 아니면 결과 화면에 경고 배지를 표시한다.
 
