@@ -39,6 +39,10 @@ def create_app() -> FastAPI:
     return app
 
 
+from app.env_check import require_env
+
+require_env(["ARANGO_PASSWORD"])
+
 app = create_app()
 
 

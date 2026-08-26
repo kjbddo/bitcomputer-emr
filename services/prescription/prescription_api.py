@@ -154,6 +154,13 @@ class PrescriptionFeedbackResponse(BaseModel):
     edge_collection: str
 
 
+from env_check import require_env
+
+_required = ["ARANGO_PASSWORD"]
+if os.environ.get("LLM_PROVIDER", "real") != "stub":
+    _required.append("GOOGLE_API_KEY")
+require_env(_required)
+
 app = FastAPI(
     title="BitComputer Prescription Agent",
     version="0.1.0",

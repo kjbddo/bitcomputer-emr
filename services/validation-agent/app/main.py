@@ -35,6 +35,13 @@ def _load_dotenv_if_present() -> None:
 
 _load_dotenv_if_present()
 
+from .env_check import require_env
+
+_required: list[str] = []
+if os.environ.get("LLM_PROVIDER", "real") != "stub":
+    _required.append("OPENAI_API_KEY")
+require_env(_required)
+
 app = FastAPI(
     title="BitComputer Validation Agent",
     version="0.1.0",
