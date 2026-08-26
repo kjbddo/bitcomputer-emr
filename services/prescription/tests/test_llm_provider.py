@@ -1,6 +1,12 @@
 import json
+from types import SimpleNamespace
 
-from llm_provider import resolve_provider, stub_prescription_response
+from llm_provider import (
+    STUB_MARKER,
+    resolve_provider,
+    stub_certificate_response,
+    stub_prescription_response,
+)
 from prescription_agent import parse_prescriptions_llm_response
 
 
@@ -39,3 +45,46 @@ def test_stub_response_is_deterministic():
 def test_stub_response_handles_empty_input():
     data = json.loads(stub_prescription_response([]))
     assert data["prescriptions"][0]["prescription_code"] == "미기재"
+
+
+def _certificate_req(**overrides):
+    defaults = dict(
+        diagnosis_kind="임상적 추정",
+        purpose="사내 제출용",
+        diseases=[SimpleNamespace(name="급성 위염"), SimpleNamespace(name="")],
+    )
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+def test_stub_certificate_response_contains_marker():
+    text = stub_certificate_response(_certificate_req())
+    assert STUB_MARKER in text
+
+
+def test_stub_certificate_response_is_plain_string():
+    text = stub_certificate_response(_certificate_req())
+    assert isinstance(text, str)
+    assert not hasattr(text, "content")
+
+
+def test_stub_certificate_response_uses_disease_names():
+    text = stub_certificate_response(_certificate_req())
+    assert "급성 위염" in text
+
+
+def test_stub_certificate_response_handles_dict_diseases():
+    req = _certificate_req(diseases=[{"name": "감기"}])
+    text = stub_certificate_response(req)
+    assert "감기" in text
+
+
+def test_stub_certificate_response_handles_empty_diseases():
+    req = _certificate_req(diseases=[])
+    text = stub_certificate_response(req)
+    assert "상병명 미기재" in text
+
+
+def test_stub_certificate_response_is_deterministic():
+    req = _certificate_req()
+    assert stub_certificate_response(req) == stub_certificate_response(req)

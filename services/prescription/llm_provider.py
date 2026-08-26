@@ -53,3 +53,26 @@ def stub_prescription_response(top_rx: Any) -> str:
             "reason": STUB_MARKER,
         })
     return json.dumps({"prescriptions": items}, ensure_ascii=False)
+
+
+def _disease_names(diseases: Any) -> list[str]:
+    rows = diseases if isinstance(diseases, list) else []
+    names = []
+    for row in rows:
+        name = row.get("name") if isinstance(row, dict) else getattr(row, "name", None)
+        if name:
+            names.append(str(name))
+    return names
+
+
+def stub_certificate_response(req: Any) -> str:
+    """certificate_api.generate_certificate 가 그대로 사용할 수 있는 진단서 소견
+    텍스트(순수 문자열)를 반환한다. 실제 Gemini 응답 소비 코드
+    (`resp.content.strip()` 결과)와 동일하게 문자열 하나만 돌려준다."""
+    diagnosis_kind = str(getattr(req, "diagnosis_kind", "") or "미선택")
+    purpose = str(getattr(req, "purpose", "") or "미기재")
+    disease_summary = ", ".join(_disease_names(getattr(req, "diseases", None))) or "상병명 미기재"
+    return (
+        f"{STUB_MARKER} 진단 구분: {diagnosis_kind}. 상병: {disease_summary}. "
+        f"용도({purpose})에 따른 치료 내용 및 향후 치료에 대한 소견은 고정된 스텁 응답입니다."
+    )

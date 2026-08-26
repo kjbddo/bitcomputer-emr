@@ -583,24 +583,25 @@ def recommend(
         if resolve_provider() == "stub":
             raw = stub_prescription_response(effective_top_rx)
             trace_tool("llm_generate", True, status="success", model="stub", temperature=0.0)
-        elif _is_openai_model(model_id):
-            raw = _invoke_openai_json(model_id, temperature, SYSTEM_PRESCRIPTION, user_msg)
         else:
-            llm = ChatGoogleGenerativeAI(model=model_id, temperature=temperature)
-            resp = llm.invoke(
-                [
-                    ("system", SYSTEM_PRESCRIPTION),
-                    ("human", user_msg),
-                ]
+            if _is_openai_model(model_id):
+                raw = _invoke_openai_json(model_id, temperature, SYSTEM_PRESCRIPTION, user_msg)
+            else:
+                llm = ChatGoogleGenerativeAI(model=model_id, temperature=temperature)
+                resp = llm.invoke(
+                    [
+                        ("system", SYSTEM_PRESCRIPTION),
+                        ("human", user_msg),
+                    ]
+                )
+                raw = (resp.content or "").strip() if hasattr(resp, "content") else str(resp).strip()
+            trace_tool(
+                "llm_generate",
+                True,
+                status="success",
+                model=model_id,
+                temperature=temperature,
             )
-            raw = (resp.content or "").strip() if hasattr(resp, "content") else str(resp).strip()
-        trace_tool(
-            "llm_generate",
-            True,
-            status="success",
-            model=model_id,
-            temperature=temperature,
-        )
     except ChatGoogleGenerativeAIError as exc:
         logger.exception("Gemini 호출 실패")
         trace_tool(

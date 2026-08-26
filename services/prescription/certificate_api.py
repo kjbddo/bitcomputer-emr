@@ -40,6 +40,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 
 from certificate_agent import SYSTEM_CERTIFICATE, build_certificate_agent_prompt
+from llm_provider import resolve_provider, stub_certificate_response
 
 logger = logging.getLogger("certificate_api")
 logging.basicConfig(
@@ -120,7 +121,7 @@ def health() -> dict[str, Any]:
 
 @app.post("/api/ai/document/generate", response_model=CertificateGenerateResponse)
 def generate_certificate(req: CertificateGenerateRequest) -> CertificateGenerateResponse:
-    if not os.environ.get("GOOGLE_API_KEY"):
+    if resolve_provider() != "stub" and not os.environ.get("GOOGLE_API_KEY"):
         raise HTTPException(
             status_code=500,
             detail="GOOGLE_API_KEY 가 설정되지 않았습니다. 서버 환경변수 또는 .env 를 확인하세요.",
@@ -144,22 +145,25 @@ def generate_certificate(req: CertificateGenerateRequest) -> CertificateGenerate
         req.certificate_type,
     )
 
-    llm = ChatGoogleGenerativeAI(model=DEFAULT_MODEL, temperature=DEFAULT_TEMPERATURE)
+    if resolve_provider() == "stub":
+        certificate = stub_certificate_response(req)
+    else:
+        llm = ChatGoogleGenerativeAI(model=DEFAULT_MODEL, temperature=DEFAULT_TEMPERATURE)
 
-    try:
-        resp = llm.invoke(
-            [
-                ("system", SYSTEM_CERTIFICATE),
-                ("human", user_msg),
-            ]
+        try:
+            resp = llm.invoke(
+                [
+                    ("system", SYSTEM_CERTIFICATE),
+                    ("human", user_msg),
+                ]
+            )
+        except ChatGoogleGenerativeAIError as exc:
+            logger.exception("Gemini 호출 실패 - history_id=%d", req.history_id)
+            raise HTTPException(status_code=502, detail=f"Gemini 호출 실패: {exc}") from exc
+
+        certificate = (
+            resp.content.strip() if hasattr(resp, "content") else str(resp).strip()
         )
-    except ChatGoogleGenerativeAIError as exc:
-        logger.exception("Gemini 호출 실패 - history_id=%d", req.history_id)
-        raise HTTPException(status_code=502, detail=f"Gemini 호출 실패: {exc}") from exc
-
-    certificate = (
-        resp.content.strip() if hasattr(resp, "content") else str(resp).strip()
-    )
 
     logger.info(
         "진단서 생성 완료 - history_id=%d, length=%d", req.history_id, len(certificate)
