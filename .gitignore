@@ -6,7 +6,6 @@
 !.env.example
 
 # model weights (scripts/fetch-models.sh 로 내려받는다)
-models/
 *.pt
 *.pth
 
@@ -22,14 +21,14 @@ __pycache__/
 .venv/
 .pytest_cache/
 
-# java
-build/
-.gradle/
-bin/
+# java (apps/api Gradle build output)
+apps/api/build/
+apps/api/.gradle/
+apps/api/bin/
 
 # runtime artifacts
-storage/
-generated/
+services/xray-rag/storage/
+apps/api/generated/
 
 # editor / os
 .idea/
