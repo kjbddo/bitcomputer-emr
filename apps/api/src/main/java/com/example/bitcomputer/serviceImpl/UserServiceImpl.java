@@ -38,18 +38,11 @@ public class UserServiceImpl implements UserService {
         int requestedDeptId = userRegisterDTO.getDeptId();
         int defaultDeptId = 1; // 더미 부서 ID
         employee.setDeptId(requestedDeptId > 0 ? requestedDeptId : defaultDeptId);
-        String requestedRole = userRegisterDTO.getRole();
-        Role role = Role.DEFAULT;
-        if (requestedRole != null) {
-            try {
-                role = Role.valueOf(requestedRole.toUpperCase());
-            } catch (IllegalArgumentException ex) {
-                throw new IllegalArgumentException("Invalid role: " + requestedRole);
-            }
-        }
-        employee.setRole(role);
+        // 공개 가입은 항상 DEFAULT 다. 요청 본문의 role 은 신뢰하지 않는다.
+        // 역할 부여는 SUPER_USER 가 /api/super/set_role/{id} 또는
+        // /api/super/create_user 로만 할 수 있다.
+        employee.setRole(Role.DEFAULT);
         employee.setUsername(userRegisterDTO.getUsername());
-        // 비밀번호 암호화 (SecurityConfig에서 정의한 PasswordEncoder 사용)
         employee.setPassword(passwordEncoder.encode(userRegisterDTO.getPassword()));
         userRepository.save(employee);
     }

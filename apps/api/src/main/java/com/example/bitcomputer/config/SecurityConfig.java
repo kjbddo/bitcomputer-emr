@@ -1,27 +1,34 @@
 package com.example.bitcomputer.config;
 
 import com.example.bitcomputer.jwt.JwtAuthenticationFilter;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.Arrays;
+import java.util.List;
 
 @Configuration
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final String allowedOrigins;
 
-    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter) {
+    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
+                          @Value("${cors.allowed-origins}") String allowedOrigins) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+        this.allowedOrigins = allowedOrigins;
     }
 
     @Bean
@@ -33,15 +40,53 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
-            .csrf(AbstractHttpConfigurer::disable)
+            .csrf(csrf -> csrf.disable())  // Task 10 에서 CookieCsrfTokenRepository 로 교체
+            .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .exceptionHandling(e -> e.authenticationEntryPoint(
+                    new HttpStatusEntryPoint(org.springframework.http.HttpStatus.UNAUTHORIZED)))
             .authorizeHttpRequests(auth -> auth
-            //        .requestMatchers("/api/user/login", "/api/user/register").permitAll()
-            //        .anyRequest().authenticated()
-            //)
-            //    .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
-                .anyRequest().permitAll() // 개발용: 모든 요청 허용
-            );
-            // JWT 필터 임시 제거 (개발용)
+                // ── 공개 ──
+                .requestMatchers("/api/user/login", "/api/user/register").permitAll()
+                .requestMatchers("/actuator/health").permitAll()
+                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+
+                // ── SUPER_USER 전용 ──
+                .requestMatchers("/api/super/**", "/api/audit/**").hasRole("SUPER_USER")
+
+                // ── AI 기능: 임상 판단이 개입하므로 DOCTOR 전용 ──
+                .requestMatchers("/api/agent/**", "/api/ai/**",
+                                 "/api/validation-jobs/**", "/api/radiology/**")
+                    .hasAnyRole("DOCTOR", "SUPER_USER")
+
+                // ── 진료 기록 작성: DOCTOR ──
+                .requestMatchers(HttpMethod.POST,   "/api/histories/**").hasAnyRole("DOCTOR", "SUPER_USER")
+                .requestMatchers(HttpMethod.PUT,    "/api/histories/**").hasAnyRole("DOCTOR", "SUPER_USER")
+                .requestMatchers(HttpMethod.DELETE, "/api/histories/**").hasAnyRole("DOCTOR", "SUPER_USER")
+
+                // ── 처방 등록·수정: DOCTOR / 조회: NURSE 도 가능 ──
+                .requestMatchers(HttpMethod.POST,   "/api/history-diagnoses/**").hasAnyRole("DOCTOR", "SUPER_USER")
+                .requestMatchers(HttpMethod.PUT,    "/api/history-diagnoses/**").hasAnyRole("DOCTOR", "SUPER_USER")
+                .requestMatchers(HttpMethod.DELETE, "/api/history-diagnoses/**").hasAnyRole("DOCTOR", "SUPER_USER")
+                .requestMatchers(HttpMethod.GET,    "/api/history-diagnoses/**")
+                    .hasAnyRole("DOCTOR", "NURSE", "SUPER_USER")
+
+                // ── 상병 등록·수정: DOCTOR ──
+                .requestMatchers(HttpMethod.POST,   "/api/history-diseases/**").hasAnyRole("DOCTOR", "SUPER_USER")
+                .requestMatchers(HttpMethod.PUT,    "/api/history-diseases/**").hasAnyRole("DOCTOR", "SUPER_USER")
+                .requestMatchers(HttpMethod.DELETE, "/api/history-diseases/**").hasAnyRole("DOCTOR", "SUPER_USER")
+
+                // ── 환자·대기: 원무도 가능 ──
+                .requestMatchers("/api/patients/**", "/api/waiting/**")
+                    .hasAnyRole("RECEPTIONIST", "NURSE", "DOCTOR", "SUPER_USER")
+
+                // ── 마스터 코드 조회 ──
+                .requestMatchers(HttpMethod.GET, "/api/diseases/**", "/api/diagnoses/**")
+                    .hasAnyRole("RECEPTIONIST", "NURSE", "DOCTOR", "SUPER_USER")
+
+                // ── 나머지 업무 API: 인증된 실제 역할이면 통과 (DEFAULT 제외) ──
+                .anyRequest().hasAnyRole("RECEPTIONIST", "NURSE", "DOCTOR", "SUPER_USER")
+            )
+            .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }
@@ -49,9 +94,9 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(Arrays.asList("http://localhost:3000", "클라이언트 주소")); // React 앱의 주소
+        configuration.setAllowedOrigins(List.of(allowedOrigins.split("\s*,\s*")));
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(Arrays.asList("*"));
+        configuration.setAllowedHeaders(List.of("*"));
         configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L);
 
@@ -60,7 +105,3 @@ public class SecurityConfig {
         return source;
     }
 }
-
-
-
-

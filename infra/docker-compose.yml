@@ -248,6 +248,7 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       IMAGE_STORAGE_PATH: BitComputer/images
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      BOOTSTRAP_SUPERUSER_PASSWORD: ${BOOTSTRAP_SUPERUSER_PASSWORD:-}
     ports:
       - "8080:8080"
     volumes:

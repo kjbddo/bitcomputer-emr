@@ -85,6 +85,35 @@ public class DataInitializer {
             }
         };
     }
+
+    /**
+     * 최초 SUPER_USER 시드.
+     *
+     * 공개 가입은 항상 DEFAULT 이므로 역할을 부여할 주체가 하나는 있어야 한다.
+     * BOOTSTRAP_SUPERUSER_PASSWORD 가 비어 있으면 만들지 않는다 — 운영에서
+     * 기본 비밀번호 계정이 생기는 것을 막기 위해서다.
+     */
+    @Bean
+    @Order(2)
+    public CommandLineRunner initializeBootstrapSuperUser(UserRepository userRepository,
+                                                          PasswordEncoder passwordEncoder) {
+        return args -> {
+            String password = System.getenv("BOOTSTRAP_SUPERUSER_PASSWORD");
+            if (password == null || password.isBlank()) {
+                return;
+            }
+            if (userRepository.findByUsername("admin") != null) {
+                return;
+            }
+            Employee admin = new Employee();
+            admin.setName("bootstrap admin");
+            admin.setDeptId(1);
+            admin.setUsername("admin");
+            admin.setPassword(passwordEncoder.encode(password));
+            admin.setRole(Role.SUPER_USER);
+            userRepository.save(admin);
+        };
+    }
 }
 
 
