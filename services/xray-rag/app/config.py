@@ -133,17 +133,12 @@ class Settings:
         for p in (self.images_dir, self.recon_dir, self.heatmap_dir):
             p.mkdir(parents=True, exist_ok=True)
 
-    def engine_status(self) -> str:
-        """실행 중인 추론 엔진이 실제 모델인지 mock 인지 알린다.
-
-        USE_TORCH_ROI 는 실 어댑터가 없어(factory 가 항상 MockROIModel 을 쓴다)
-        판정에서 제외한다.
-
-        클래스 변수는 import 시점에 고정되므로 여기서는 os.environ 을 직접 읽는다.
-        """
-        anomaly = _bool(os.environ.get("USE_TORCH_ANOMALY"), False)
-        embedding = _bool(os.environ.get("USE_TORCH_EMBEDDING"), False)
-        return "real" if (anomaly and embedding) else "mock"
+    # engineStatus 판정은 여기서 하지 않는다. USE_TORCH_* 는 "시도" 토글일 뿐,
+    # 실제로 torch 어댑터가 구성됐는지는 app.ml.factory.build_models() 의 결과로만
+    # 알 수 있다(가중치 누락 등으로 로드가 실패하면 토글이 true여도 mock으로
+    # fallback 한다). 판정 로직은 app.ml.factory.BuildResult.engine_status 를,
+    # 그 값의 보관/사용은 app.api.dependencies.ServiceContainer 와
+    # app.services.case_service.CaseService 를 참고.
 
 
 @lru_cache(maxsize=1)

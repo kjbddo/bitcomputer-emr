@@ -48,6 +48,7 @@ class CaseService:
         storage_images: LocalStorage,
         storage_recon: LocalStorage,
         storage_heatmap: LocalStorage,
+        engine_status: str = "mock",
     ) -> None:
         self.settings = settings
         self.repo = repo
@@ -60,6 +61,9 @@ class CaseService:
         self.s_images = storage_images
         self.s_recon = storage_recon
         self.s_heatmap = storage_heatmap
+        # 실제로 구성된 모델을 근거로 호출자(dependencies.py)가 계산해 넘긴 값.
+        # 알 수 없거나 넘어오지 않은 경우 기본값은 항상 "mock" (fail-safe).
+        self.engine_status = engine_status
 
     # ---------- 등록 ----------
     def register_case(
@@ -210,7 +214,7 @@ class CaseService:
             explanation=explanation,
             heatmapPath=heatmap_url,
             warning=self.settings.SAFETY_NOTICE,
-            engineStatus=self.settings.engine_status(),
+            engineStatus=self.engine_status,
         )
 
     def _storage_url(self, path: Path) -> str:

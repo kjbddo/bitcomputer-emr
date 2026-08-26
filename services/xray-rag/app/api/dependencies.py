@@ -23,10 +23,12 @@ class ServiceContainer:
         self.db = get_db(self.settings)
         self.repo = CaseRepository(self.db, self.settings)
 
-        anomaly, roi, embedder = build_models(self.settings)
-        self.recon = ReconstructionService(anomaly)
-        self.roi = ROIMaskService(roi)
-        self.embedder = EmbeddingService(embedder)
+        build_result = build_models(self.settings)
+        self.recon = ReconstructionService(build_result.anomaly)
+        self.roi = ROIMaskService(build_result.roi)
+        self.embedder = EmbeddingService(build_result.embedder)
+        # 실제로 구성된 모델(build_result)을 근거로 판정. 토글 값을 직접 읽지 않는다.
+        self.engine_status: str = build_result.engine_status
 
         self.similarity = SimilarityService(self.repo)
         self.reasoning = ReasoningService(self.repo, self.settings)
@@ -48,6 +50,7 @@ class ServiceContainer:
             storage_images=self.s_images,
             storage_recon=self.s_recon,
             storage_heatmap=self.s_heatmap,
+            engine_status=self.engine_status,
         )
 
 

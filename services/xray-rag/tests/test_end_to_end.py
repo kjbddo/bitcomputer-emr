@@ -34,19 +34,20 @@ def _make_fake_xray_bytes(seed: int = 0) -> bytes:
 def _build_service():
     s = get_settings()
     repo = _FakeRepo()
-    anomaly, roi, embedder = build_models(s)
+    build_result = build_models(s)
     return CaseService(
         settings=s,
         repo=repo,
-        recon=ReconstructionService(anomaly),
-        roi=ROIMaskService(roi),
-        embedder=EmbeddingService(embedder),
+        recon=ReconstructionService(build_result.anomaly),
+        roi=ROIMaskService(build_result.roi),
+        embedder=EmbeddingService(build_result.embedder),
         similarity=SimilarityService(repo),
         reasoning=ReasoningService(repo, s),
         agent=AgentService(s),
         storage_images=LocalStorage(s.images_dir),
         storage_recon=LocalStorage(s.recon_dir),
         storage_heatmap=LocalStorage(s.heatmap_dir),
+        engine_status=build_result.engine_status,
     ), repo
 
 
