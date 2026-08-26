@@ -226,7 +226,7 @@ bitcomputer/
 2. access token을 **HttpOnly + Secure + SameSite=Lax 쿠키**로 전달. 프론트 `localStorage` 저장 제거.
 3. 로그아웃 시 Redis 블랙리스트 등록, 필터에서 확인.
 4. CORS `allowedOrigins`의 리터럴 `"클라이언트 주소"` 제거, 환경변수화.
-5. CSRF: 쿠키 기반 인증으로 전환하므로 현재의 전면 `csrf.disable()`을 해제한다. Spring의 `CookieCsrfTokenRepository.withHttpOnlyFalse()`를 사용해 SPA가 읽을 수 있는 `XSRF-TOKEN` 쿠키를 발급하고, 프론트 axios 인스턴스에 `xsrfCookieName`/`xsrfHeaderName`을 설정한다. `GET`·`HEAD`·`OPTIONS`는 Spring 기본대로 검사에서 제외된다.
+5. CSRF: 쿠키 기반 인증으로 전환하므로 현재의 전면 `csrf.disable()`을 해제한다. Spring의 `CookieCsrfTokenRepository.withHttpOnlyFalse()`를 사용해 SPA가 읽을 수 있는 `XSRF-TOKEN` 쿠키를 발급하고, 프론트 axios 인스턴스에 `xsrfCookieName`/`xsrfHeaderName`과 함께 **`withXSRFToken: true`를 반드시 설정한다.** axios는 `withXSRFToken`이 설정되지 않으면 same-origin 요청에만 CSRF 헤더를 붙인다(`withCredentials`는 쿠키 전송만 제어하며 이 판정과 무관하다). 이 앱은 프론트 3000, API 8080으로 cross-origin이므로 이 옵션이 없으면 헤더가 전혀 전송되지 않아 모든 상태 변경 요청이 403이 된다. `GET`·`HEAD`·`OPTIONS`는 Spring 기본대로 검사에서 제외된다.
 
 토큰 만료는 8시간으로 한다(교대 근무 1회 커버). refresh token 회전은 본 스코프 밖이며, 만료 시 재로그인한다.
 
