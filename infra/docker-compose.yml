@@ -170,8 +170,6 @@ services:
     ports:
       - "8002:8002"
     depends_on:
-      prescription-api:
-        condition: service_healthy
       rabbitmq:
         condition: service_healthy
     healthcheck:
@@ -247,6 +245,7 @@ services:
       RADIOLOGY_ENGINE: xray
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       IMAGE_STORAGE_PATH: BitComputer/images
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
     ports:
       - "8080:8080"
     volumes:
@@ -262,14 +261,6 @@ services:
         condition: service_healthy
       arango-init:
         condition: service_completed_successfully
-      xraygraph:
-        condition: service_healthy
-      certificate-api:
-        condition: service_healthy
-      prescription-api:
-        condition: service_healthy
-      validation-agent:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health >/dev/null"]
       interval: 15s
@@ -288,7 +279,7 @@ services:
       - "3000:3000"
     depends_on:
       spring-boot:
-        condition: service_healthy
+        condition: service_started
 
 volumes:
   mysql-data:
