@@ -349,7 +349,11 @@ def recommend(
     x_prescription_eval_trace: Optional[str] = Header(default=None),
 ) -> PrescriptionRecommendResponse:
     requested_model = req.model or DEFAULT_MODEL
-    if not _is_openai_model(requested_model) and not os.environ.get("GOOGLE_API_KEY"):
+    if (
+        resolve_provider() != "stub"
+        and not _is_openai_model(requested_model)
+        and not os.environ.get("GOOGLE_API_KEY")
+    ):
         raise HTTPException(
             status_code=500,
             detail="GOOGLE_API_KEY 가 설정되지 않았습니다. 서버 환경변수 또는 .env 를 확인하세요.",
