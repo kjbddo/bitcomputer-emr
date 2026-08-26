@@ -1,0 +1,108 @@
+{
+  "caseCount": 5,
+  "successfulCases": 5,
+  "errorCases": 0,
+  "errorsByMessage": {},
+  "toolPathMetrics": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "tp": 24,
+    "fp": 0,
+    "fn": 0,
+    "perTool": {
+      "cohort_rx_from_arango": {
+        "tp": 4,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "confidence_scores": {
+        "tp": 4,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "json_parse": {
+        "tp": 5,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "llm_generate": {
+        "tp": 5,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "prompt_builder": {
+        "tp": 5,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "top_rx_from_arango": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      }
+    }
+  },
+  "answerQuality": {
+    "judgedCases": 5,
+    "averageOverallScore": 1.0
+  },
+  "hallucination": {
+    "judgedCases": 5,
+    "hallucinationRate": 0.2
+  },
+  "byControlGroup": {
+    "BASELINE_SAFE": {
+      "total": 1,
+      "errors": 0,
+      "hallucinations": 0
+    },
+    "TOOL_PATH": {
+      "total": 1,
+      "errors": 0,
+      "hallucinations": 0
+    },
+    "SPARSE_DATA": {
+      "total": 1,
+      "errors": 0,
+      "hallucinations": 0
+    },
+    "ADVERSARIAL": {
+      "total": 1,
+      "errors": 0,
+      "hallucinations": 0
+    },
+    "HALLUCINATION_TRAP": {
+      "total": 1,
+      "errors": 0,
+      "hallucinations": 1
+    }
+  },
+  "runConfig": {
+    "scenarios": [
+      ".\\evals\\scenarios\\template_prescription_eval_scenarios.jsonl"
+    ],
+    "mockAgent": true,
+    "apiUrl": "",
+    "skipJudges": true,
+    "judgeProviders": []
+  }
+}

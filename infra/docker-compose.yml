@@ -1,0 +1,296 @@
+services:
+  mysql:
+    image: mysql:8
+    container_name: bit-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-bitcomputer}
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: bit-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: bit-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+      RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE:-bitcomputer-rabbit-cookie}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  arangodb:
+    image: arangodb:3.12
+    container_name: bit-arangodb
+    command:
+      - "arangod"
+      - "--experimental-vector-index"
+    environment:
+      ARANGO_ROOT_PASSWORD: ${ARANGO_PASSWORD}
+    ports:
+      - "8529:8529"
+    volumes:
+      - arango-data:/var/lib/arangodb3
+      - arango-apps:/var/lib/arangodb3-apps
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "arangosh",
+          "--server.endpoint",
+          "http://localhost:8529",
+          "--server.password",
+          "${ARANGO_PASSWORD}",
+          "--javascript.execute-string",
+          "db._version()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  arango-init:
+    image: arangodb:3.12
+    container_name: bit-arango-init
+    command:
+      [
+        "arangosh",
+        "--server.endpoint",
+        "http://arangodb:8529",
+        "--server.username",
+        "root",
+        "--server.password",
+        "${ARANGO_PASSWORD}",
+        "--javascript.execute-string",
+        "const name='${ARANGO_DATABASE:-bitcomputer_graph}'; if (!db._databases().includes(name)) db._createDatabase(name);",
+      ]
+    depends_on:
+      arangodb:
+        condition: service_healthy
+
+  flask-radiology:
+    build:
+      context: ../services/radiology-legacy
+    container_name: bit-flask-radiology
+    ports:
+      - "5000:5000"
+    volumes:
+      - images-storage:/app/Back-End/BitComputer/images
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/api/ai/is_running', timeout=5)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+
+  certificate-api:
+    build:
+      context: ../services/prescription
+    container_name: bit-certificate-api
+    command: ["python", "-m", "uvicorn", "certificate_api:app", "--host", "0.0.0.0", "--port", "5001"]
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+    ports:
+      - "5001:5001"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5001/health', timeout=5)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+
+  prescription-api:
+    build:
+      context: ../services/prescription
+    container_name: bit-prescription-api
+    command: ["python", "-m", "uvicorn", "prescription_api:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      ARANGO_HOST: arangodb
+      ARANGO_PORT: 8529
+      ARANGO_USER: root
+      ARANGO_PASSWORD: ${ARANGO_PASSWORD}
+      ARANGO_DATABASE: ${ARANGO_DATABASE:-bitcomputer_graph}
+    ports:
+      - "8001:8001"
+    depends_on:
+      arangodb:
+        condition: service_healthy
+      arango-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=5)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+
+  validation-agent:
+    build:
+      context: ../services/validation-agent
+    container_name: bit-validation-agent
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-nano}
+      PRESCRIPTION_AGENT_BASE_URL: http://prescription-api:8001
+      PRESCRIPTION_AGENT_PATH: /api/agent/prescription/recommend
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: guest
+      RABBITMQ_PASSWORD: guest
+      VALIDATION_RABBITMQ_REQUEST_QUEUE: validation.prescription.request
+      VALIDATION_RABBITMQ_RESULT_QUEUE: validation.prescription.result
+    ports:
+      - "8002:8002"
+    depends_on:
+      prescription-api:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=5)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+
+  xraygraph:
+    build:
+      context: ../services/xray-rag
+    container_name: bit-xraygraph
+    command: ["sh", "-c", "python scripts/init_db.py && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    environment:
+      ARANGO_URL: http://arangodb:8529
+      ARANGO_DB_NAME: ${XRAY_ARANGO_DATABASE:-xray_graph_db}
+      ARANGO_USERNAME: root
+      ARANGO_PASSWORD: ${ARANGO_PASSWORD}
+      STORAGE_DIR: /app/storage
+      EMBEDDING_DIM: 768
+      MODEL_VERSION: ae_squid_v1
+      MASK_VERSION: lung_heart_mask_v1
+      EMBEDDING_VERSION: mock_pca_v1
+      USE_TORCH_ANOMALY: "false"
+      USE_TORCH_ROI: "false"
+      USE_TORCH_EMBEDDING: "false"
+    ports:
+      - "8000:8000"
+    volumes:
+      - xray-storage:/app/storage
+    depends_on:
+      arangodb:
+        condition: service_healthy
+      arango-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+
+  spring-boot:
+    build:
+      context: ../apps/api
+    container_name: bit-spring-boot
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-bitcomputer}
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      ARANGO_HOSTS: arangodb:8529
+      ARANGO_USER: root
+      ARANGO_PASSWORD: ${ARANGO_PASSWORD}
+      ARANGO_DATABASE: ${ARANGO_DATABASE:-bitcomputer_graph}
+      FLASK_RADIOLOGY_BASE_URL: http://flask-radiology:5000
+      XRAY_API_BASE_URL: http://xraygraph:8000
+      XRAY_API_PUBLIC_BASE_URL: http://localhost:8000
+      XRAY_API_DEFAULT_VIEW: ${XRAY_API_DEFAULT_VIEW:-PA}
+      CERTIFICATE_API_BASE_URL: http://certificate-api:5001
+      PRESCRIPTION_AGENT_BASE_URL: http://prescription-api:8001
+      VALIDATION_AGENT_BASE_URL: http://validation-agent:8002
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: guest
+      RABBITMQ_PASSWORD: guest
+      VALIDATION_RABBITMQ_REQUEST_QUEUE: validation.prescription.request
+      VALIDATION_RABBITMQ_RESULT_QUEUE: validation.prescription.result
+      VALIDATION_SCHEDULER_ENABLED: "false"
+      RADIOLOGY_ENGINE: xray
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      IMAGE_STORAGE_PATH: BitComputer/images
+    ports:
+      - "8080:8080"
+    volumes:
+      - images-storage:/app/BitComputer/images
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      arangodb:
+        condition: service_healthy
+      arango-init:
+        condition: service_completed_successfully
+      xraygraph:
+        condition: service_healthy
+      certificate-api:
+        condition: service_healthy
+      prescription-api:
+        condition: service_healthy
+      validation-agent:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health >/dev/null"]
+      interval: 15s
+      timeout: 10s
+      retries: 30
+
+  frontend:
+    build:
+      context: ../apps/web
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8080}
+    container_name: bit-frontend
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8080}
+    ports:
+      - "3000:3000"
+    depends_on:
+      spring-boot:
+        condition: service_healthy
+
+volumes:
+  mysql-data:
+  arango-data:
+  arango-apps:
+  images-storage:
+  xray-storage:
+  rabbitmq-data:

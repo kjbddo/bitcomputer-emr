@@ -1,1 +1,37 @@
 .superpowers/
+
+# secrets
+.env
+.env.*
+!.env.example
+
+# model weights (scripts/fetch-models.sh 로 내려받는다)
+models/
+*.pt
+*.pth
+
+# node
+node_modules/
+.next/
+.yarn/
+*.tsbuildinfo
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# java
+build/
+.gradle/
+bin/
+
+# runtime artifacts
+storage/
+generated/
+
+# editor / os
+.idea/
+.vscode/
+.DS_Store

@@ -1,0 +1,21 @@
+Flask==3.0.0
+flask-cors==4.0.0
+# torch/torchvision은 설치되는 빌드(CPU/CUDA)와 아래 --find-links 의 torch-* 버전이 맞아야 합니다.
+torch>=2.11.0,<2.12
+torchvision>=0.26.0,<0.27
+# PyG 확장(torch-scatter 등): PyPI만 쓰면 소스 빌드가 되며 격리 환경에서 torch 미설치로 실패합니다.
+# GPU를 쓰면 https://data.pyg.org/whl/ 에서 설치 중인 torch와 같은 줄(예: torch-2.11.0+cu128.html)으로 바꾸세요.
+--find-links https://data.pyg.org/whl/torch-2.11.0+cpu.html
+torch-geometric
+torch-scatter
+torch-sparse
+torch-cluster
+Pillow>=10.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+matplotlib>=3.7.0
+scikit-learn>=1.3.0
+pandas>=2.0.0
+requests>=2.31.0
+pydicom>=2.4.0
+opencv-python>=4.8.0

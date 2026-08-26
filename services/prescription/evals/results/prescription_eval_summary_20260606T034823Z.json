@@ -1,0 +1,112 @@
+{
+  "caseCount": 50,
+  "successfulCases": 50,
+  "errorCases": 0,
+  "errorsByMessage": {},
+  "toolPathMetrics": {
+    "precision": 0.874439,
+    "recall": 0.979899,
+    "f1": 0.924171,
+    "tp": 195,
+    "fp": 28,
+    "fn": 4,
+    "perTool": {
+      "cohort_rx_from_arango": {
+        "tp": 11,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "confidence_scores": {
+        "tp": 9,
+        "fp": 27,
+        "fn": 0,
+        "precision": 0.25,
+        "recall": 1.0,
+        "f1": 0.4
+      },
+      "json_parse": {
+        "tp": 50,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "llm_generate": {
+        "tp": 50,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "prompt_builder": {
+        "tp": 50,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "top_rx_from_arango": {
+        "tp": 25,
+        "fp": 1,
+        "fn": 4,
+        "precision": 0.961538,
+        "recall": 0.862069,
+        "f1": 0.909091
+      }
+    }
+  },
+  "answerQuality": {
+    "judgedCases": 50,
+    "averageOverallScore": 0.386
+  },
+  "hallucination": {
+    "judgedCases": 50,
+    "hallucinationRate": 0.9
+  },
+  "byControlGroup": {
+    "BASELINE_SAFE": {
+      "total": 9,
+      "errors": 0,
+      "hallucinations": 4
+    },
+    "TOOL_PATH": {
+      "total": 8,
+      "errors": 0,
+      "hallucinations": 8
+    },
+    "SPARSE_DATA": {
+      "total": 9,
+      "errors": 0,
+      "hallucinations": 9
+    },
+    "ADVERSARIAL": {
+      "total": 9,
+      "errors": 0,
+      "hallucinations": 9
+    },
+    "HALLUCINATION_TRAP": {
+      "total": 15,
+      "errors": 0,
+      "hallucinations": 15
+    }
+  },
+  "runConfig": {
+    "scenarios": [
+      ".\\evals\\scenarios\\llm_prescription_eval_scenarios.jsonl"
+    ],
+    "mockAgent": false,
+    "apiUrl": "http://localhost:8001",
+    "skipJudges": false,
+    "judgeProviders": [
+      "openai"
+    ],
+    "agentModelOverride": "gpt-4o-mini",
+    "agentTemperatureOverride": 0.0
+  }
+}
