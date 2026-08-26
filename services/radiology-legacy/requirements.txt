@@ -19,3 +19,6 @@ pandas>=2.0.0
 requests>=2.31.0
 pydicom>=2.4.0
 opencv-python>=4.8.0
+
+# 테스트
+pytest>=8.0
