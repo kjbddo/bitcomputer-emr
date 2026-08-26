@@ -26,13 +26,16 @@ public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final CsrfCookieFilter csrfCookieFilter;
+    private final RestAccessDeniedHandler restAccessDeniedHandler;
     private final String allowedOrigins;
 
     public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
                           CsrfCookieFilter csrfCookieFilter,
+                          RestAccessDeniedHandler restAccessDeniedHandler,
                           @Value("${cors.allowed-origins}") String allowedOrigins) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.csrfCookieFilter = csrfCookieFilter;
+        this.restAccessDeniedHandler = restAccessDeniedHandler;
         this.allowedOrigins = allowedOrigins;
     }
 
@@ -50,8 +53,11 @@ public class SecurityConfig {
                 .ignoringRequestMatchers("/api/user/login", "/api/user/register")
             )
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            .exceptionHandling(e -> e.authenticationEntryPoint(
-                    new HttpStatusEntryPoint(org.springframework.http.HttpStatus.UNAUTHORIZED)))
+            .exceptionHandling(e -> e
+                .authenticationEntryPoint(
+                        new HttpStatusEntryPoint(org.springframework.http.HttpStatus.UNAUTHORIZED))
+                .accessDeniedHandler(restAccessDeniedHandler)
+            )
             .authorizeHttpRequests(auth -> auth
                 // ── 공개 ──
                 .requestMatchers("/api/user/login", "/api/user/register").permitAll()

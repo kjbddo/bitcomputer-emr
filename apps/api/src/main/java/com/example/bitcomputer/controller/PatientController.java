@@ -1,6 +1,7 @@
     package com.example.bitcomputer.controller;
 
 import com.example.bitcomputer.Repository.EmployeeRepository;
+import com.example.bitcomputer.annotation.AuditPatientAccess;
 import com.example.bitcomputer.entity.Employee;
 import com.example.bitcomputer.entity.Role;
 import com.example.bitcomputer.jwt.JwtTokenProvider;
@@ -37,11 +38,19 @@ public class PatientController {
         this.employeeRepository = employeeRepository;
     }
 
+    @AuditPatientAccess(action = "PATIENT_CREATE")
     @PostMapping("/get_patient_id")
     public ResponseEntity<Map<String, Integer>> createPatient(@RequestBody PatientDTO request) {
         PatientDTO created = patientService.createPatient(request);
         Map<String, Integer> responseBody = Map.of("patientId", created.getId());
         return ResponseEntity.status(HttpStatus.CREATED).body(responseBody);
+    }
+
+    @AuditPatientAccess(action = "PATIENT_VIEW")
+    @GetMapping("/{id}")
+    public ResponseEntity<PatientDTO> getPatient(@PathVariable int id) {
+        PatientDTO patient = patientService.searchPatientById(id);
+        return ResponseEntity.ok(patient);
     }
 
     @PostMapping("/search_history/{id}")

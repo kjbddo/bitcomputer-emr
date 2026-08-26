@@ -1,5 +1,6 @@
 package com.example.bitcomputer.controller;
 
+import com.example.bitcomputer.annotation.AuditPatientAccess;
 import com.example.bitcomputer.model.PrescriptionRecommendRequestDTO;
 import com.example.bitcomputer.model.SavePrescriptionFeedbackRequestDTO;
 import com.example.bitcomputer.model.ValidationJobStartResponseDTO;
@@ -28,6 +29,7 @@ public class AgentController {
      * {@code history_diagnose_id}에 해당하는 진료의 환자 기준으로 진료 기록을 모은 뒤 처방 후보를 반환한다.
      * 추천 목록·외부 AI 연동은 확장 예정.
      */
+    @AuditPatientAccess(action = "AI_PRESCRIPTION_RECOMMEND")
     @PostMapping("/recommend")
     public ResponseEntity<ValidationJobStartResponseDTO> recommendPrescription(
             @RequestBody PrescriptionRecommendRequestDTO request) {
