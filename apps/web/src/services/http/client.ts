@@ -19,6 +19,8 @@ function createInstance(options?: HttpClientOptions): AxiosInstance {
     baseURL,
     timeout,
     withCredentials: true,
+    xsrfCookieName: "XSRF-TOKEN",
+    xsrfHeaderName: "X-XSRF-TOKEN",
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json",

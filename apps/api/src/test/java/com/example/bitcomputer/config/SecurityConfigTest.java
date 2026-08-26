@@ -8,6 +8,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -53,6 +54,7 @@ class SecurityConfigTest {
     void receptionistCannotCallAgentApi() throws Exception {
         mockMvc.perform(post("/api/agent/prescription/recommend")
                        .cookie(cookieFor(Role.RECEPTIONIST))
+                       .with(csrf())
                        .contentType("application/json")
                        .content("{}"))
                .andExpect(status().isForbidden());
@@ -62,6 +64,7 @@ class SecurityConfigTest {
     void nurseCannotCallAgentApi() throws Exception {
         mockMvc.perform(post("/api/agent/prescription/recommend")
                        .cookie(cookieFor(Role.NURSE))
+                       .with(csrf())
                        .contentType("application/json")
                        .content("{}"))
                .andExpect(status().isForbidden());
@@ -71,6 +74,7 @@ class SecurityConfigTest {
     void doctorReachesAgentApi() throws Exception {
         mockMvc.perform(post("/api/agent/prescription/recommend")
                        .cookie(cookieFor(Role.DOCTOR))
+                       .with(csrf())
                        .contentType("application/json")
                        .content("{}"))
                .andExpect(status().is(org.hamcrest.Matchers.not(403)));
