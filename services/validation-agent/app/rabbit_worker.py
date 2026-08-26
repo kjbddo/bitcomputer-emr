@@ -55,7 +55,16 @@ def _consume_forever() -> None:
                     _publish(channel, result_queue, {"jobId": job_id, "status": "DONE", "result": result})
                     ch.basic_ack(delivery_tag=method.delivery_tag)
                 except Exception as exc:  # noqa: BLE001
-                    logger.exception("RabbitMQ validation job failed - jobId=%s", job_id)
+                    logger.error(
+                        "RabbitMQ validation job failed and will be discarded - jobId=%s, "
+                        "exceptionType=%s, exceptionMessage=%s. Message is being acked and "
+                        "dropped (no retry, no dead-letter queue); this is a known gap to be "
+                        "addressed in the ValidationAgent redesign.",
+                        job_id,
+                        type(exc).__name__,
+                        str(exc),
+                        exc_info=True,
+                    )
                     _publish(channel, result_queue, {"jobId": job_id, "status": "FAILED", "error": str(exc)})
                     ch.basic_ack(delivery_tag=method.delivery_tag)
 

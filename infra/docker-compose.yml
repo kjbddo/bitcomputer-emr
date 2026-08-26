@@ -172,6 +172,8 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
+      prescription-api:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=5)\""]
       interval: 15s
