@@ -2,6 +2,7 @@ package com.example.bitcomputer.serviceImpl;
 
 import com.example.bitcomputer.Repository.UserRepository;
 import com.example.bitcomputer.entity.Employee;
+import com.example.bitcomputer.entity.Role;
 import com.example.bitcomputer.jwt.JwtTokenProvider;
 import com.example.bitcomputer.jwt.TokenInfo;
 import com.example.bitcomputer.model.LoginRequestDTO;
@@ -77,10 +78,10 @@ class UserServiceImplTest {
         @Test
         @DisplayName("성공 시 토큰 반환")
         void login_success() {
-            Employee e = new Employee(); e.setUsername("u"); e.setPassword("hash");
+            Employee e = new Employee(); e.setUsername("u"); e.setPassword("hash"); e.setRole(Role.DOCTOR);
             when(userRepository.findByUsername(eq("u"))).thenReturn(e);
             when(passwordEncoder.matches(eq("p"), eq("hash"))).thenReturn(true);
-            when(jwtTokenProvider.generateAccessToken(eq("u"))).thenReturn("a");
+            when(jwtTokenProvider.generateAccessToken(eq("u"), eq(Role.DOCTOR))).thenReturn("a");
             when(jwtTokenProvider.generateRefreshToken(eq("u"))).thenReturn("r");
             LoginRequestDTO dto = new LoginRequestDTO(); dto.setUsername("u"); dto.setPassword("p");
             TokenInfo token = userService.loginUser(dto);

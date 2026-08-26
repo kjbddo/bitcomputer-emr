@@ -1,5 +1,6 @@
 package com.example.bitcomputer.controller;
 
+import com.example.bitcomputer.entity.Role;
 import com.example.bitcomputer.jwt.JwtTokenProvider;
 import com.example.bitcomputer.model.CertificateFormDTO;
 import com.example.bitcomputer.model.CertificateHistoryDTO;
@@ -176,13 +177,14 @@ public class AgentDocumentController {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                         .body(Map.of("error", "인증 정보가 없습니다."));
             }
+            Role role = extractRole(authHeader);
 
             agentDocumentService.saveCertificate(
                     historyId, pdfFile, agentUsed,
                     originalMedicalCertificate, savedMedicalCertificate, feedbackType);
 
-            // 저장 성공 후 새 토큰 발급
-            String accessToken = jwtTokenProvider.generateAccessToken(username);
+            // 저장 성공 후 새 토큰 발급 (기존 토큰의 권한을 그대로 유지)
+            String accessToken = jwtTokenProvider.generateAccessToken(username, role);
             String refreshToken = jwtTokenProvider.generateRefreshToken(username);
 
             return ResponseEntity.ok(Map.of(
@@ -202,5 +204,12 @@ public class AgentDocumentController {
         String token = authHeader.substring(7);
         if (!jwtTokenProvider.validateToken(token)) return null;
         return jwtTokenProvider.extractUsername(token);
+    }
+
+    private Role extractRole(String authHeader) {
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) return Role.DEFAULT;
+        String token = authHeader.substring(7);
+        if (!jwtTokenProvider.validateToken(token)) return Role.DEFAULT;
+        return jwtTokenProvider.extractRole(token);
     }
 }

@@ -64,7 +64,8 @@ public class UserServiceImpl implements UserService {
         if (!passwordEncoder.matches(loginRequestDTO.getPassword(), employee.getPassword())) {
             throw new IllegalArgumentException("Invalid username or password");
         }
-        String accessToken = jwtTokenProvider.generateAccessToken(employee.getUsername());
+        String accessToken = jwtTokenProvider.generateAccessToken(
+                employee.getUsername(), employee.getRole());
         String refreshToken = jwtTokenProvider.generateRefreshToken(employee.getUsername());
         return new TokenInfo("Bearer", accessToken, refreshToken);
     }

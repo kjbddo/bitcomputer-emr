@@ -440,7 +440,9 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
     }
 
     private GenerateCertificateResponseDTO buildGenerateResponse(String username, String medicalCertificate) {
-        String accessToken = jwtTokenProvider.generateAccessToken(username);
+        Employee employee = employeeRepository.findByUsername(username);
+        Role role = employee != null ? employee.getRole() : Role.DEFAULT;
+        String accessToken = jwtTokenProvider.generateAccessToken(username, role);
         String refreshToken = jwtTokenProvider.generateRefreshToken(username);
 
         GenerateCertificateResponseDTO response = new GenerateCertificateResponseDTO();

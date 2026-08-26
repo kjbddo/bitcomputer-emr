@@ -1,6 +1,7 @@
 package com.example.bitcomputer.serviceImpl;
 
 import com.example.bitcomputer.Repository.WaitingRepository;
+import com.example.bitcomputer.entity.Role;
 import com.example.bitcomputer.entity.Waiting;
 import com.example.bitcomputer.jwt.JwtTokenProvider;
 import com.example.bitcomputer.jwt.TokenInfo;
@@ -50,7 +51,7 @@ class WaitingServiceImplTest {
             waiting.setState("waiting");
             // 저장 후 반환(Mock)
             when(waitingRepository.save(any(Waiting.class))).thenReturn(waiting);
-            when(jwtTokenProvider.generateAccessToken(anyString())).thenReturn("access");
+            when(jwtTokenProvider.generateAccessToken(anyString(), eq(Role.DEFAULT))).thenReturn("access");
             when(jwtTokenProvider.generateRefreshToken(anyString())).thenReturn("refresh");
             // DTO
             WaitingDTO dto = new WaitingDTO();
@@ -61,7 +62,7 @@ class WaitingServiceImplTest {
             assertThat(token.getRefreshToken()).isEqualTo("refresh");
             assertThat(token.getGrantType()).isEqualTo("Bearer");
             verify(waitingRepository).save(any(Waiting.class));
-            verify(jwtTokenProvider).generateAccessToken(anyString());
+            verify(jwtTokenProvider).generateAccessToken(anyString(), eq(Role.DEFAULT));
             verify(jwtTokenProvider).generateRefreshToken(anyString());
         }
     }
@@ -94,7 +95,7 @@ class WaitingServiceImplTest {
             waiting.setState("waiting");
             when(waitingRepository.findFirstByPatientIdOrderByIdDesc(eq(1))).thenReturn(Optional.of(waiting));
             when(waitingRepository.save(any(Waiting.class))).thenReturn(waiting);
-            when(jwtTokenProvider.generateAccessToken(anyString())).thenReturn("a");
+            when(jwtTokenProvider.generateAccessToken(anyString(), eq(Role.DEFAULT))).thenReturn("a");
             when(jwtTokenProvider.generateRefreshToken(anyString())).thenReturn("r");
             TokenInfo token = waitingService.updateWaitingState(1);
             assertThat(token.getAccessToken()).isEqualTo("a");

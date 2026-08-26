@@ -2,6 +2,7 @@ package com.example.bitcomputer.serviceImpl;
 
 import com.example.bitcomputer.Repository.DeptRepository;
 import com.example.bitcomputer.Repository.WaitingRepository;
+import com.example.bitcomputer.entity.Role;
 import com.example.bitcomputer.entity.Waiting;
 import com.example.bitcomputer.jwt.JwtTokenProvider;
 import com.example.bitcomputer.jwt.TokenInfo;
@@ -54,7 +55,7 @@ public class WaitingServiceImpl implements WaitingService {
 
         // JWT 토큰 생성
         String patientIdStr = String.valueOf(savedWaiting.getPatientId());
-        String accessToken = jwtTokenProvider.generateAccessToken(patientIdStr);
+        String accessToken = jwtTokenProvider.generateAccessToken(patientIdStr, Role.DEFAULT);
         String refreshToken = jwtTokenProvider.generateRefreshToken(patientIdStr);
 
         return new TokenInfo("Bearer", accessToken, refreshToken);
@@ -92,7 +93,7 @@ public class WaitingServiceImpl implements WaitingService {
 
         // JWT 토큰 생성
         String patientIdStr = String.valueOf(updatedWaiting.getPatientId());
-        String accessToken = jwtTokenProvider.generateAccessToken(patientIdStr);
+        String accessToken = jwtTokenProvider.generateAccessToken(patientIdStr, Role.DEFAULT);
         String refreshToken = jwtTokenProvider.generateRefreshToken(patientIdStr);
 
         return new TokenInfo("Bearer", accessToken, refreshToken);
@@ -122,7 +123,7 @@ public class WaitingServiceImpl implements WaitingService {
 
         // JWT 토큰 생성
         String patientIdStr = String.valueOf(updatedWaiting.getPatientId());
-        String accessToken = jwtTokenProvider.generateAccessToken(patientIdStr);
+        String accessToken = jwtTokenProvider.generateAccessToken(patientIdStr, Role.DEFAULT);
         String refreshToken = jwtTokenProvider.generateRefreshToken(patientIdStr);
 
         return new TokenInfo("Bearer", accessToken, refreshToken);
@@ -142,7 +143,7 @@ public class WaitingServiceImpl implements WaitingService {
         Waiting updatedWaiting = waitingRepository.save(waiting);
 
         String patientIdStr = String.valueOf(updatedWaiting.getPatientId());
-        String accessToken = jwtTokenProvider.generateAccessToken(patientIdStr);
+        String accessToken = jwtTokenProvider.generateAccessToken(patientIdStr, Role.DEFAULT);
         String refreshToken = jwtTokenProvider.generateRefreshToken(patientIdStr);
         return new TokenInfo("Bearer", accessToken, refreshToken);
     }
@@ -161,7 +162,7 @@ public class WaitingServiceImpl implements WaitingService {
         Waiting updatedWaiting = waitingRepository.save(waiting);
 
         String patientIdStr = String.valueOf(updatedWaiting.getPatientId());
-        String accessToken = jwtTokenProvider.generateAccessToken(patientIdStr);
+        String accessToken = jwtTokenProvider.generateAccessToken(patientIdStr, Role.DEFAULT);
         String refreshToken = jwtTokenProvider.generateRefreshToken(patientIdStr);
         return new TokenInfo("Bearer", accessToken, refreshToken);
     }
