@@ -6,7 +6,6 @@ build/
 !**/src/test/**/build/
 
 application-local.properties
-application.properties
 compose.yaml
 docker-compose.yml
 
