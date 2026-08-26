@@ -42,7 +42,7 @@ BitComputer는 Next.js UI, Spring Boot 업무 API, 4개 Python AI 서비스, MyS
 
 | # | 문제 | 위치 |
 |---|---|---|
-| 17 | LangGraph 전체가 죽은 코드. `_build_graph()`가 호출되지 않아 `_load_context`·`_route_next_action`·`_finalize_validation`·`_llm_finalize` 전부 도달 불가. 실제 실행은 수동 for 루프 | `agent.py:794`, `agent.py:94` |
+| 17 | LangGraph 실행 경로가 현재 도달 불가. `_build_graph()`가 호출되지 않아 `_load_context`·`_route_next_action`·`_finalize_validation`·`_llm_finalize`가 실행되지 않고, 실제 실행은 수동 for 루프다. **원인은 의도적 폐기가 아니라 API 재설계 과정에서 호출부가 유실된 것**이며, 해당 구현은 여전히 유효하다. C단계에서 제거가 아니라 **복구·활용 방향**으로 다룬다 | `agent.py:794`, `agent.py:94` |
 | 18 | "필요에 따라 툴 선택"이 실제로는 미작동. ReAct 루프 바깥에서 pubmed와 prescription_finder를 무조건 호출 | `agent.py:115,125` |
 | 19 | `prescription_validator`가 스텁. 처방+상병이 있으면 무조건 `APPROPRIATE`. 상호작용·금기·용량 검사 0건 | `tools.py:147` |
 | 20 | 19번의 evidence 문자열이 "LLM 최종 검토 단계에서 평가"라고 적혀 있으나 그 단계는 17번의 죽은 코드. 결과적으로 처방은 어디서도 검증되지 않음 | `tools.py:149` |
@@ -115,7 +115,7 @@ A는 **이동과 배선**이지 재작성이 아니다. 이 구분을 지키지 
 - `xlsx` 취약 의존성 교체 → E
 - mock 제거·재평가 → D
 - grounding 검증 레이어 → B
-- ValidationAgent 죽은 코드 제거 → C
+- ValidationAgent 그래프 실행 경로 복구 → C
 
 ### 3.4 "AI 로직 변경 없음" 원칙의 명시적 예외 2건
 
@@ -131,7 +131,7 @@ X-ray 추론 응답과 처방 추천 응답에 현재 엔진 상태를 나타내
 
 | 서비스 | 파생 기준 | 가능한 값 |
 |---|---|---|
-| `xray-rag` | `USE_TORCH_ANOMALY` && `USE_TORCH_EMBEDDING` | 셋 다 true면 `real`, 아니면 `mock` |
+| `xray-rag` | `USE_TORCH_ANOMALY` && `USE_TORCH_EMBEDDING` | 둘 다 true면 `real`, 아니면 `mock` |
 | `prescription` | `LLM_PROVIDER` | `stub` 또는 `real` |
 | `validation-agent` | `LLM_PROVIDER` | `stub` 또는 `real` |
 
@@ -294,11 +294,34 @@ access_audit_log
 
 현재는 필수 환경변수가 비어도 서비스가 조용히 뜨고 런타임에 불명확하게 실패한다. 각 서비스 부팅 시 필수 환경변수 존재를 확인하고, 없으면 명확한 메시지와 함께 즉시 종료한다.
 
-### 6.4 재발 방지
+### 6.4 CI 시크릿 — GitHub Secrets
+
+GitHub Secrets는 `.env.example` 규약을 대체하지 않고 **보완**한다. Actions 러너 안에서만 주입되므로 로컬 개발이나 `docker compose up`에는 사용할 수 없다.
+
+| 환경 | 시크릿 출처 |
+|---|---|
+| 로컬 개발 / docker compose | `infra/.env` (gitignore, `.env.example`로 형태만 공유) |
+| GitHub Actions CI | GitHub Secrets (repository secrets) |
+
+**CI에 필요한 시크릿은 최소화한다.** E2E는 `LLM_PROVIDER=stub`으로 돌므로 LLM 키가 불필요하고, DB·메시지큐 비밀번호는 CI 컨테이너 전용 임시값이면 충분하다.
+
+| 이름 | CI 필요 여부 | 비고 |
+|---|---|---|
+| `JWT_SECRET` | 필요 | CI 전용 값. 운영 값과 달라야 한다 |
+| `MYSQL_ROOT_PASSWORD` | 필요 | CI 컨테이너 전용 임시값 |
+| `ARANGO_PASSWORD` | 필요 | CI 컨테이너 전용 임시값 |
+| `OPENAI_API_KEY` | 불필요 | `LLM_PROVIDER=stub` |
+| `GOOGLE_API_KEY` / `GEMINI_API_KEY` | 불필요 | `LLM_PROVIDER=stub` |
+
+등록은 `gh secret set <NAME>`으로 한다. 값을 대화형 프롬프트로 입력받으므로 셸 히스토리에 남지 않는다. 명령줄에 값을 직접 넣는 형태(`gh secret set NAME --body "..."`)는 사용하지 않는다.
+
+워크플로에서는 `secrets` 컨텍스트로 주입하고, 로그 마스킹을 신뢰하지 말고 시크릿을 `echo`하는 스텝을 만들지 않는다.
+
+### 6.5 재발 방지
 
 CI에 **gitleaks**를 추가한다. 시크릿이 커밋되면 파이프라인이 실패한다.
 
-### 6.5 유출 키 폐기 (수동)
+### 6.6 유출 키 폐기 (수동)
 
 코드 작업과 별개로 반드시 선행해야 한다. 체크리스트로 관리한다.
 
@@ -370,7 +393,7 @@ HTTP 레벨로 구현한다. 브라우저 E2E(Playwright)는 무겁고 flaky하�
 4. `RECEPTIONIST` 토큰으로 AI 추천 호출 → `403`, `access_audit_log`에 `DENIED` 행 생성
 5. 환자 조회 1회 → `access_audit_log`에 actor·target·IP 기록
 6. gitleaks 통과
-7. 유출 키 5종 폐기 완료 (6.5 체크리스트)
+7. 유출 키 5종 폐기 완료 (6.6 체크리스트)
 8. 기존 6개 repo GitHub archive 처리
 9. X-ray·처방 응답에 `engineStatus` 필드 노출, 프론트에 경고 배지 표시
 10. `LLM_PROVIDER=stub`으로 E2E 통과
