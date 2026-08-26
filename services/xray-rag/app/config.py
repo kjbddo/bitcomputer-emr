@@ -86,10 +86,14 @@ class Settings:
     USE_TORCH_EMBEDDING: bool = _bool(os.environ.get("USE_TORCH_EMBEDDING"), False)
 
     # SQUID 모델 폴더. 가중치는 scripts/fetch-models.sh 로 내려받는다.
+    # 주의: services/radiology-legacy/ 의 직계 자식이어야 한다. torch_anomaly_model.py 가
+    # `model_dir.parent` 를 AI_BackEnd 루트(config.py/model_loader.py가 있는 위치)로 간주해
+    # 거기서 `config.py` 를 강제로 로드하기 때문에, 중간에 `models/` 같은 계층을 끼우면
+    # `AI_BackEnd/config.py not found` 로 즉시 깨진다.
     SQUID_MODEL_DIR: Path = Path(
         os.environ.get(
             "SQUID_MODEL_DIR",
-            str(PROJECT_ROOT / "services" / "radiology-legacy" / "models" / "squid_exp1_256_mask"),
+            str(PROJECT_ROOT / "services" / "radiology-legacy" / "squid_exp1_256_mask"),
         )
     )
 

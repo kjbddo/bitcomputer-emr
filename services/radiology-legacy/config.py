@@ -1,13 +1,19 @@
 """
 AI_BackEnd 설정 파일
 """
+import os
 from pathlib import Path
 
 # 프로젝트 루트 경로
 BITCOMPUTER_ROOT = Path(__file__).parent.parent.resolve()
 
-# 모델 디렉토리 (squid_exp1_256_mask 폴더 사용)
-MODEL_DIR = Path(__file__).parent / 'squid_exp1_256_mask'
+# 모델 디렉토리 (squid_exp1_256_mask 폴더 사용).
+# 가중치는 저장소에 커밋하지 않고 scripts/fetch-models.sh 로 내려받으므로,
+# 환경변수 SQUID_MODEL_DIR 로 재정의할 수 있게 하되 기본값은 기존 경로를 유지한다.
+MODEL_DIR = Path(os.environ.get(
+    "SQUID_MODEL_DIR",
+    str(Path(__file__).resolve().parent / 'squid_exp1_256_mask'),
+))
 
 # 이미지 루트 경로
 IMAGES_ROOT = BITCOMPUTER_ROOT / 'Back-End' / 'BitComputer' / 'images'
