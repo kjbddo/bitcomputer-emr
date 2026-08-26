@@ -28,8 +28,8 @@ public class AuditService {
 
         AccessAuditLog log = new AccessAuditLog();
         log.setOccurredAt(LocalDateTime.now());
-        log.setActorUsername(auth != null ? String.valueOf(auth.getName()) : "anonymous");
-        log.setActorRole(resolveRole(auth));
+        log.setActorUsername(resolveActorUsername(auth));
+        log.setActorRole(resolveActorRole(auth));
         log.setAction(action);
         log.setTargetPatientId(patientId);
         log.setTargetHistoryId(historyId);
@@ -48,7 +48,18 @@ public class AuditService {
         return request.getRemoteAddr();
     }
 
-    private String resolveRole(Authentication auth) {
+    /**
+     * record(...) 저장이 실패했을 때(제약 위반, DB 다운 등) 호출자가 fail-open 으로
+     * 요청은 통과시키면서도 ERROR 로그에 "누가" 했는지는 남길 수 있도록, 실제 DB 행에
+     * 쓰는 것과 같은 방식으로 행위자를 도출하는 로직을 정적 메서드로 공개한다.
+     * AuditInterceptor / RestAccessDeniedHandler 가 그 catch 블록에서 이 두 메서드를
+     * 그대로 사용한다 — ROLE_ 접두어 제거 규칙을 세 군데서 따로 구현하지 않기 위함이다.
+     */
+    public static String resolveActorUsername(Authentication auth) {
+        return auth != null ? String.valueOf(auth.getName()) : "anonymous";
+    }
+
+    public static String resolveActorRole(Authentication auth) {
         if (auth == null) {
             return "ANONYMOUS";
         }
