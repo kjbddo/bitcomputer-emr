@@ -133,6 +133,8 @@ apps/web/src/
 | `--surface-raised` | `#FFFFFF` | slate-800 | 패널, 카드, 입력 필드 |
 | `--surface-overlay` | `#FFFFFF` | `#293548` | 모달, 팝오버, 드롭다운 |
 | `--surface-chrome` | slate-900 | slate-950 | 상단 헤더 · 사이드바 |
+| `--surface-chrome-hover` | slate-800 | slate-900 | 크롬 내 메뉴 항목 hover |
+| `--surface-chrome-active` | slate-700 | slate-800 | 크롬 내 활성 메뉴 항목 |
 | `--text-primary` | slate-900 | slate-100 | 본문 |
 | `--text-secondary` | slate-700 | slate-300 | 보조 설명 |
 | `--text-muted` | slate-600 | slate-400 | 라벨, placeholder, 메타데이터 |
@@ -358,7 +360,7 @@ if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)
 | `--text-primary` | `--surface-canvas`, `--surface-raised`, `--surface-sunken` | 4.5 |
 | `--text-secondary` | `--surface-raised`, `--surface-canvas` | 4.5 |
 | `--text-muted` | `--surface-raised`, `--surface-canvas` | 4.5 |
-| `--text-on-chrome` | `--surface-chrome` | 4.5 |
+| `--text-on-chrome` | `--surface-chrome`, `--surface-chrome-hover`, `--surface-chrome-active` | 4.5 |
 | `--text-on-fill` | `--accent-fill`, `--danger-fill` | 4.5 |
 | `--accent-text` | `--surface-raised` | 4.5 |
 | `--success-text` | `--success-bg` | 4.5 |
