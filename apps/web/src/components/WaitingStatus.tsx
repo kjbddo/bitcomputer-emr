@@ -426,7 +426,7 @@ export default function WaitingStatus({ onPatientSelect }: WaitingStatusProps = 
                         </Button>
                         <Button
                           type="button"
-                          variant="primary"
+                          variant="secondary"
                           size="sm"
                           disabled={patient.state === "completed"}
                           onClick={(e) => {

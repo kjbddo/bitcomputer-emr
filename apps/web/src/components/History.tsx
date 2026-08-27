@@ -160,14 +160,15 @@ export default function History({ employeeId, patientId, refreshKey }: HistoryPr
             <Button
               key={period}
               type="button"
-              variant={selectedPeriod === period ? "primary" : "secondary"}
+              variant={selectedPeriod === period ? "secondary" : "ghost"}
               size="sm"
+              aria-pressed={selectedPeriod === period}
               onClick={() => handlePeriodSelect(period)}
             >
               {period}
             </Button>
           ))}
-          <Button type="button" variant="primary" size="sm" onClick={() => setSelectedPeriod("직접선택")}>
+          <Button type="button" variant="secondary" size="sm" onClick={() => setSelectedPeriod("직접선택")}>
             조회
           </Button>
         </div>
