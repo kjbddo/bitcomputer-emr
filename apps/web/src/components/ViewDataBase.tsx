@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type KeyboardEvent, type UIE
 import { useMedicalSelection } from "@store/medicalSelection";
 import { get } from "@/services";
 import type { PaginatedResponse } from "@/types/api";
+import { Button, EmptyState, Panel, Table } from "@/components/ui";
 import styles from "./ViewDataBase.module.css";
 
 type ActiveTab = "disease" | "diagnose";
@@ -171,7 +172,7 @@ export default function ViewDataBase() {
   );
 
   const handleKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>, item: ResultItem) => {
+    (event: KeyboardEvent<HTMLTableRowElement>, item: ResultItem) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         handleItemDoubleClick(item);
@@ -215,84 +216,85 @@ export default function ViewDataBase() {
   );
 
   return (
-    <div className={styles.container}>
-      <div className={styles.header}>
-        <h3>데이터베이스 조회</h3>
+    <Panel className={styles.container} title="데이터베이스 조회">
+      <div className={styles.searchSection}>
+        <input
+          type="text"
+          placeholder="코드·상병명·처방명 검색 후 Enter 또는 검색"
+          className={styles.searchInput}
+          disabled={isInitialLoading}
+          value={searchDraft}
+          onChange={(e) => setSearchDraft(e.target.value)}
+          onKeyDown={handleSearchKeyDown}
+          aria-label="데이터베이스 검색어"
+        />
+        <Button type="button" variant="secondary" size="sm" disabled={isInitialLoading} onClick={submitSearch}>
+          검색
+        </Button>
       </div>
-      <div className={styles.content}>
-        <div className={styles.searchSection}>
-          <input
-            type="text"
-            placeholder="코드·상병명·처방명 검색 후 Enter 또는 검색"
-            className={styles.searchInput}
-            disabled={isInitialLoading}
-            value={searchDraft}
-            onChange={(e) => setSearchDraft(e.target.value)}
-            onKeyDown={handleSearchKeyDown}
-            aria-label="데이터베이스 검색어"
-          />
-          <button
-            type="button"
-            className={styles.searchButton}
-            disabled={isInitialLoading}
-            onClick={submitSearch}
-          >
-            검색
-          </button>
-        </div>
 
-        <div className={styles.tabSection}>
-          <button
-            className={`${styles.tab} ${activeTab === "disease" ? styles.active : ""}`}
-            onClick={() => handleTabChange("disease")}
-            type="button"
-            disabled={isInitialLoading && activeTab !== "disease"}
-          >
-            상병
-          </button>
-          <button
-            className={`${styles.tab} ${activeTab === "diagnose" ? styles.active : ""}`}
-            onClick={() => handleTabChange("diagnose")}
-            type="button"
-            disabled={isInitialLoading && activeTab !== "diagnose"}
-          >
-            처방
-          </button>
-        </div>
-
-        <div className={styles.resultSection}>
-          {activeError && itemsToRender.length === 0 ? (
-            <div className={styles.errorMessage}>{activeError}</div>
-          ) : isInitialLoading && itemsToRender.length === 0 ? (
-            <div className={styles.loadingMessage}>불러오는 중...</div>
-          ) : itemsToRender.length === 0 ? (
-            <div className={styles.emptyMessage}>표시할 데이터가 없습니다.</div>
-          ) : (
-            <div className={styles.resultList} onScroll={handleScroll}>
-              {itemsToRender.map((item) => (
-                <div
-                  key={item.id}
-                  className={styles.resultItem}
-                  onDoubleClick={() => handleItemDoubleClick(item)}
-                  title="더블클릭하거나 Enter 키로 선택 영역에 추가"
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(event) => handleKeyDown(event, item)}
-                >
-                  <div className={styles.resultCode}>{item.code}</div>
-                  <div className={styles.resultName}>{item.name}</div>
-                </div>
-              ))}
-              {isAppendLoading ? (
-                <div className={styles.appendLoader}>추가 불러오는 중...</div>
-              ) : !activeHasMore ? (
-                <div className={styles.appendLoader}>마지막 페이지입니다.</div>
-              ) : null}
-            </div>
-          )}
-        </div>
+      <div className={styles.tabSection}>
+        <Button
+          type="button"
+          variant={activeTab === "disease" ? "secondary" : "ghost"}
+          size="sm"
+          aria-pressed={activeTab === "disease"}
+          onClick={() => handleTabChange("disease")}
+          disabled={isInitialLoading && activeTab !== "disease"}
+        >
+          상병
+        </Button>
+        <Button
+          type="button"
+          variant={activeTab === "diagnose" ? "secondary" : "ghost"}
+          size="sm"
+          aria-pressed={activeTab === "diagnose"}
+          onClick={() => handleTabChange("diagnose")}
+          disabled={isInitialLoading && activeTab !== "diagnose"}
+        >
+          처방
+        </Button>
       </div>
-    </div>
+
+      <>
+        {activeError && itemsToRender.length === 0 ? (
+          <EmptyState title={activeError} />
+        ) : isInitialLoading && itemsToRender.length === 0 ? (
+          <EmptyState title="불러오는 중..." />
+        ) : itemsToRender.length === 0 ? (
+          <EmptyState title="표시할 데이터가 없습니다." />
+        ) : (
+          <div className={styles.resultList} onScroll={handleScroll}>
+            <Table dense>
+              <thead>
+                <tr>
+                  <th scope="col">코드</th>
+                  <th scope="col">명칭</th>
+                </tr>
+              </thead>
+              <tbody>
+                {itemsToRender.map((item) => (
+                  <tr
+                    key={item.id}
+                    tabIndex={0}
+                    onDoubleClick={() => handleItemDoubleClick(item)}
+                    onKeyDown={(event) => handleKeyDown(event, item)}
+                    title="더블클릭하거나 Enter 키로 선택 영역에 추가"
+                  >
+                    <td className={styles.resultCode}>{item.code}</td>
+                    <td>{item.name}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+            {isAppendLoading ? (
+              <p className={styles.appendLoader}>추가 불러오는 중...</p>
+            ) : !activeHasMore ? (
+              <p className={styles.appendLoader}>마지막 페이지입니다.</p>
+            ) : null}
+          </div>
+        )}
+      </>
+    </Panel>
   );
 }
-
