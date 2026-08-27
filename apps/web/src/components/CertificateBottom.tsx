@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import styles from "./CertificateBottom.module.css";
+import { Button, EmptyState, Panel, Table, rowActivateProps } from "@/components/ui";
 import { getPatientHistories, getHistoryDiseases, type HistoryDiseaseResponse } from "@services/history";
 
 const TABS = ["상병", "상용구", "과거처방", "사용자설정"] as const;
@@ -115,66 +116,70 @@ export default function CertificateBottom({
   }, [visitGroups, selectedHistoryId]);
 
   return (
-    <div className={styles.container}>
+    <Panel className={styles.container} padding="none">
       <div className={styles.tabBar}>
         {TABS.map((tab) => (
-          <button
+          <Button
             key={tab}
             type="button"
-            className={`${styles.tab} ${activeTab === tab ? styles.activeTab : ""}`}
+            variant={activeTab === tab ? "secondary" : "ghost"}
+            size="sm"
+            className={styles.tab}
+            aria-pressed={activeTab === tab}
             onClick={() => setActiveTab(tab)}
           >
             {tab}
-          </button>
+          </Button>
         ))}
       </div>
 
       <div className={styles.body}>
         {activeTab === "상병" && (
           <>
-            {loading && <p className={styles.placeholder}>조회 중…</p>}
-            {!loading && error && <p className={styles.placeholder}>{error}</p>}
+            {loading && <EmptyState title="조회 중..." />}
+            {!loading && error && <EmptyState title={error} />}
             {!loading && !error && !patientId && (
-              <p className={styles.placeholder}>환자를 조회하면 진료별 상병이 표시됩니다.</p>
+              <EmptyState title="환자를 조회하면 진료별 상병이 표시됩니다." />
             )}
             {!loading && !error && patientId && visitGroups.length === 0 && (
-              <p className={styles.placeholder}>진료 이력이 없습니다.</p>
+              <EmptyState title="진료 이력이 없습니다." />
             )}
             {!loading && !error && patientId && visitGroups.length > 0 && (
               <div className={styles.diseaseSplit}>
                 <div className={styles.historyColumn}>
                   <div className={styles.columnTitle}>진료일 (이력)</div>
-                  <ul className={styles.historyList} role="listbox" aria-label="진료 이력">
-                    {visitGroups.map((g) => {
-                      const selected = g.historyId === selectedHistoryId;
-                      return (
-                        <li key={g.historyId}>
-                          <button
-                            type="button"
-                            role="option"
-                            aria-selected={selected}
-                            className={`${styles.historyRow} ${selected ? styles.historyRowSelected : ""}`}
+                  <div className={styles.historyTableWrap}>
+                    <Table dense aria-label="진료 이력">
+                      <thead>
+                        <tr>
+                          <th scope="col">진료일</th>
+                          <th scope="col">상병</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {visitGroups.map((g) => (
+                          <tr
+                            key={g.historyId}
+                            aria-current={g.historyId === selectedHistoryId || undefined}
                             onClick={() => setSelectedHistoryId(g.historyId)}
+                            {...rowActivateProps(() => setSelectedHistoryId(g.historyId))}
                           >
-                            <span className={styles.historyDate}>{g.entryDate.slice(0, 10)}</span>
-                            <span className={styles.historyMeta}>
-                              상병 {g.diseases.length}건
-                            </span>
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
+                            <td>{g.entryDate.slice(0, 10)}</td>
+                            <td>{g.diseases.length}건</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </Table>
+                  </div>
                 </div>
                 <div className={styles.diseaseColumn}>
                   <div className={styles.diseaseHeaderRow}>
                     <div className={styles.columnTitle}>해당 진료 상병</div>
-                    <button
+                    <Button
                       type="button"
-                      className={styles.applyButton}
-                      disabled={
-                        selectedDiseases.length === 0 || !onApplyDiagnosisToCertificate
-                      }
+                      variant="secondary"
+                      size="sm"
+                      disabled={selectedDiseases.length === 0 || !onApplyDiagnosisToCertificate}
                       onClick={() => {
                         if (
                           selectedDiseases.length > 0 &&
@@ -188,19 +193,19 @@ export default function CertificateBottom({
                       }}
                     >
                       적용
-                    </button>
+                    </Button>
                   </div>
                   {selectedDiseases.length === 0 ? (
-                    <p className={styles.diseaseEmpty}>이 진료에 등록된 상병이 없습니다.</p>
+                    <EmptyState title="이 진료에 등록된 상병이 없습니다." />
                   ) : (
                     <div className={styles.diseaseTableWrap}>
-                      <table className={styles.diseaseTable}>
+                      <Table dense>
                         <thead>
                           <tr>
-                            <th>No.</th>
-                            <th>상병코드</th>
-                            <th>상병명</th>
-                            <th>구분</th>
+                            <th scope="col">No.</th>
+                            <th scope="col">상병코드</th>
+                            <th scope="col">상병명</th>
+                            <th scope="col">구분</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -213,7 +218,7 @@ export default function CertificateBottom({
                             </tr>
                           ))}
                         </tbody>
-                      </table>
+                      </Table>
                     </div>
                   )}
                 </div>
@@ -221,16 +226,10 @@ export default function CertificateBottom({
             )}
           </>
         )}
-        {activeTab === "상용구" && (
-          <p className={styles.placeholder}>상용구 내용을 여기에 추가하세요.</p>
-        )}
-        {activeTab === "과거처방" && (
-          <p className={styles.placeholder}>과거처방 내용을 여기에 추가하세요.</p>
-        )}
-        {activeTab === "사용자설정" && (
-          <p className={styles.placeholder}>사용자설정 내용을 여기에 추가하세요.</p>
-        )}
+        {activeTab === "상용구" && <EmptyState title="상용구 내용을 여기에 추가하세요." />}
+        {activeTab === "과거처방" && <EmptyState title="과거처방 내용을 여기에 추가하세요." />}
+        {activeTab === "사용자설정" && <EmptyState title="사용자설정 내용을 여기에 추가하세요." />}
       </div>
-    </div>
+    </Panel>
   );
 }

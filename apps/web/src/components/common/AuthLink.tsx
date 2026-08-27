@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import styles from "./AuthLink.module.css";
 
 export default function AuthLinkSwap() {
   const pathname = usePathname();
@@ -10,7 +11,7 @@ export default function AuthLinkSwap() {
 
   if (isLogin) {
     return (
-      <p style={{ marginTop: 12, fontSize: 14 }}>
+      <p className={styles.link}>
         계정이 없으신가요? <Link href="/signup">회원가입</Link>
       </p>
     );
@@ -18,7 +19,7 @@ export default function AuthLinkSwap() {
 
   if (isSignup) {
     return (
-      <p style={{ marginTop: 12, fontSize: 14 }}>
+      <p className={styles.link}>
         이미 계정이 있으신가요? <Link href="/login">로그인</Link>
       </p>
     );
@@ -26,5 +27,3 @@ export default function AuthLinkSwap() {
 
   return null;
 }
-
-

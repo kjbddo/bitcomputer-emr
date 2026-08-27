@@ -27,6 +27,7 @@ export default function Sidebar({ activeMenu, onMenuChange, userRole, canAccessM
               key={item.id}
               onClick={() => onMenuChange(item.id)}
               disabled={!hasAccess}
+              aria-current={activeMenu === item.id ? "page" : undefined}
               className={`${styles.menuItem} ${activeMenu === item.id ? styles.active : ""} ${!hasAccess ? styles.disabled : ""}`}
               title={hasAccess ? item.label : "접근 권한이 없습니다"}
             >

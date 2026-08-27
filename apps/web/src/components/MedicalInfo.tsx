@@ -2,6 +2,7 @@
 
 import { useEffect, useState, forwardRef, useImperativeHandle } from "react";
 import { getDoctors, type DoctorProfile } from "@/services/auth";
+import { Field, Panel } from "@/components/ui";
 import styles from "./MedicalInfo.module.css";
 
 export type MedicalInfoFormData = {
@@ -92,38 +93,28 @@ const MedicalInfo = forwardRef<MedicalInfoRef>((props, ref) => {
   }));
 
   return (
-    <div className={styles.container}>
-      <div className={styles.header}>
-        <h3>진료정보</h3>
-      </div>
-      <div className={styles.content}>
-        <form className={styles.form}>
+    <Panel className={styles.container} title="진료정보">
+      <form className={styles.form}>
         <div className={styles.row}>
-          <div className={styles.field}>
-            <label className={styles.label}>
-              <span className={styles.required}>*</span>진료과목
-            </label>
+          <Field label="진료과목" htmlFor="medical-department" required>
             <select
+              id="medical-department"
               name="department"
               value={formData.department}
               onChange={handleInputChange}
-              className={styles.select}
             >
               <option value="검진">검진</option>
               <option value="내과">내과</option>
               <option value="정형외과">정형외과</option>
             </select>
-          </div>
+          </Field>
 
-          <div className={styles.field}>
-            <label className={styles.label}>
-              <span className={styles.required}>*</span>진료의사
-            </label>
+          <Field label="진료의사" htmlFor="medical-doctor" required>
             <select
+              id="medical-doctor"
               name="doctor"
               value={formData.doctor}
               onChange={handleInputChange}
-              className={styles.select}
             >
               {doctors.length === 0 ? (
                 <option value="">등록된 의사 없음</option>
@@ -135,106 +126,94 @@ const MedicalInfo = forwardRef<MedicalInfoRef>((props, ref) => {
                 ))
               )}
             </select>
-          </div>
+          </Field>
         </div>
 
         <div className={styles.row}>
-          <div className={styles.field}>
-            <label className={styles.label}>
-              <span className={styles.required}>*</span>진료일
-            </label>
+          <Field label="진료일" htmlFor="medical-visit-date" required>
             <input
+              id="medical-visit-date"
               type="date"
               name="visitDate"
               value={formData.visitDate}
               onChange={handleInputChange}
-              className={styles.input}
             />
-          </div>
+          </Field>
 
-          <div className={styles.field}>
-            <label className={styles.label}>
-              <span className={styles.required}>*</span>접수시간
-            </label>
+          <Field label="접수시간" htmlFor="medical-visit-time" required>
             <input
+              id="medical-visit-time"
               type="time"
               name="visitTime"
               value={formData.visitTime}
               onChange={handleInputChange}
-              className={styles.input}
             />
-          </div>
+          </Field>
         </div>
 
         <div className={styles.row}>
-          <div className={styles.field}>
-            <label className={styles.label}>초/재진</label>
+          <Field label="초/재진" htmlFor="medical-visit-type">
             <select
+              id="medical-visit-type"
               name="visitType"
               value={formData.visitType}
               onChange={handleInputChange}
-              className={styles.select}
             >
               <option value="재진">재진</option>
               <option value="초진">초진</option>
             </select>
-          </div>
+          </Field>
 
-          <div className={styles.field}>
-            <label className={styles.label}>내원사유</label>
+          <Field label="내원사유" htmlFor="medical-visit-reason">
             <input
+              id="medical-visit-reason"
               type="text"
               name="visitReason"
               value={formData.visitReason}
               onChange={handleInputChange}
-              className={styles.input}
             />
-          </div>
+          </Field>
         </div>
 
         <div className={styles.row}>
-          <div className={styles.field}>
-            <label className={styles.label}>내원경로</label>
+          <Field label="내원경로" htmlFor="medical-visit-route">
             <select
+              id="medical-visit-route"
               name="visitRoute"
               value={formData.visitRoute}
               onChange={handleInputChange}
-              className={styles.select}
             >
               <option value="">선택</option>
               <option value="직접내원">직접내원</option>
               <option value="타병원의뢰">타병원의뢰</option>
             </select>
-          </div>
+          </Field>
 
-          <div className={styles.field}>
-            <label className={styles.label}>진료유형</label>
+          <Field label="진료유형" htmlFor="medical-treatment-type">
             <select
+              id="medical-treatment-type"
               name="treatmentType"
               value={formData.treatmentType}
               onChange={handleInputChange}
-              className={styles.select}
             >
               <option value="">선택</option>
               <option value="일반진료">일반진료</option>
               <option value="응급진료">응급진료</option>
             </select>
-          </div>
+          </Field>
         </div>
 
-        <div className={styles.fullWidth}>
-          <label className={styles.label}>당일메모</label>
+        <Field label="당일메모" htmlFor="medical-memo">
           <textarea
+            id="medical-memo"
             name="memo"
             value={formData.memo}
             onChange={handleInputChange}
-            className={styles.textarea}
             rows={4}
           />
-        </div>
+        </Field>
       </form>
-      </div>
-    </div>
+    </Panel>
   );
 });
 

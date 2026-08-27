@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { Badge, Button, EmptyState, Panel, Table, rowActivateProps } from "@/components/ui";
 import styles from "./WaitingStatus.module.css";
 import { PatientInfo } from "./PatientInfoBar";
 import { get, post, put, del } from "@/services/http/client";
@@ -54,6 +55,16 @@ interface WaitingStatusProps {
   onPatientSelect?: (patient: PatientInfo, visit?: WaitingVisitContext) => void;
 }
 
+// 대기 상태(state) → Badge tone 매핑. spec §4.2 의 임상 상태 매핑은 대기/진료중/완료/취소
+// 4종을 정의하는데, 이 화면의 실제 상태값은 waiting/hold/completed 3종뿐이라 "진료중"·"취소"에
+// 대응하는 값이 없다. waiting(대기)은 accent, completed(완료)는 success로 그대로 대응시키고,
+// hold(보류)는 취소가 아니라 일시 보류라는 의미상 danger보다 warning이 더 가깝다고 판단했다.
+const STATE_TONE: Record<string, "accent" | "warning" | "success"> = {
+  waiting: "accent",
+  hold: "warning",
+  completed: "success",
+};
+
 export default function WaitingStatus({ onPatientSelect }: WaitingStatusProps = {}) {
   const [selectedStatus, setSelectedStatus] = useState("waiting");
   const [waitingList, setWaitingList] = useState<WaitingPatient[]>([]);
@@ -90,12 +101,12 @@ export default function WaitingStatus({ onPatientSelect }: WaitingStatusProps = 
 
       const data = await get<WaitingPatient[]>("/api/waiting/get_list");
       console.log("대기 목록 조회 성공:", data);
-      
+
       setWaitingList(data);
-      
+
       // 환자 정보도 함께 가져오기
       await fetchPatientInfos(data);
-      
+
     } catch (error) {
       console.error("대기 목록 조회 실패:", error);
     } finally {
@@ -119,7 +130,7 @@ export default function WaitingStatus({ onPatientSelect }: WaitingStatusProps = 
   };
 
   const statusCounts = getStatusCounts();
-  
+
   const statusData = [
     { status: "진료 대기", count: statusCounts.waiting, type: "waiting", filterStatus: "waiting" },
     { status: "진료 보류", count: statusCounts.hold, type: "hold", filterStatus: "hold" },
@@ -326,24 +337,23 @@ export default function WaitingStatus({ onPatientSelect }: WaitingStatusProps = 
   };
 
   return (
-    <div className={styles.container}>
-      <div className={styles.header}>
-        <h3>진료 현황</h3>
-        <button 
-          onClick={fetchWaitingList}
-          className={styles.refreshButton}
-          disabled={isLoading}
-        >
+    <Panel
+      className={styles.container}
+      title="진료 현황"
+      actions={
+        <Button type="button" variant="secondary" size="sm" onClick={fetchWaitingList} loading={isLoading}>
           {isLoading ? "새로고침 중..." : "새로고침"}
-        </button>
-      </div>
-      <div className={styles.content}>
+        </Button>
+      }
+    >
       {/* 상태 요약 */}
       <div className={styles.statusGrid}>
         {statusData.map((item) => (
           <button
             key={item.status}
+            type="button"
             onClick={() => handleStatusClick(item.filterStatus)}
+            aria-pressed={selectedStatus === item.filterStatus}
             className={`${styles.statusButton} ${styles[item.type]} ${
               selectedStatus === item.filterStatus ? styles.active : ""
             }`}
@@ -359,108 +369,95 @@ export default function WaitingStatus({ onPatientSelect }: WaitingStatusProps = 
       {/* 환자 목록 테이블 */}
       <div>
         <h4 className={styles.sectionTitle}>
-          {getSectionTitle()} ({filteredPatients.length}명)
+          {getSectionTitle()}{" "}
+          <Badge tone={STATE_TONE[selectedStatus] ?? "neutral"}>({filteredPatients.length}명)</Badge>
         </h4>
 
         {isLoading ? (
-          <div className={styles.loadingMessage}>데이터를 불러오는 중...</div>
+          <EmptyState title="데이터를 불러오는 중..." />
+        ) : filteredPatients.length === 0 ? (
+          <EmptyState title={`${getSectionTitle()}가 없습니다.`} />
         ) : (
-          <div className={styles.tableContainer}>
-            <table className={styles.patientTable}>
-              <thead>
-                <tr className={styles.tableHeader}>
-                  <th>환자 번호</th>
-                  <th>접수시간</th>
-                  <th>환자명</th>
-                  <th>성별</th>
-                  <th>생년월일</th>
-                  <th>진료과목</th>
-                  <th>진료의사</th>
-                  <th>처리</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredPatients.map((patient) => {
-                  const patientInfo = patientInfoMap.get(patient.patientId);
-                  return (
-                    <tr
-                      key={patient.id}
-                      className={styles.tableRow}
-                      onDoubleClick={() => handlePatientDoubleClick(patient)}
+          <Table>
+            <thead>
+              <tr>
+                <th scope="col">환자 번호</th>
+                <th scope="col">접수시간</th>
+                <th scope="col">환자명</th>
+                <th scope="col">성별</th>
+                <th scope="col">생년월일</th>
+                <th scope="col">진료과목</th>
+                <th scope="col">진료의사</th>
+                <th scope="col">처리</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredPatients.map((patient) => {
+                const patientInfo = patientInfoMap.get(patient.patientId);
+                return (
+                  <tr
+                    key={patient.id}
+                    onDoubleClick={() => handlePatientDoubleClick(patient)}
+                    {...rowActivateProps(() => handlePatientDoubleClick(patient))}
+                  >
+                    <td className={styles.patientNumber}>{patient.patientId}</td>
+                    <td>{patient.visitTime || formatTime(patient.entryDate)}</td>
+                    <td
+                      className={styles.patientNameCell}
+                      onContextMenu={(e) => handleContextMenu(e, patient.id)}
                     >
-                      <td className={styles.patientNumber}>{patient.patientId}</td>
-                      <td className={styles.entryTime}>
-                        {patient.visitTime || formatTime(patient.entryDate)}
-                      </td>
-                      <td 
-                        className={styles.patientName}
-                        onContextMenu={(e) => handleContextMenu(e, patient.id)}
-                        style={{ cursor: "context-menu" }}
-                      >
-                        {patientInfo?.name || `환자 ${patient.patientId}`}
-                      </td>
-                      <td className={styles.gender}>
-                        {patientInfo?.gender === 'M' ? '남' : patientInfo?.gender === 'F' ? '여' : '-'}
-                      </td>
-                      <td className={styles.birthDate}>
-                        {patientInfo?.birth ? formatBirthDate(patientInfo.birth) : '-'}
-                      </td>
-                      <td className={styles.department}>
-                        {patient.department || '-'}
-                      </td>
-                      <td className={styles.doctor}>
-                        {patient.doctor || '-'}
-                      </td>
-                      <td className={styles.actionCell}>
-                        <div className={styles.actionButtons}>
-                          <button
-                            type="button"
-                            className={styles.holdButton}
-                            disabled={patient.state === "completed"}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void handleQuickAction(patient.id, patient.state, "hold");
-                            }}
-                          >
-                            보류
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.completeButton}
-                            disabled={patient.state === "completed"}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void handleQuickAction(patient.id, patient.state, "completed");
-                            }}
-                          >
-                            완료
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.deleteButton}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const ok = window.confirm("이 내원 정보를 삭제하시겠습니까?");
-                              if (!ok) return;
-                              void deleteWaitingEntry(patient.id);
-                            }}
-                          >
-                            삭제
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {!isLoading && filteredPatients.length === 0 && (
-          <div className={styles.emptyMessage}>
-            {getSectionTitle()}가 없습니다.
-          </div>
+                      {patientInfo?.name || `환자 ${patient.patientId}`}
+                    </td>
+                    <td>{patientInfo?.gender === 'M' ? '남' : patientInfo?.gender === 'F' ? '여' : '-'}</td>
+                    <td>{patientInfo?.birth ? formatBirthDate(patientInfo.birth) : '-'}</td>
+                    <td>{patient.department || '-'}</td>
+                    <td>{patient.doctor || '-'}</td>
+                    <td>
+                      <div className={styles.actionButtons}>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          disabled={patient.state === "completed"}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleQuickAction(patient.id, patient.state, "hold");
+                          }}
+                        >
+                          보류
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          disabled={patient.state === "completed"}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleQuickAction(patient.id, patient.state, "completed");
+                          }}
+                        >
+                          완료
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="danger"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const ok = window.confirm("이 내원 정보를 삭제하시겠습니까?");
+                            if (!ok) return;
+                            void deleteWaitingEntry(patient.id);
+                          }}
+                        >
+                          삭제
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </Table>
         )}
       </div>
 
@@ -469,20 +466,17 @@ export default function WaitingStatus({ onPatientSelect }: WaitingStatusProps = 
         <div
           ref={contextMenuRef}
           className={styles.contextMenu}
-          style={{
-            position: "fixed",
-            left: `${contextMenu.x}px`,
-            top: `${contextMenu.y}px`,
-            zIndex: 1000,
-          }}
+          style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           <button
+            type="button"
             className={styles.contextMenuItem}
             onClick={() => updatePatientStatus(contextMenu.waitingId, "hold")}
           >
             진료 보류 변경
           </button>
           <button
+            type="button"
             className={styles.contextMenuItem}
             onClick={() => updatePatientStatus(contextMenu.waitingId, "completed")}
           >
@@ -490,7 +484,6 @@ export default function WaitingStatus({ onPatientSelect }: WaitingStatusProps = 
           </button>
         </div>
       )}
-      </div>
-    </div>
+    </Panel>
   );
 }

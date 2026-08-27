@@ -28,6 +28,8 @@ DOM의 **요소 종류, ARIA role, 접근성 이름(accessible name), 텍스트 
 
 `src/styles/tokens.css` 외의 어떤 파일에도 `#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb()`, `rgba()`, `hsl()`, `hsla()`를 쓰지 않는다. `.tsx`의 인라인 `style={{}}`도 포함한다. Task 4가 만드는 가드 테스트가 이를 강제한다.
 
+**CSS 파일에서는 색상 키워드(`white`, `black`, `red`, `blue`, `gray` 등)도 금지한다.** hex 를 남긴 것과 똑같이 다크 모드를 깬다 — 이관 시작 시점에 코드베이스에 48곳(`white` 42, `red` 3, `blue` 3) 있었다. `transparent`, `currentColor`, `inherit` 는 테마를 깨지 않으므로 허용한다. 키워드 검사는 `.css` 에만 적용한다(`.tsx` 에 걸면 `{ status: "red" }` 같은 평범한 객체 리터럴을 오탐한다).
+
 ### GC-3. 원시 램프 직접 참조 금지
 
 컴포넌트 CSS에서 `var(--slate-700)` 같은 원시 램프를 직접 참조하지 않는다. 의미 토큰(`var(--text-secondary)`)만 쓴다. 원시 램프를 직접 쓰면 다크 모드에서 뒤집히지 않는다.
@@ -36,12 +38,15 @@ DOM의 **요소 종류, ARIA role, 접근성 이름(accessible name), 텍스트 
 
 `grid-template-columns` 값, 반응형 breakpoint(1200 / 1024 / 768 / 640px), 컬럼 구성은 그대로 둔다. 변경 대상은 표면 — 색, 여백, 타이포, 경계, 모서리, 상태 표현.
 
+**적용 범위는 페이지·패널 단위의 거시 그리드다.** 폼 내부의 라벨 컬럼 같은 미시 그리드는 해당하지 않는다 — `Field` 가 라벨을 입력 위에 두는 구조이므로 `120px 1fr` 식의 라벨 컬럼은 `Field` 로 이관하는 순간 사라지는 게 정상이다. 화면의 3컬럼 구성이나 사이드바 폭이 바뀌면 위반이고, 폼 한 줄의 내부 배치가 바뀌는 것은 위반이 아니다.
+
 ### GC-5. 밀도 규칙 (A 골격 + B 여백)
 
 - 패널 내부 패딩 `var(--space-4)` (16px)
 - 데이터 행 높이 `var(--row-height)` (36px)
 - 패널 간 간격 `var(--space-4)`, 패널 내 섹션 간격 `var(--space-3)`
 - 그림자는 떠 있는 것(모달, 팝오버, 드롭다운)에만. 평면 표면은 `var(--border)` 헤어라인으로 층을 표현한다.
+  - 금지 대상은 **깊이를 흉내 내는 그림자**(blur 가 있는 `box-shadow`)다. blur 가 0 인 `inset` 은 경계선의 대체 표현이므로 허용한다 — 선택된 행의 좌측 강조선 `box-shadow: inset 2px 0 0 var(--accent-fill)` 이 그 예다. `border-left` 로 쓰면 셀 폭이 밀리지만 `inset` 은 밀지 않는다.
 - 강조색은 화면당 실질 1개. `Button variant="primary"`는 화면당 1개가 원칙.
 
 ### GC-6. 테스트 실행
@@ -519,8 +524,7 @@ cd apps/web && yarn test src/styles/__tests__/contrast.test.ts
   --dur-base: 200ms;
   --ease: cubic-bezier(0.2, 0, 0, 1);
 
-  --font-sans: var(--font-geist-sans), "Pretendard Variable", Pretendard,
-    -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-sans: var(--font-geist-sans), "Pretendard Variable", Pretendard, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
   --font-mono: var(--font-geist-mono), "D2Coding", ui-monospace, monospace;
 }
 
@@ -565,8 +569,7 @@ cd apps/web && yarn test src/styles/__tests__/contrast.test.ts
     --shadow-lg: 0 12px 32px rgb(2 6 23 / 0.55);
     --backdrop: rgb(2 6 23 / 0.65);
 
-    --font-sans: var(--font-geist-sans), "Pretendard Variable", Pretendard,
-      -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    --font-sans: var(--font-geist-sans), "Pretendard Variable", Pretendard, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
     --font-mono: var(--font-geist-mono), "D2Coding", ui-monospace, monospace;
   }
 }
@@ -611,8 +614,7 @@ cd apps/web && yarn test src/styles/__tests__/contrast.test.ts
   --shadow-lg: 0 12px 32px rgb(2 6 23 / 0.55);
   --backdrop: rgb(2 6 23 / 0.65);
 
-  --font-sans: var(--font-geist-sans), "Pretendard Variable", Pretendard,
-    -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-sans: var(--font-geist-sans), "Pretendard Variable", Pretendard, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
   --font-mono: var(--font-geist-mono), "D2Coding", ui-monospace, monospace;
 }
 ```

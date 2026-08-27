@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Button, Panel } from "@/components/ui";
 import styles from "./Calender.module.css";
 import { getPatientHistories } from "@/services/history";
 import type { HistoryEntry } from "@/types/history";
@@ -154,19 +155,19 @@ export default function Calender({ employeeId, patientId, refreshKey }: Calender
   }, [historyDateSet, patientId]);
 
   return (
-    <div className={styles.container}>
+    <Panel className={styles.container}>
       <div className={styles.header}>
-        <button className={styles.navButton} onClick={goToPreviousMonth}>
+        <Button type="button" variant="ghost" size="sm" onClick={goToPreviousMonth} aria-label="이전 달">
           ←
-        </button>
+        </Button>
         <div className={styles.monthYear}>{formatMonthYear()}</div>
         <div className={styles.headerRight}>
-          <button className={styles.todayButton} onClick={goToToday}>
+          <Button type="button" variant="secondary" size="sm" onClick={goToToday}>
             오늘
-          </button>
-          <button className={styles.navButton} onClick={goToNextMonth}>
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={goToNextMonth} aria-label="다음 달">
             →
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -199,6 +200,7 @@ export default function Calender({ employeeId, patientId, refreshKey }: Calender
           return (
             <button
               key={index}
+              type="button"
               className={`${styles.day} ${
                 !isCurrent ? styles.otherMonth : ""
               } ${dayOfWeek === 0 ? styles.sunday : ""} ${
@@ -215,7 +217,6 @@ export default function Calender({ employeeId, patientId, refreshKey }: Calender
           );
         })}
       </div>
-    </div>
+    </Panel>
   );
 }
-

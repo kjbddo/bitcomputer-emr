@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { createUser, getAllUsers, setRole } from "@/services/admin";
 import { User, Role } from "@/types/user";
+import { Badge, Button, EmptyState, Field, Panel, Table } from "@/components/ui";
 import styles from "./page.module.css";
 
 export default function AdminUsersPage() {
@@ -114,28 +115,23 @@ export default function AdminUsersPage() {
   return (
     <div className={styles.container}>
       <div className={styles.wrapper}>
-        {/* 헤더 카드 */}
-        <div className={styles.headerCard}>
-          <div className={styles.headerContent}>
-            <div>
-              <h1 className={styles.headerTitle}>전체 유저 조회</h1>
-              {!loading && users && users.length > 0 && (
-                <p className={styles.headerSubtitle}>
-                  총 <strong>{users.length}명</strong>의 유저가 등록되어 있습니다
-                </p>
-              )}
-            </div>
-            <button
-              onClick={loadUsers}
-              disabled={loading}
-              className={styles.refreshButton}
-            >
-              {loading ? "로딩 중..." : "새로고침"}
-            </button>
-          </div>
-        </div>
+        {/* Header 가 h1(서비스명)을 이미 렌더하므로 이 화면의 제목은 h2 다 —
+            Panel 의 title prop 이 h2 를 렌더한다. */}
+        <Panel
+          title="전체 유저 조회"
+          actions={
+            <Button type="button" variant="secondary" size="sm" onClick={loadUsers} disabled={loading} loading={loading}>
+              새로고침
+            </Button>
+          }
+        >
+          {!loading && users && users.length > 0 && (
+            <p className={styles.headerSubtitle}>
+              총 <strong>{users.length}명</strong>의 유저가 등록되어 있습니다
+            </p>
+          )}
+        </Panel>
 
-        {/* 에러 메시지 */}
         {error && (
           <div className={styles.errorMessage} role="alert">
             {error}
@@ -147,141 +143,113 @@ export default function AdminUsersPage() {
           </div>
         )}
 
-        <div className={styles.formCard}>
-          <h2 className={styles.sectionTitle}>직원 추가</h2>
+        <Panel title="직원 추가">
           <form className={styles.createForm} onSubmit={handleCreateUser}>
-            <label className={styles.formField}>
-              <span>이름</span>
+            <Field label="이름" htmlFor="admin-new-user-name">
               <input
+                id="admin-new-user-name"
                 value={newUser.name}
                 onChange={(e) => setNewUser((prev) => ({ ...prev, name: e.target.value }))}
                 placeholder="홍길동"
-                className={styles.formInput}
                 required
               />
-            </label>
-            <label className={styles.formField}>
-              <span>사용자명</span>
+            </Field>
+            <Field label="사용자명" htmlFor="admin-new-user-username">
               <input
+                id="admin-new-user-username"
                 value={newUser.username}
                 onChange={(e) => setNewUser((prev) => ({ ...prev, username: e.target.value }))}
                 placeholder="doctor01"
-                className={styles.formInput}
                 required
               />
-            </label>
-            <label className={styles.formField}>
-              <span>비밀번호</span>
+            </Field>
+            <Field label="비밀번호" htmlFor="admin-new-user-password">
               <input
+                id="admin-new-user-password"
                 type="password"
                 value={newUser.password}
                 onChange={(e) => setNewUser((prev) => ({ ...prev, password: e.target.value }))}
-                className={styles.formInput}
                 required
               />
-            </label>
-            <label className={styles.formField}>
-              <span>부서 ID</span>
+            </Field>
+            <Field label="부서 ID" htmlFor="admin-new-user-dept">
               <input
+                id="admin-new-user-dept"
                 type="number"
                 min={1}
                 value={newUser.deptId}
                 onChange={(e) => setNewUser((prev) => ({ ...prev, deptId: e.target.value }))}
-                className={styles.formInput}
                 required
               />
-            </label>
-            <label className={styles.formField}>
-              <span>역할</span>
+            </Field>
+            <Field label="역할" htmlFor="admin-new-user-role">
               <select
+                id="admin-new-user-role"
                 value={newUser.role}
                 onChange={(e) => setNewUser((prev) => ({ ...prev, role: e.target.value as Role }))}
-                className={styles.formInput}
               >
                 <option value={Role.DOCTOR}>{getRoleLabel(Role.DOCTOR)}</option>
                 <option value={Role.NURSE}>{getRoleLabel(Role.NURSE)}</option>
                 <option value={Role.RECEPTIONIST}>{getRoleLabel(Role.RECEPTIONIST)}</option>
                 <option value={Role.SUPER_USER}>{getRoleLabel(Role.SUPER_USER)}</option>
               </select>
-            </label>
-            <button type="submit" className={styles.createButton}>
+            </Field>
+            <Button type="submit" variant="primary" className={styles.createButton}>
               직원 추가
-            </button>
+            </Button>
           </form>
-        </div>
+        </Panel>
 
-        {/* 컨텐츠 카드 */}
-        <div className={styles.contentCard}>
+        <Panel title="유저 목록">
           {loading ? (
-            <div className={styles.loadingContainer}>
-              <p className={styles.loadingText}>로딩 중...</p>
-            </div>
+            <EmptyState title="로딩 중..." />
           ) : !users || users.length === 0 ? (
-            <div className={styles.emptyContainer}>
-              <p className={styles.emptyTitle}>등록된 유저가 없습니다</p>
-            </div>
+            <EmptyState title="등록된 유저가 없습니다" />
           ) : (
-            <div className={styles.tableWrapper}>
-              <table className={styles.table}>
-                <thead>
-                  <tr>
-                    <th className={styles.tableHeader}>ID</th>
-                    <th className={styles.tableHeader}>이름</th>
-                    <th className={styles.tableHeader}>사용자명</th>
-                    <th className={styles.tableHeader}>역할</th>
-                    <th className={styles.tableHeader}>부서 ID</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {users.map((user, index) => {
-                    const rowClass =
-                      index % 2 === 0 ? styles.tableRowEven : styles.tableRowOdd;
-                    return (
-                      <tr
-                        key={user.id}
-                        className={`${styles.tableRow} ${rowClass}`}
+            <Table>
+              <thead>
+                <tr>
+                  <th scope="col">ID</th>
+                  <th scope="col">이름</th>
+                  <th scope="col">사용자명</th>
+                  <th scope="col">역할</th>
+                  <th scope="col">부서 ID</th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((user) => (
+                  <tr key={user.id}>
+                    <td className={styles.tableCellId}>#{user.id}</td>
+                    <td className={styles.tableCellName}>{user.name}</td>
+                    <td>{user.username}</td>
+                    <td>
+                      <select
+                        value={user.role}
+                        onChange={(e) => handleRoleChange(user.id, e.target.value as Role)}
+                        disabled={updatingRoles.has(user.id)}
+                        aria-label={`${user.name} 역할 변경`}
                       >
-                        <td className={`${styles.tableCell} ${styles.tableCellId}`}>
-                          #{user.id}
-                        </td>
-                        <td className={`${styles.tableCell} ${styles.tableCellName}`}>
-                          {user.name}
-                        </td>
-                        <td className={`${styles.tableCell} ${styles.tableCellUsername}`}>
-                          {user.username}
-                        </td>
-                        <td className={`${styles.tableCell} ${styles.tableCellRole}`}>
-                          <select
-                            value={user.role}
-                            onChange={(e) => handleRoleChange(user.id, e.target.value as Role)}
-                            disabled={updatingRoles.has(user.id)}
-                            className={styles.roleSelect}
-                          >
-                            <option value={Role.DEFAULT}>{getRoleLabel(Role.DEFAULT)}</option>
-                            <option value={Role.SUPER_USER}>{getRoleLabel(Role.SUPER_USER)}</option>
-                            <option value={Role.DOCTOR}>{getRoleLabel(Role.DOCTOR)}</option>
-                            <option value={Role.NURSE}>{getRoleLabel(Role.NURSE)}</option>
-                            <option value={Role.RECEPTIONIST}>{getRoleLabel(Role.RECEPTIONIST)}</option>
-                          </select>
-                        </td>
-                        <td className={styles.tableCell}>
-                          {user.deptId ? (
-                            <span className={styles.deptBadge}>{user.deptId}</span>
-                          ) : (
-                            <span className={styles.deptEmpty}>-</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                        <option value={Role.DEFAULT}>{getRoleLabel(Role.DEFAULT)}</option>
+                        <option value={Role.SUPER_USER}>{getRoleLabel(Role.SUPER_USER)}</option>
+                        <option value={Role.DOCTOR}>{getRoleLabel(Role.DOCTOR)}</option>
+                        <option value={Role.NURSE}>{getRoleLabel(Role.NURSE)}</option>
+                        <option value={Role.RECEPTIONIST}>{getRoleLabel(Role.RECEPTIONIST)}</option>
+                      </select>
+                    </td>
+                    <td>
+                      {user.deptId ? (
+                        <Badge tone="neutral">{user.deptId}</Badge>
+                      ) : (
+                        <span className={styles.deptEmpty}>-</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
           )}
-        </div>
+        </Panel>
       </div>
     </div>
   );
 }
-
-

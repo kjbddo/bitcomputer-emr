@@ -20,15 +20,15 @@
 
 .contentArea {
   flex: 1;
-  padding: 16px;
-  background: #5E5E61;
+  padding: var(--space-4);
+  background: var(--surface-canvas);
   overflow: auto;
 }
 
 .contentGrid {
   display: grid;
   grid-template-columns: 300px 1fr 1fr;
-  gap: 16px;
+  gap: var(--space-4);
   height: 100%;
   min-height: 600px;
 }
@@ -36,7 +36,7 @@
 .contentGridClinic {
   display: grid;
   grid-template-columns: 300px 1fr 350px;
-  gap: 16px;
+  gap: var(--space-4);
   height: 100%;
   min-height: 600px;
 }
@@ -45,18 +45,18 @@
 @media (max-width: 1200px) {
   .contentGrid {
     grid-template-columns: 280px 1fr 1fr;
-    gap: 12px;
+    gap: var(--space-3);
   }
   
   .contentGridClinic {
     grid-template-columns: 280px 1fr 320px;
-    gap: 12px;
+    gap: var(--space-3);
   }
 }
 
 @media (max-width: 1024px) {
   .contentArea {
-    padding: 12px;
+    padding: var(--space-3);
   }
   
   .contentGrid {
@@ -72,32 +72,32 @@
 
 @media (max-width: 768px) {
   .contentArea {
-    padding: 8px;
+    padding: var(--space-2);
   }
   
   .contentGrid {
     grid-template-columns: 1fr;
     grid-template-rows: auto auto auto;
-    gap: 8px;
+    gap: var(--space-2);
   }
   
   .contentGridClinic {
     grid-template-columns: 1fr;
     grid-template-rows: auto auto;
-    gap: 8px;
+    gap: var(--space-2);
   }
 }
 
 @media (max-width: 640px) {
   .contentArea {
-    padding: 4px;
+    padding: var(--space-1);
   }
 }
 
 .contentGridCertificate {
   display: grid;
   grid-template-columns: 280px 1fr 1fr;
-  gap: 16px;
+  gap: var(--space-4);
   height: 100%;
   min-height: 600px;
 }
@@ -105,14 +105,14 @@
 .certificateCenterColumn {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-4);
   height: 100%;
 }
 
 .certificateRightColumn {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-4);
   min-width: 0;
   height: 100%;
 }
@@ -120,20 +120,20 @@
 .clinicMiddleColumn {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-4);
   min-height: 0;
 }
 
 .clinicRightColumn {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .leftColumn {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .middleColumn {
@@ -143,5 +143,5 @@
 .rightColumn {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-4);
 }

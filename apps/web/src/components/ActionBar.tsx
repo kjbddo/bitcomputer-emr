@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Button } from "@/components/ui";
 import styles from "./ActionBar.module.css";
 import SearchPatientModal from "./SearchPatientModal";
 import { PatientInfo } from "./PatientInfoBar";
@@ -8,9 +9,10 @@ import { PatientInfo } from "./PatientInfoBar";
 type ActionBarProps = {
   onPatientSelect: (patient: PatientInfo, visit?: unknown) => void;
   onRegisterClick?: () => void;
+  isRegisterPrimary?: boolean;
 };
 
-export default function ActionBar({ onPatientSelect, onRegisterClick }: ActionBarProps) {
+export default function ActionBar({ onPatientSelect, onRegisterClick, isRegisterPrimary = false }: ActionBarProps) {
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
 
   const today = new Date().toLocaleDateString("ko-KR", {
@@ -36,23 +38,21 @@ export default function ActionBar({ onPatientSelect, onRegisterClick }: ActionBa
         </div>
 
         <div className={styles.rightSection}>
-          <button
-            className={`${styles.button} ${styles.registerButton}`}
+          <Button
+            type="button"
+            variant={isRegisterPrimary ? "primary" : "secondary"}
             onClick={onRegisterClick}
           >
             환자 등록
-          </button>
-          <button
-            className={`${styles.button} ${styles.searchButton}`}
-            onClick={handleSearchClick}
-          >
+          </Button>
+          <Button type="button" variant="secondary" onClick={handleSearchClick}>
             환자 조회
-          </button>
+          </Button>
         </div>
       </div>
 
       <SearchPatientModal
-        isOpen={isSearchModalOpen}
+        open={isSearchModalOpen}
         onClose={closeSearchModal}
         title="환자 조회"
         onSelectPatient={(patient) => {

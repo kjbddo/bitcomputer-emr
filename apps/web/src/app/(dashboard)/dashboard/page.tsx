@@ -548,9 +548,10 @@ export default function DashboardPage() {
         />
 
         <main className={styles.mainContent}>
-          <ActionBar 
+          <ActionBar
             onPatientSelect={(patient) => handlePatientSelection(patient, undefined)}
             onRegisterClick={handleRegisterPatient}
+            isRegisterPrimary={activeMenu === "환자접수"}
           />
           <PatientInfoBar patient={selectedPatient ?? undefined} />
 

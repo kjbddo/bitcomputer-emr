@@ -1,5 +1,6 @@
 "use client";
 
+import { EmptyState, Panel } from "@/components/ui";
 import styles from "./SpecialNote.module.css";
 
 export default function SpecialNote() {
@@ -8,11 +9,10 @@ export default function SpecialNote() {
   ];
 
   return (
-    <div className={styles.container}>
-      <div className={styles.header}>
-        <h3>특이사항</h3>
-      </div>
-      <div className={styles.content}>
+    <Panel className={styles.container} title="특이사항">
+      {specialNotes.length === 0 ? (
+        <EmptyState title="등록된 특이사항이 없습니다" />
+      ) : (
         <div className={styles.notesList}>
           {specialNotes.map((note, index) => (
             <div key={index} className={styles.noteItem}>
@@ -20,7 +20,7 @@ export default function SpecialNote() {
             </div>
           ))}
         </div>
-      </div>
-    </div>
+      )}
+    </Panel>
   );
 }
