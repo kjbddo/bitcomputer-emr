@@ -45,6 +45,27 @@ function buildPrescriptionSearchQuery(item: RecommendedPrescriptionItem): string
   return "";
 }
 
+// AI 검증 엔진(services/validation-agent)이 내는 overallStatus 값 공간은
+// PASS | WARNING | CRITICAL | NEEDS_REVIEW 4종으로 백엔드가 고정한다
+// (_normalize_final_result 가 이 집합 밖의 값을 전부 NEEDS_REVIEW 로 되돌린다).
+// 그 외 값(예: validationModal.status 로 대체 표시되는 작업 상태 PENDING/RUNNING/
+// FAILED)은 이 스킴에 속하지 않으므로 neutral 로 떨어뜨린다.
+function overallStatusTone(
+  overallStatus: string | undefined
+): "success" | "warning" | "danger" | "neutral" {
+  switch (overallStatus) {
+    case "PASS":
+      return "success";
+    case "WARNING":
+    case "NEEDS_REVIEW":
+      return "warning";
+    case "CRITICAL":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
 function extractValidationReasons(job: ValidationJobResponse | null): string[] {
   const result = job?.result;
   if (!result) return [];
@@ -455,7 +476,9 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
         {validationModal && (
           <div className={styles.modalCard}>
             <div className={styles.modalCardHead}>
-              <Badge tone="accent">{validationModal.result?.overallStatus ?? validationModal.status}</Badge>
+              <Badge tone={overallStatusTone(validationModal.result?.overallStatus)}>
+                {validationModal.result?.overallStatus ?? validationModal.status}
+              </Badge>
             </div>
             <p className={styles.modalReason}>
               {validationModal.result?.summary ?? validationModal.summary ?? "검증 결과를 확인했습니다."}
