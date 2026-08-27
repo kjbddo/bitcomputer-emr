@@ -28,6 +28,8 @@ DOM의 **요소 종류, ARIA role, 접근성 이름(accessible name), 텍스트 
 
 `src/styles/tokens.css` 외의 어떤 파일에도 `#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb()`, `rgba()`, `hsl()`, `hsla()`를 쓰지 않는다. `.tsx`의 인라인 `style={{}}`도 포함한다. Task 4가 만드는 가드 테스트가 이를 강제한다.
 
+**CSS 파일에서는 색상 키워드(`white`, `black`, `red`, `blue`, `gray` 등)도 금지한다.** hex 를 남긴 것과 똑같이 다크 모드를 깬다 — 이관 시작 시점에 코드베이스에 48곳(`white` 42, `red` 3, `blue` 3) 있었다. `transparent`, `currentColor`, `inherit` 는 테마를 깨지 않으므로 허용한다. 키워드 검사는 `.css` 에만 적용한다(`.tsx` 에 걸면 `{ status: "red" }` 같은 평범한 객체 리터럴을 오탐한다).
+
 ### GC-3. 원시 램프 직접 참조 금지
 
 컴포넌트 CSS에서 `var(--slate-700)` 같은 원시 램프를 직접 참조하지 않는다. 의미 토큰(`var(--text-secondary)`)만 쓴다. 원시 램프를 직접 쓰면 다크 모드에서 뒤집히지 않는다.
