@@ -1,7 +1,7 @@
 "use client";
 
 import { ReactNode, useState, useEffect } from "react";
-import { Button, EmptyState, Modal, Table } from "@/components/ui";
+import { Button, EmptyState, Modal, Table, rowActivateProps } from "@/components/ui";
 import styles from "./SearchPatientModal.module.css";
 import { PatientInfo } from "./PatientInfoBar";
 import { get } from "@/services/http/client";
@@ -212,14 +212,8 @@ export default function SearchPatientModal({ open, onClose, title, onSelectPatie
                 {filteredPatients.map((patient) => (
                   <tr
                     key={patient.id}
-                    tabIndex={0}
                     onClick={() => handlePatientSelect(patient)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        handlePatientSelect(patient);
-                      }
-                    }}
+                    {...rowActivateProps(() => handlePatientSelect(patient))}
                   >
                     <td>-</td>
                     <td>{patient.name}</td>

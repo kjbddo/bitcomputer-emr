@@ -1,6 +1,6 @@
 "use client";
 
-import { Panel, Table } from "@/components/ui";
+import { Panel, Table, rowActivateProps } from "@/components/ui";
 import styles from "./CertificateList.module.css";
 
 export type CertificateType = "general" | "military";
@@ -52,13 +52,6 @@ const MOCK_CERTIFICATES: CertificateItem[] = [
 ];
 
 export default function CertificateList({ selected, onSelect }: CertificateListProps) {
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLTableRowElement>, item: CertificateItem) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      onSelect(item);
-    }
-  };
-
   return (
     <Panel
       className={styles.container}
@@ -76,10 +69,9 @@ export default function CertificateList({ selected, onSelect }: CertificateListP
           {MOCK_CERTIFICATES.map((item) => (
             <tr
               key={item.id}
-              tabIndex={0}
-              aria-selected={selected?.id === item.id || undefined}
+              aria-current={selected?.id === item.id || undefined}
               onClick={() => onSelect(item)}
-              onKeyDown={(event) => handleKeyDown(event, item)}
+              {...rowActivateProps(() => onSelect(item))}
             >
               <td>{item.label}</td>
             </tr>

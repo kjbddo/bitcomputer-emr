@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type KeyboardEvent, type UIE
 import { useMedicalSelection } from "@store/medicalSelection";
 import { get } from "@/services";
 import type { PaginatedResponse } from "@/types/api";
-import { Button, EmptyState, Panel, Table } from "@/components/ui";
+import { Button, EmptyState, Panel, Table, rowActivateProps } from "@/components/ui";
 import styles from "./ViewDataBase.module.css";
 
 type ActiveTab = "disease" | "diagnose";
@@ -171,16 +171,6 @@ export default function ViewDataBase() {
     [activeTab, addDisease, addDiagnosis]
   );
 
-  const handleKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLTableRowElement>, item: ResultItem) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        handleItemDoubleClick(item);
-      }
-    },
-    [handleItemDoubleClick]
-  );
-
   const handleScroll = useCallback(
     (event: UIEvent<HTMLDivElement>) => {
       const { scrollTop, clientHeight, scrollHeight } = event.currentTarget;
@@ -276,9 +266,8 @@ export default function ViewDataBase() {
                 {itemsToRender.map((item) => (
                   <tr
                     key={item.id}
-                    tabIndex={0}
                     onDoubleClick={() => handleItemDoubleClick(item)}
-                    onKeyDown={(event) => handleKeyDown(event, item)}
+                    {...rowActivateProps(() => handleItemDoubleClick(item))}
                     title="더블클릭하거나 Enter 키로 선택 영역에 추가"
                   >
                     <td className={styles.resultCode}>{item.code}</td>

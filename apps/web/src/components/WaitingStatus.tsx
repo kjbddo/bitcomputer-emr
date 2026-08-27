@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Badge, Button, EmptyState, Panel, Table } from "@/components/ui";
+import { Badge, Button, EmptyState, Panel, Table, rowActivateProps } from "@/components/ui";
 import styles from "./WaitingStatus.module.css";
 import { PatientInfo } from "./PatientInfoBar";
 import { get, post, put, del } from "@/services/http/client";
@@ -353,6 +353,7 @@ export default function WaitingStatus({ onPatientSelect }: WaitingStatusProps = 
             key={item.status}
             type="button"
             onClick={() => handleStatusClick(item.filterStatus)}
+            aria-pressed={selectedStatus === item.filterStatus}
             className={`${styles.statusButton} ${styles[item.type]} ${
               selectedStatus === item.filterStatus ? styles.active : ""
             }`}
@@ -397,6 +398,7 @@ export default function WaitingStatus({ onPatientSelect }: WaitingStatusProps = 
                   <tr
                     key={patient.id}
                     onDoubleClick={() => handlePatientDoubleClick(patient)}
+                    {...rowActivateProps(() => handlePatientDoubleClick(patient))}
                   >
                     <td className={styles.patientNumber}>{patient.patientId}</td>
                     <td>{patient.visitTime || formatTime(patient.entryDate)}</td>

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import styles from "./CertificatePatientSearch.module.css";
-import { Button, Field, Panel, Table } from "@/components/ui";
+import { Button, Field, Panel, Table, rowActivateProps } from "@/components/ui";
 import { getAllPatients, getPatientById } from "@services/certificate";
 import { get } from "@/services/http/client";
 import type { PatientDTO } from "@services/certificate";
@@ -164,16 +164,6 @@ export default function CertificatePatientSearch({ onPatientFound }: Props) {
     onPatientFound(info);
   };
 
-  const handleCompletedKeyDown = (
-    event: React.KeyboardEvent<HTMLTableRowElement>,
-    patient: CompletedVisitPatient
-  ) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      handleSelectCompletedPatient(patient);
-    }
-  };
-
   return (
     <Panel className={styles.container} title="환자 조회">
       <div className={styles.body}>
@@ -226,9 +216,8 @@ export default function CertificatePatientSearch({ onPatientFound }: Props) {
                 {completedPatients.map((patient) => (
                   <tr
                     key={`${patient.waitingId}-${patient.patientId}`}
-                    tabIndex={0}
                     onClick={() => handleSelectCompletedPatient(patient)}
-                    onKeyDown={(event) => handleCompletedKeyDown(event, patient)}
+                    {...rowActivateProps(() => handleSelectCompletedPatient(patient))}
                   >
                     <td>
                       {patient.patientName} ({patient.patientNumber})

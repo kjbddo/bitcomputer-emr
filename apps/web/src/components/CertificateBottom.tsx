@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import styles from "./CertificateBottom.module.css";
-import { Button, EmptyState, Panel, Table } from "@/components/ui";
+import { Button, EmptyState, Panel, Table, rowActivateProps } from "@/components/ui";
 import { getPatientHistories, getHistoryDiseases, type HistoryDiseaseResponse } from "@services/history";
 
 const TABS = ["상병", "상용구", "과거처방", "사용자설정"] as const;
@@ -115,13 +115,6 @@ export default function CertificateBottom({
     return g?.diseases ?? [];
   }, [visitGroups, selectedHistoryId]);
 
-  const handleHistoryKeyDown = (event: React.KeyboardEvent<HTMLTableRowElement>, historyId: number) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      setSelectedHistoryId(historyId);
-    }
-  };
-
   return (
     <Panel className={styles.container} padding="none">
       <div className={styles.tabBar}>
@@ -167,10 +160,9 @@ export default function CertificateBottom({
                         {visitGroups.map((g) => (
                           <tr
                             key={g.historyId}
-                            tabIndex={0}
-                            aria-selected={g.historyId === selectedHistoryId || undefined}
+                            aria-current={g.historyId === selectedHistoryId || undefined}
                             onClick={() => setSelectedHistoryId(g.historyId)}
-                            onKeyDown={(event) => handleHistoryKeyDown(event, g.historyId)}
+                            {...rowActivateProps(() => setSelectedHistoryId(g.historyId))}
                           >
                             <td>{g.entryDate.slice(0, 10)}</td>
                             <td>{g.diseases.length}건</td>
