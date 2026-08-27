@@ -519,8 +519,7 @@ cd apps/web && yarn test src/styles/__tests__/contrast.test.ts
   --dur-base: 200ms;
   --ease: cubic-bezier(0.2, 0, 0, 1);
 
-  --font-sans: var(--font-geist-sans), "Pretendard Variable", Pretendard,
-    -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-sans: var(--font-geist-sans), "Pretendard Variable", Pretendard, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
   --font-mono: var(--font-geist-mono), "D2Coding", ui-monospace, monospace;
 }
 
@@ -565,8 +564,7 @@ cd apps/web && yarn test src/styles/__tests__/contrast.test.ts
     --shadow-lg: 0 12px 32px rgb(2 6 23 / 0.55);
     --backdrop: rgb(2 6 23 / 0.65);
 
-    --font-sans: var(--font-geist-sans), "Pretendard Variable", Pretendard,
-      -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    --font-sans: var(--font-geist-sans), "Pretendard Variable", Pretendard, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
     --font-mono: var(--font-geist-mono), "D2Coding", ui-monospace, monospace;
   }
 }
@@ -611,8 +609,7 @@ cd apps/web && yarn test src/styles/__tests__/contrast.test.ts
   --shadow-lg: 0 12px 32px rgb(2 6 23 / 0.55);
   --backdrop: rgb(2 6 23 / 0.65);
 
-  --font-sans: var(--font-geist-sans), "Pretendard Variable", Pretendard,
-    -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-sans: var(--font-geist-sans), "Pretendard Variable", Pretendard, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
   --font-mono: var(--font-geist-mono), "D2Coding", ui-monospace, monospace;
 }
 ```
