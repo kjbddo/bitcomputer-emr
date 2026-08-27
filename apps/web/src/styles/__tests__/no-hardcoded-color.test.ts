@@ -31,6 +31,12 @@ const ALLOWED = new Set([
   "src/app/(auth)/admin/users/page.module.css",
 ]);
 
+/**
+ * 영구 예외. 나머지 ALLOWED 항목은 임시이며, 아래 "불필요해진 ALLOWED 예외" 테스트가
+ * 해당 파일이 정리되는 순간 실패해 항목 제거를 강제한다.
+ */
+const PERMANENT_ALLOWED = new Set(["src/styles/tokens.css"]);
+
 const SCAN_EXTENSIONS = [".css", ".tsx", ".ts"];
 
 const COLOR_LITERAL = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\s*\(/;
@@ -69,19 +75,27 @@ function walk(dir: string, acc: string[] = []): string[] {
   return acc;
 }
 
+/** 한 파일의 위반 줄을 `경로:줄  내용` 형태로 돌려준다. ALLOWED 를 보지 않는다. */
+function fileOffences(absolutePath: string, rel: string): string[] {
+  const isCss = rel.endsWith(".css");
+  const found: string[] = [];
+  readFileSync(absolutePath, "utf8")
+    .split("\n")
+    .forEach((line, index) => {
+      if (COLOR_LITERAL.test(line) || (isCss && CSS_COLOR_KEYWORD.test(line))) {
+        found.push(`${rel}:${index + 1}  ${line.trim()}`);
+      }
+    });
+  return found;
+}
+
 function offences(): string[] {
   const found: string[] = [];
   for (const dir of SCAN_DIRS) {
     for (const file of walk(join(WEB_ROOT, dir))) {
       const rel = relative(WEB_ROOT, file).split(sep).join("/");
       if (ALLOWED.has(rel)) continue;
-      const isCss = rel.endsWith(".css");
-      const lines = readFileSync(file, "utf8").split("\n");
-      lines.forEach((line, index) => {
-        if (COLOR_LITERAL.test(line) || (isCss && CSS_COLOR_KEYWORD.test(line))) {
-          found.push(`${rel}:${index + 1}  ${line.trim()}`);
-        }
-      });
+      found.push(...fileOffences(file, rel));
     }
   }
   return found;
@@ -90,5 +104,29 @@ function offences(): string[] {
 describe("색상 리터럴 가드", () => {
   it("tokens.css 밖에서 색상 리터럴을 쓰지 않는다", () => {
     expect(offences()).toEqual([]);
+  });
+
+  /**
+   * 임시 예외가 스스로 사라지게 만드는 장치.
+   *
+   * ALLOWED 항목은 "지금은 리터럴이 있고 나중 태스크가 재스킨한다"는 뜻이다.
+   * 그 파일이 실제로 정리되고 나면 예외는 남아 있을 이유가 없는데, 주석만으로는
+   * 아무도 지우지 않는다 — 가드가 썩는 전형적인 경로다.
+   *
+   * 그래서 예외 대상이 더 이상 리터럴을 갖고 있지 않으면 실패시킨다. 재스킨을 끝낸
+   * 사람이 ALLOWED 에서 항목을 지우도록 강제된다. 파일이 사라진 경우도 마찬가지다.
+   */
+  it("불필요해진 ALLOWED 예외를 남겨두지 않는다", () => {
+    const stale = [...ALLOWED]
+      .filter((rel) => !PERMANENT_ALLOWED.has(rel))
+      .filter((rel) => {
+        const absolutePath = join(WEB_ROOT, ...rel.split("/"));
+        try {
+          return fileOffences(absolutePath, rel).length === 0;
+        } catch {
+          return true; // 파일이 없어졌다면 예외도 필요 없다.
+        }
+      });
+    expect(stale).toEqual([]);
   });
 });

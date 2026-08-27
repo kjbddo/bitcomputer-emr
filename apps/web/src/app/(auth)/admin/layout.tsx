@@ -44,7 +44,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       <Header />
       <div className={styles.shell}>
         <nav className={styles.sidebar}>
-          <h1 className={styles.title}>관리자 콘솔</h1>
+          {/* Header 가 h1(서비스명)을 이미 렌더하므로 여기는 h2 다. */}
+          <h2 className={styles.title}>관리자 콘솔</h2>
           {NAV.map((item) => (
             <Link
               key={item.href}

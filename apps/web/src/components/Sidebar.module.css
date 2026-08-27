@@ -55,7 +55,7 @@
 
   .menuItem {
     padding: 10px 12px;
-    font-size: 13px;
+    font-size: var(--font-size-sm);
   }
 }
 
@@ -67,7 +67,7 @@
 
   .menuItem {
     padding: 8px 10px;
-    font-size: 12px;
+    font-size: var(--font-size-xs);
   }
 }
 
