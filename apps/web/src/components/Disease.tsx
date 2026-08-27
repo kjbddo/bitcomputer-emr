@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMedicalSelection } from "@store/medicalSelection";
+import { Button, EmptyState, Panel, Table } from "@/components/ui";
 import styles from "./Disease.module.css";
 import { ClinicVisitContext } from "@/types/clinic";
 import { setHistoryDiseases } from "@/services/history";
@@ -62,85 +63,82 @@ export default function Disease({ clinicVisit, ensureHistory, employeeId, onHist
   }, [clinicVisit, diseases, employeeId, ensureHistory]);
 
   return (
-    <div className={styles.container}>
-      <div className={styles.header}>
-        <h3>상병</h3>
-        <div className={styles.controls}>
-          <button
+    <Panel
+      className={styles.container}
+      title="상병"
+      actions={
+        <>
+          <Button
             type="button"
-            className={styles.controlButton}
+            variant="secondary"
+            size="sm"
             onClick={handleSave}
             disabled={diseases.length === 0 || saving}
+            loading={saving}
           >
-            {saving ? "저장 중..." : "저장"}
-          </button>
-          <button
+            저장
+          </Button>
+          <Button
             type="button"
-            className={styles.controlButtonSecondary}
+            variant="secondary"
+            size="sm"
             onClick={clearDiseases}
             disabled={diseases.length === 0}
           >
             전체 삭제
-          </button>
+          </Button>
+        </>
+      }
+    >
+      <div className={styles.quickSelect}>
+        <span className={styles.quickSelectLabel}>테스트 상병 빠른 선택</span>
+        <div className={styles.quickSelectButtons}>
+          {DUMMY_DISEASES.map((disease) => (
+            <Button
+              key={disease.id}
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => addDisease({ ...disease })}
+            >
+              {disease.name}
+            </Button>
+          ))}
         </div>
       </div>
-      <div className={styles.content}>
-        <div className={styles.quickSelect}>
-          <span className={styles.quickSelectLabel}>테스트 상병 빠른 선택</span>
-          <div className={styles.quickSelectButtons}>
-            {DUMMY_DISEASES.map((disease) => (
-              <button
-                key={disease.id}
-                type="button"
-                className={styles.quickSelectButton}
-                onClick={() => addDisease({ ...disease })}
-              >
-                {disease.name}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className={styles.tableContainer}>
-          <table className={styles.diseaseTable}>
-            <thead>
-              <tr className={styles.tableHeader}>
-                <th>No.</th>
-                <th>ID</th>
-                <th>상병코드</th>
-                <th>상병명칭</th>
-                <th>삭제</th>
+      {diseases.length === 0 ? (
+        <EmptyState
+          title="선택된 상병이 없습니다."
+          description="오른쪽 데이터베이스에서 더블클릭하여 추가하세요."
+        />
+      ) : (
+        <Table>
+          <thead>
+            <tr>
+              <th scope="col">No.</th>
+              <th scope="col">ID</th>
+              <th scope="col">상병코드</th>
+              <th scope="col">상병명칭</th>
+              <th scope="col">삭제</th>
+            </tr>
+          </thead>
+          <tbody>
+            {diseases.map((item, index) => (
+              <tr key={item.id}>
+                <td>{index + 1}</td>
+                <td>{item.id}</td>
+                <td className={styles.code}>{item.code}</td>
+                <td>{item.name}</td>
+                <td>
+                  <Button type="button" variant="danger" size="sm" onClick={() => removeDisease(item.id)}>
+                    삭제
+                  </Button>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {diseases.length === 0 ? (
-                <tr className={styles.tableRow}>
-                  <td colSpan={5} className={styles.emptyRow}>
-                    선택된 상병이 없습니다. 오른쪽 데이터베이스에서 더블클릭하여 추가하세요.
-                  </td>
-                </tr>
-              ) : (
-                diseases.map((item, index) => (
-                  <tr key={item.id} className={styles.tableRow}>
-                    <td className={styles.sequence}>{index + 1}</td>
-                    <td className={styles.identifier}>{item.id}</td>
-                    <td className={styles.code}>{item.code}</td>
-                    <td className={styles.name}>{item.name}</td>
-                    <td className={styles.actionCell}>
-                      <button
-                        type="button"
-                        className={styles.removeButton}
-                        onClick={() => removeDisease(item.id)}
-                      >
-                        삭제
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
+            ))}
+          </tbody>
+        </Table>
+      )}
+    </Panel>
   );
 }
