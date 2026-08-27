@@ -2,6 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { useMedicalSelection, type PrescriptionFeedbackItem } from "@store/medicalSelection";
+import { Badge, Button, EmptyState, Modal, Panel, Table } from "@/components/ui";
 import styles from "./Diagnosis.module.css";
 import { ClinicVisitContext } from "@/types/clinic";
 import {
@@ -430,257 +431,259 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
     }
   }, [addDiagnosis, aiRecommendations, aiSessionHistoryDiagnoseId, aiSessionHistoryId, selectedRecommendationKeys, setPrescriptionFeedback]);
 
+  const validationReasons = extractValidationReasons(validationModal);
+  const pubmedReferences = extractPubmedReferences(validationModal);
+  const validationTopItems = (
+    validationModal?.result?.recommendedPrescriptions ??
+    validationModal?.result?.candidatePrescriptions ??
+    []
+  ).slice(0, 3);
+
   return (
-    <div className={styles.container}>
-      {validationModal && (
-        <div className={styles.modalBackdrop} role="presentation">
-          <div className={styles.modalPanel} role="dialog" aria-modal="true">
-            <h3 className={styles.modalTitle}>검증 완료</h3>
-            <div className={styles.modalCard}>
-              <div className={styles.modalCardHead}>
-                <span className={styles.modalRank}>
-                  {validationModal.result?.overallStatus ?? validationModal.status}
-                </span>
-              </div>
-              <p className={styles.modalReason}>
-                {validationModal.result?.summary ?? validationModal.summary ?? "검증 결과를 확인했습니다."}
-              </p>
-              {extractValidationReasons(validationModal).length > 0 && (
-                <div className={styles.modalReasons}>
-                  <strong>검증 이유</strong>
-                  <ul>
-                    {extractValidationReasons(validationModal).map((reason) => (
-                      <li key={reason}>{reason}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {extractPubmedReferences(validationModal).length > 0 && (
-                <div className={styles.modalReferences}>
-                  <strong>PubMed 참고 근거</strong>
-                  <ul>
-                    {extractPubmedReferences(validationModal).map((reference) => (
-                      <li key={reference}>{reference}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {(
-                validationModal.result?.recommendedPrescriptions ??
-                validationModal.result?.candidatePrescriptions ??
-                []
-              ).slice(0, 3).map((item) => (
-                <div
-                  key={`${item.rank}-${item.prescription_code}-${item.prescription_name}`}
-                  className={styles.modalName}
-                >
-                  [{item.rank}] {item.prescription_name} ({item.prescription_code})
-                </div>
-              ))}
+    <>
+      <Modal
+        open={Boolean(validationModal)}
+        onClose={() => setValidationModal(null)}
+        title="검증 완료"
+        size="md"
+        footer={
+          <Button type="button" variant="secondary" onClick={() => setValidationModal(null)}>
+            확인
+          </Button>
+        }
+      >
+        {validationModal && (
+          <div className={styles.modalCard}>
+            <div className={styles.modalCardHead}>
+              <Badge tone="accent">{validationModal.result?.overallStatus ?? validationModal.status}</Badge>
             </div>
-            <button
-              type="button"
-              className={styles.modalCloseBtn}
-              onClick={() => setValidationModal(null)}
-            >
-              확인
-            </button>
-          </div>
-        </div>
-      )}
-      {prescriptionPicker && (
-        <div className={styles.modalBackdrop} role="presentation">
-          <div className={styles.modalPanel} role="dialog" aria-modal="true">
-            <h3 className={styles.modalTitle}>처방 상세 선택</h3>
-            <div className={styles.modalCard}>
-              <p className={styles.modalReason}>
-                AI 추천 처방과 가장 가까운 DB 처방을 검색해서 선택해주세요.
-              </p>
-              <div className={styles.prescriptionSearchRow}>
-                <input
-                  type="text"
-                  value={prescriptionSearchDraft}
-                  className={styles.prescriptionSearchInput}
-                  placeholder="처방명 또는 코드 검색"
-                  onChange={(event) => setPrescriptionSearchDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      handlePrescriptionSearchSubmit();
-                    }
-                  }}
-                />
-                <button
-                  type="button"
-                  className={styles.prescriptionSearchButton}
-                  disabled={prescriptionSearchLoading}
-                  onClick={handlePrescriptionSearchSubmit}
-                >
-                  검색
-                </button>
+            <p className={styles.modalReason}>
+              {validationModal.result?.summary ?? validationModal.summary ?? "검증 결과를 확인했습니다."}
+            </p>
+            {validationReasons.length > 0 && (
+              <div className={styles.modalReasons}>
+                <strong>검증 이유</strong>
+                <ul>
+                  {validationReasons.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
               </div>
+            )}
+            {pubmedReferences.length > 0 && (
+              <div className={styles.modalReferences}>
+                <strong>PubMed 참고 근거</strong>
+                <ul>
+                  {pubmedReferences.map((reference) => (
+                    <li key={reference}>{reference}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {validationTopItems.map((item) => (
+              <div
+                key={`${item.rank}-${item.prescription_code}-${item.prescription_name}`}
+                className={styles.modalName}
+              >
+                [{item.rank}] {item.prescription_name} ({item.prescription_code})
+              </div>
+            ))}
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={Boolean(prescriptionPicker)}
+        onClose={() => setPrescriptionPicker(null)}
+        title="처방 상세 선택"
+        size="md"
+        footer={
+          <Button type="button" variant="secondary" onClick={() => setPrescriptionPicker(null)}>
+            닫기
+          </Button>
+        }
+      >
+        {prescriptionPicker && (
+          <div className={styles.modalCard}>
+            <p className={styles.modalReason}>
+              AI 추천 처방과 가장 가까운 DB 처방을 검색해서 선택해주세요.
+            </p>
+            <div className={styles.prescriptionSearchRow}>
+              <input
+                type="text"
+                value={prescriptionSearchDraft}
+                className={styles.prescriptionSearchInput}
+                placeholder="처방명 또는 코드 검색"
+                aria-label="처방명 또는 코드 검색"
+                onChange={(event) => setPrescriptionSearchDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    handlePrescriptionSearchSubmit();
+                  }
+                }}
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={prescriptionSearchLoading}
+                onClick={handlePrescriptionSearchSubmit}
+              >
+                검색
+              </Button>
+            </div>
+            {prescriptionSearchLoading ? (
+              <EmptyState title="조회 중..." />
+            ) : prescriptionSearchResults.length > 0 ? (
               <div className={styles.prescriptionResultList}>
-                {prescriptionSearchLoading ? (
-                  <div className={styles.prescriptionSearchMessage}>조회 중...</div>
-                ) : prescriptionSearchResults.length > 0 ? (
-                  prescriptionSearchResults.map((item) => (
-                    <div key={item.id} className={styles.prescriptionResultItem}>
-                      <div>
-                        <div className={styles.modalCode}>{item.code}</div>
-                        <div className={styles.modalName}>{item.name}</div>
-                      </div>
-                      <button
-                        type="button"
-                        className={styles.prescriptionPickButton}
-                        onClick={() => handleSelectPrescriptionDetail(item)}
-                      >
-                        선택
-                      </button>
+                {prescriptionSearchResults.map((item) => (
+                  <div key={item.id} className={styles.prescriptionResultItem}>
+                    <div>
+                      <div className={styles.modalCode}>{item.code}</div>
+                      <div className={styles.modalName}>{item.name}</div>
                     </div>
-                  ))
-                ) : (
-                  <div className={styles.prescriptionSearchMessage}>
-                    {prescriptionSearchError ?? "검색어를 입력해 처방을 조회해주세요."}
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => handleSelectPrescriptionDetail(item)}
+                    >
+                      선택
+                    </Button>
                   </div>
-                )}
+                ))}
               </div>
-            </div>
-            <button
-              type="button"
-              className={styles.modalCloseBtn}
-              onClick={() => setPrescriptionPicker(null)}
-            >
-              닫기
-            </button>
+            ) : (
+              <EmptyState title={prescriptionSearchError ?? "검색어를 입력해 처방을 조회해주세요."} />
+            )}
           </div>
-        </div>
-      )}
-      <div className={styles.header}>
-        <h3>처방</h3>
-        <div className={styles.controls}>
-          <button
-            type="button"
-            className={styles.controlButtonAI}
-            onClick={handleGenerateByAI}
-            disabled={generating}
-          >
-            {generating ? "추천/검증 중..." : "AI 처방 추천"}
-          </button>
-          <button
-            type="button"
-            className={styles.controlButton}
-            onClick={handleSave}
-            disabled={diagnoses.length === 0 || saving}
-          >
-            {saving ? "저장 중..." : "저장"}
-          </button>
-          <button
-            type="button"
-            className={styles.controlButtonSecondary}
-            onClick={clearDiagnoses}
-            disabled={diagnoses.length === 0}
-          >
-            전체 삭제
-          </button>
-        </div>
-      </div>
-      <div className={styles.content}>
+        )}
+      </Modal>
+
+      <Panel
+        className={styles.container}
+        title="처방"
+        actions={
+          <>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={handleGenerateByAI}
+              disabled={generating}
+              loading={generating}
+            >
+              AI 처방 추천
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              onClick={handleSave}
+              disabled={diagnoses.length === 0 || saving}
+              loading={saving}
+            >
+              저장
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={clearDiagnoses}
+              disabled={diagnoses.length === 0}
+            >
+              전체 삭제
+            </Button>
+          </>
+        }
+      >
         {aiRecommendations.length > 0 ? (
           <div className={styles.aiPanel}>
             <div className={styles.aiPanelHeader}>
               <strong>AI 추천 처방</strong>
-              <button type="button" className={styles.controlButtonAI} onClick={handleApplySelectedRecommendations}>
+              <Button type="button" variant="secondary" size="sm" onClick={handleApplySelectedRecommendations}>
                 선택 처방 반영
-              </button>
+              </Button>
             </div>
-            <div className={styles.aiList}>
-              {aiRecommendations.map((item) => {
-                const key = recommendationKey(item);
-                return (
-                  <div key={key} className={styles.aiItem}>
-                    <label className={styles.aiCheckLabel}>
-                      <input
-                        type="checkbox"
-                        checked={selectedRecommendationKeys.includes(key)}
-                        onChange={() => toggleRecommendation(key)}
-                      />
-                      <span>
+            <Table dense>
+              <thead>
+                <tr>
+                  <th scope="col">선택</th>
+                  <th scope="col">추천 처방</th>
+                  <th scope="col">상세 선택</th>
+                </tr>
+              </thead>
+              <tbody>
+                {aiRecommendations.map((item) => {
+                  const key = recommendationKey(item);
+                  return (
+                    <tr key={key}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={selectedRecommendationKeys.includes(key)}
+                          onChange={() => toggleRecommendation(key)}
+                          aria-label={`${item.prescription_name} 반영 여부`}
+                        />
+                      </td>
+                      <td>
                         [{item.rank}] {item.prescription_name} ({item.prescription_code})
-                      </span>
-                    </label>
-                    <button
-                      type="button"
-                      className={styles.detailSelectButton}
-                      onClick={() => openPrescriptionPicker(item)}
-                    >
-                      처방 상세 선택
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
+                      </td>
+                      <td>
+                        <Button type="button" variant="secondary" size="sm" onClick={() => openPrescriptionPicker(item)}>
+                          처방 상세 선택
+                        </Button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </Table>
           </div>
         ) : null}
-        <div className={styles.tableContainer}>
-          <table className={styles.diseaseTable}>
+        {diagnoses.length === 0 ? (
+          <EmptyState
+            title="선택된 처방이 없습니다."
+            description="오른쪽 데이터베이스에서 더블클릭하여 추가하세요."
+          />
+        ) : (
+          <Table>
             <thead>
-              <tr className={styles.tableHeader}>
-                <th>No.</th>
-                <th>ID</th>
-                <th>코드</th>
-                <th>처방명</th>
-                {/* 
-                <th>투여량</th>
-                <th>횟수</th>
-                <th>일수</th>
-                */}
-                <th>삭제</th>
+              <tr>
+                <th scope="col">No.</th>
+                <th scope="col">ID</th>
+                <th scope="col">코드</th>
+                <th scope="col">처방명</th>
+                <th scope="col">삭제</th>
               </tr>
             </thead>
             <tbody>
-              {diagnoses.length === 0 ? (
-                <tr className={styles.tableRow}>
-                  <td colSpan={8} className={styles.emptyRow}>
-                    선택된 처방이 없습니다. 오른쪽 데이터베이스에서 더블클릭하여 추가하세요.
-                  </td>
-                </tr>
-              ) : (
-                diagnoses.map((item, index) => (
-                  <Fragment key={`${item.id}-${index}`}>
-                    <tr className={styles.tableRow}>
-                      <td className={styles.sequence}>{index + 1}</td>
-                      <td className={styles.identifier}>{item.id > 0 ? item.id : "미매칭"}</td>
-                      <td className={styles.code}>{item.code}</td>
-                      <td className={styles.name}>{item.name}</td>
-                      
-                      {/*
-                      <td className={styles.dose}>{item.dose}</td>
-                      <td className={styles.time}>{item.time}</td>
-                      <td className={styles.days}>{item.days}</td>
-                      */  }
-                      <td className={styles.actionCell}>
-                        <button
-                          type="button"
-                          className={styles.removeButton}
-                          onClick={() => removeDiagnosis(item.id)}
-                        >
-                          삭제
-                        </button>
-                      </td>
-                    </tr>
-                    <tr className={styles.reasonRow}>
-                      <td colSpan={8} className={styles.reasonCell}>
-                        <strong>AI 추천 사유</strong>
-                        <p className={styles.reasonText}>{item.reason ?? "-"}</p>
-                      </td>
-                    </tr>
-                  </Fragment>
-                ))
-              )}
+              {diagnoses.map((item, index) => (
+                <Fragment key={`${item.id}-${index}`}>
+                  <tr>
+                    <td>{index + 1}</td>
+                    <td>{item.id > 0 ? item.id : "미매칭"}</td>
+                    <td className={styles.code}>{item.code}</td>
+                    <td>{item.name}</td>
+                    <td>
+                      <Button type="button" variant="danger" size="sm" onClick={() => removeDiagnosis(item.id)}>
+                        삭제
+                      </Button>
+                    </td>
+                  </tr>
+                  <tr className={styles.reasonRow}>
+                    <td colSpan={5} className={styles.reasonCell}>
+                      <strong>AI 추천 사유</strong>
+                      <p className={styles.reasonText}>{item.reason ?? "-"}</p>
+                    </td>
+                  </tr>
+                </Fragment>
+              ))}
             </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
+          </Table>
+        )}
+      </Panel>
+    </>
   );
 }
