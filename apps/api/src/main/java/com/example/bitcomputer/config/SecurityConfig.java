@@ -118,17 +118,21 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.PUT,    "/api/histories/**").hasAnyRole("DOCTOR", "SUPER_USER")
                 .requestMatchers(HttpMethod.DELETE, "/api/histories/**").hasAnyRole("DOCTOR", "SUPER_USER")
 
-                // ── 처방 등록·수정: DOCTOR / 조회: NURSE 도 가능 ──
-                .requestMatchers(HttpMethod.POST,   "/api/history-diagnoses/**").hasAnyRole("DOCTOR", "SUPER_USER")
-                .requestMatchers(HttpMethod.PUT,    "/api/history-diagnoses/**").hasAnyRole("DOCTOR", "SUPER_USER")
-                .requestMatchers(HttpMethod.DELETE, "/api/history-diagnoses/**").hasAnyRole("DOCTOR", "SUPER_USER")
-                .requestMatchers(HttpMethod.GET,    "/api/history-diagnoses/**")
-                    .hasAnyRole("DOCTOR", "NURSE", "SUPER_USER")
+                // ── AI 검증 결과 조회: AI 기능은 DOCTOR 전용이다(5.3) ──
+                // HistoryDiagnoseController/HistoryDiseaseController/ValidationResultController 는
+                // 모두 "/api/histories" 아래 매핑돼 있다("/api/history-diagnoses",
+                // "/api/history-diseases" 는 실제로 존재하지 않는 경로였다 — 아래 GET 매처들이
+                // 그 자리를 대신한다). 쓰기(POST/PUT/DELETE)는 위 "/api/histories/**" 규칙으로
+                // 이미 DOCTOR 전용이다.
+                .requestMatchers(HttpMethod.GET, "/api/histories/*/validation_results")
+                    .hasAnyRole("DOCTOR", "SUPER_USER")
 
-                // ── 상병 등록·수정: DOCTOR ──
-                .requestMatchers(HttpMethod.POST,   "/api/history-diseases/**").hasAnyRole("DOCTOR", "SUPER_USER")
-                .requestMatchers(HttpMethod.PUT,    "/api/history-diseases/**").hasAnyRole("DOCTOR", "SUPER_USER")
-                .requestMatchers(HttpMethod.DELETE, "/api/history-diseases/**").hasAnyRole("DOCTOR", "SUPER_USER")
+                // ── 처방·상병 조회, 진료 이력 검색: NURSE 도 가능(원무는 불가, 5.3) ──
+                .requestMatchers(HttpMethod.GET,
+                                 "/api/histories/*/get_diagnoses",
+                                 "/api/histories/*/get_diseases",
+                                 "/api/histories/search_history/*")
+                    .hasAnyRole("NURSE", "DOCTOR", "SUPER_USER")
 
                 // ── 환자·대기: 원무도 가능 ──
                 .requestMatchers("/api/patients/**", "/api/waiting/**")
