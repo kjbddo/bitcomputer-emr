@@ -26,7 +26,6 @@
    *    재정의가 있으면 안 된다 — var() 참조가 아니라 원시 값이어야 그 분류를
    *    피한다.
    */
-  --print-paper: #ffffff;
 
   --blue-100: #dbeafe;
   --blue-400: #60a5fa;

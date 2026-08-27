@@ -534,7 +534,10 @@ export default function MedicalCertificate({
 
       <Modal
         open={aiPreviewModal != null}
-        onClose={() => setAiPreviewModal(null)}
+        // Escape / 백드롭 클릭도 거절로 취급한다. 모달만 닫으면 resolvedAiRound 가
+        // null 로 남아 저장 시 agentUsed:"false" 가 전송되고, AI 가 실제로 생성돼
+        // 의사에게 제시됐는데도 안 쓴 것으로 기록된다.
+        onClose={handleAiPreviewReject}
         title="생성된 의사 소견을 진단서에 넣겠습니까?"
         size="lg"
         footer={

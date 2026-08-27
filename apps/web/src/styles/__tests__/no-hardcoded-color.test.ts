@@ -38,9 +38,13 @@ const COLOR_LITERAL = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\s*\(/;
  * 오탐한다. 도입 시점에 .tsx 인라인 스타일의 키워드 색상은 0건이었다.
  *
  * transparent / currentColor / inherit 는 테마를 깨지 않으므로 목록에서 뺀다.
+ *
+ * (?<!-) 는 커스텀 프로퍼티 이름 안에 들어간 키워드를 걸러낸다. 하이픈이 단어
+ * 경계라서 var(--white) 의 --white 가 \bwhite\b 에 걸려 오탐이 났었다.
+ * `color: white` 는 앞 문자가 공백이므로 그대로 잡힌다.
  */
 const CSS_COLOR_KEYWORD =
-  /:[^;{}]*\b(?:white|black|red|blue|green|yellow|orange|purple|pink|gray|grey|silver|cyan|magenta|lime|navy|teal|olive|maroon|aqua|fuchsia|brown)\b/i;
+  /:[^;{}]*(?<!-)\b(?:white|black|red|blue|green|yellow|orange|purple|pink|gray|grey|silver|cyan|magenta|lime|navy|teal|olive|maroon|aqua|fuchsia|brown)\b/i;
 
 function walk(dir: string, acc: string[] = []): string[] {
   let entries: string[];

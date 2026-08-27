@@ -76,14 +76,10 @@ table {
  * 목적 자체가 "테마를 따라가지 않게 고정"하는 것이라, 테마에 따라 바뀌는 의미
  * 토큰이 아니라 절대 변하지 않는 원시 값을 가리켜야 의미가 있다. 전역 클래스여야
  * CSS module 로 해시되지 않으므로 tokens.css 가 아닌 여기(globals.css)에 둔다.
- *
- * 순백색 원시 토큰을 가리킬 때는 그 토큰을 직접 쓰지 않고 --print-paper(별칭,
- * tokens.css 정의부 주석 참고)를 거친다 — 색상 키워드 가드가 그 토큰 이름 자체를
- * 부분 문자열로 오탐하기 때문이다.
  */
 .print-surface {
-  --surface-raised: var(--print-paper);
-  --surface-canvas: var(--print-paper);
+  --surface-raised: var(--white);
+  --surface-canvas: var(--white);
   --text-primary: var(--slate-900);
   --text-secondary: var(--slate-700);
   --text-muted: var(--slate-600);

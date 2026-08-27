@@ -156,7 +156,7 @@ export default function CertificateBottom({
                 <div className={styles.historyColumn}>
                   <div className={styles.columnTitle}>진료일 (이력)</div>
                   <div className={styles.historyTableWrap}>
-                    <Table dense>
+                    <Table dense aria-label="진료 이력">
                       <thead>
                         <tr>
                           <th scope="col">진료일</th>

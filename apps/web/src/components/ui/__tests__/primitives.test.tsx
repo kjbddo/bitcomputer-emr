@@ -120,6 +120,21 @@ describe("Field", () => {
 });
 
 describe("Table", () => {
+  // 목록 위젯을 표로 승격할 때 원래 위젯의 aria-label 을 잃는 사고가 실제로 났다.
+  it("aria-label 을 table 에 전달한다", () => {
+    render(
+      <Table aria-label="진료 이력">
+        <tbody>
+          <tr>
+            <td>행</td>
+          </tr>
+        </tbody>
+      </Table>
+    );
+    expect(screen.getByRole("table", { name: "진료 이력" })).toBeInTheDocument();
+  });
+
+
   it("table 시맨틱을 유지한다", () => {
     render(
       <Table>
