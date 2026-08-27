@@ -44,6 +44,7 @@ DOM의 **요소 종류, ARIA role, 접근성 이름(accessible name), 텍스트 
 - 데이터 행 높이 `var(--row-height)` (36px)
 - 패널 간 간격 `var(--space-4)`, 패널 내 섹션 간격 `var(--space-3)`
 - 그림자는 떠 있는 것(모달, 팝오버, 드롭다운)에만. 평면 표면은 `var(--border)` 헤어라인으로 층을 표현한다.
+  - 금지 대상은 **깊이를 흉내 내는 그림자**(blur 가 있는 `box-shadow`)다. blur 가 0 인 `inset` 은 경계선의 대체 표현이므로 허용한다 — 선택된 행의 좌측 강조선 `box-shadow: inset 2px 0 0 var(--accent-fill)` 이 그 예다. `border-left` 로 쓰면 셀 폭이 밀리지만 `inset` 은 밀지 않는다.
 - 강조색은 화면당 실질 1개. `Button variant="primary"`는 화면당 1개가 원칙.
 
 ### GC-6. 테스트 실행
