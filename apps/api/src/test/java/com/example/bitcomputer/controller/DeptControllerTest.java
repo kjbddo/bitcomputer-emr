@@ -54,10 +54,11 @@ class DeptControllerTest {
 
     @Test
     void superUserCanCreateDept() throws Exception {
-        // 이 테스트 클래스는 @DirtiesContext 로 매 테스트 메서드마다 컨텍스트가 재생성되지만,
-        // H2 는 컨텍스트가 아니라 스키마 단위로 붙어 있어 같은 실행(run) 안에서 재사용될 수
-        // 있다. "내과" 를 고정값으로 쓰면 같은 DB 상태에서 두 번째 실행 시 409 로 깨진다.
-        // 실행마다 달라지는 이름을 써서 항상 신규 생성이 되도록 한다.
+        // 이름을 실행마다 다르게 만드는 것은 방어적 조치다.
+        // application-test.properties 가 jdbc:h2:mem:testdb-${random.uuid} 로 컨텍스트마다
+        // 독립된 H2 를 쓰고, 이 클래스는 @DirtiesContext(AFTER_EACH_TEST_METHOD) 라
+        // 메서드마다 DB 가 새로 만들어진다 — 고정 이름을 써도 충돌하지 않는다.
+        // 다만 위 두 조건 중 하나라도 바뀌면 조용히 409 로 깨지므로 유일한 이름을 유지한다.
         String deptName = "내과-" + System.nanoTime();
         mockMvc.perform(post("/api/admin/depts")
                        .cookie(cookieFor(Role.SUPER_USER)).with(csrf())
