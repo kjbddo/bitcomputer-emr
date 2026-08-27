@@ -56,4 +56,25 @@ describe("Modal", () => {
     fireEvent.click(screen.getByRole("button", { name: "닫기" }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+  it("백드롭(다이얼로그 자신) 클릭에서 onClose 를 호출한다", () => {
+    const onClose = vi.fn();
+    render(
+      <Modal open onClose={onClose} title="환자 검색">
+        본문
+      </Modal>
+    );
+    fireEvent.click(screen.getByRole("dialog"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("내용 클릭에서는 onClose 를 호출하지 않는다", () => {
+    const onClose = vi.fn();
+    render(
+      <Modal open onClose={onClose} title="환자 검색">
+        본문
+      </Modal>
+    );
+    fireEvent.click(screen.getByText("본문"));
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });
