@@ -228,6 +228,18 @@ bitcomputer/
 4. CORS `allowedOrigins`의 리터럴 `"클라이언트 주소"` 제거, 환경변수화.
 5. CSRF: 쿠키 기반 인증으로 전환하므로 현재의 전면 `csrf.disable()`을 해제한다. Spring의 `CookieCsrfTokenRepository.withHttpOnlyFalse()`를 사용해 SPA가 읽을 수 있는 `XSRF-TOKEN` 쿠키를 발급하고, 프론트 axios 인스턴스에 `xsrfCookieName`/`xsrfHeaderName`과 함께 **`withXSRFToken: true`를 반드시 설정한다.** axios는 `withXSRFToken`이 설정되지 않으면 same-origin 요청에만 CSRF 헤더를 붙인다(`withCredentials`는 쿠키 전송만 제어하며 이 판정과 무관하다). 이 앱은 프론트 3000, API 8080으로 cross-origin이므로 이 옵션이 없으면 헤더가 전혀 전송되지 않아 모든 상태 변경 요청이 403이 된다. `GET`·`HEAD`·`OPTIONS`는 Spring 기본대로 검사에서 제외된다.
 
+**이 조합만으로는 브라우저에서 동작하지 않는다. 세 가지를 함께 설정해야 한다.**
+
+| 설정 | 없으면 생기는 일 |
+|---|---|
+| `.csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler())` | Spring Security 6 기본값인 `XorCsrfTokenRequestAttributeHandler`가 헤더 값이 BREACH 방지용으로 XOR 마스킹돼 있다고 가정하고 디코딩하는데, `CookieCsrfTokenRepository`는 쿠키에 raw 토큰을 굽는다. "쿠키 값을 그대로 헤더로 echo"하는 표준 더블서브밋이 **항상 403**이 된다 |
+| `.sessionAuthenticationStrategy(new NullAuthenticatedSessionStrategy())` | `HttpSecurity.csrf(...)`가 항상 등록하는 `CsrfAuthenticationStrategy`가 "신규 로그인 여부"를 `securityContextRepository.containsContext()`로 판정하는데, `STATELESS`에서는 `NullSecurityContextRepository`라 항상 false다. JWT 필터가 매 요청 SecurityContext를 채우므로 **인증된 모든 요청이 신규 로그인으로 보여** CSRF 쿠키가 매번 삭제·재발급되고, SPA가 들고 있던 토큰이 요청 직후 무효화된다 |
+| 프론트 axios `withXSRFToken: true` | axios는 이 옵션 없이는 same-origin 요청에만 헤더를 붙인다. `withCredentials`는 쿠키 전송만 제어하며 이 판정과 무관하다. 이 앱은 3000↔8080 cross-origin이라 헤더가 전혀 전송되지 않는다 |
+
+세 가지 모두 실제 브라우저 왕복에서만 드러난다. `SecurityMockMvcRequestPostProcessors.csrf()`를 쓰는 테스트는 마스킹을 내부에서 처리하므로 첫 번째 결함을 가려버린다 — 회귀 테스트는 `csrf()` 없이 실제 더블서브밋을 재현해야 한다.
+
+`NullAuthenticatedSessionStrategy`가 포기하는 "로그인 시 토큰 회전" 방어는, 이 앱의 로그인이 `AuthenticationManager`를 거치지 않는 커스텀 컨트롤러라 애초에 의도대로 작동한 적이 없다. 정상 방어를 끄는 것이 아니라 오작동을 끄는 것이다.
+
 토큰 만료는 8시간으로 한다(교대 근무 1회 커버). refresh token 회전은 본 스코프 밖이며, 만료 시 재로그인한다.
 
 `middleware.ts`는 쿠키 존재 여부만 보는 **낙관적 리다이렉트**로 남긴다. 이는 UX 장치이지 방어 계층이 아니다. 이 사실을 코드 주석과 문서에 명시한다. 실제 권한 판정은 서버에서만 수행한다.
