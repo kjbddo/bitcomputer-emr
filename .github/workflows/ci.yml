@@ -9,6 +9,12 @@ jobs:
   secrets:
     name: gitleaks
     runs-on: ubuntu-latest
+    # gitleaks-action이 PR 커밋 목록을 조회하려면 pull-requests:read가 필요하다.
+    # 이 레포의 기본 GITHUB_TOKEN 권한이 제한적이라 명시하지 않으면
+    # "Resource not accessible by integration"(403)로 잡이 실패한다.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
