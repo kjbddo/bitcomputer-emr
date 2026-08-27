@@ -50,6 +50,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             <Link
               key={item.href}
               href={item.href}
+              aria-current={pathname === item.href ? "page" : undefined}
               className={
                 pathname === item.href
                   ? `${styles.navLink} ${styles.navLinkActive}`
