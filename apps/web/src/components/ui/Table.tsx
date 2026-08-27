@@ -22,6 +22,13 @@ export function rowActivateProps<T extends HTMLElement = HTMLTableRowElement>(
   return {
     tabIndex: 0,
     onKeyDown: (event) => {
+      // 행 안의 버튼에서 올라온 키다운은 무시한다.
+      //
+      // 행에 버튼(보류/완료/삭제 등)이 있으면 그 버튼의 keydown 이 행까지
+      // 버블링된다. 여기서 preventDefault 를 부르면 버튼의 기본 활성화가
+      // 취소돼 키보드로 버튼을 누를 수 없게 되고, 대신 행 선택이 실행된다.
+      // 파괴적 동작(삭제)까지 포함되므로 조용히 넘길 수 없다.
+      if (event.target !== event.currentTarget) return;
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         onActivate();

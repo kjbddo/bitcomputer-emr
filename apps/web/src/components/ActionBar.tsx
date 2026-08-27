@@ -12,7 +12,7 @@ type ActionBarProps = {
   isRegisterPrimary?: boolean;
 };
 
-export default function ActionBar({ onPatientSelect, onRegisterClick, isRegisterPrimary = true }: ActionBarProps) {
+export default function ActionBar({ onPatientSelect, onRegisterClick, isRegisterPrimary = false }: ActionBarProps) {
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
 
   const today = new Date().toLocaleDateString("ko-KR", {

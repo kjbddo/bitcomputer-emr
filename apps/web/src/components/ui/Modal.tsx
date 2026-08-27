@@ -17,6 +17,7 @@ interface ModalProps {
 export default function Modal({ open, onClose, title, footer, size = "md", children }: ModalProps) {
   const ref = useRef<HTMLDialogElement>(null);
   const mouseDownOnBackdropRef = useRef(false);
+  const mouseUpOnBackdropRef = useRef(false);
 
   useEffect(() => {
     const dialog = ref.current;
@@ -58,10 +59,17 @@ export default function Modal({ open, onClose, title, footer, size = "md", child
     mouseDownOnBackdropRef.current = event.target === ref.current;
   };
 
+  // 반대 방향(백드롭에서 눌러 콘텐츠에서 놓기)도 같은 이유로 닫지 않는다.
+  const handleBackdropMouseUp = (event: React.MouseEvent<HTMLDialogElement>) => {
+    mouseUpOnBackdropRef.current = event.target === ref.current;
+  };
+
   const handleBackdropClick = (event: React.MouseEvent<HTMLDialogElement>) => {
     const startedOnBackdrop = mouseDownOnBackdropRef.current;
+    const endedOnBackdrop = mouseUpOnBackdropRef.current;
     mouseDownOnBackdropRef.current = false;
-    if (event.target === ref.current && startedOnBackdrop) {
+    mouseUpOnBackdropRef.current = false;
+    if (event.target === ref.current && startedOnBackdrop && endedOnBackdrop) {
       onClose();
     }
   };
@@ -72,6 +80,7 @@ export default function Modal({ open, onClose, title, footer, size = "md", child
       className={`${styles.dialog} ${styles[size]}`}
       aria-label={title}
       onMouseDown={handleBackdropMouseDown}
+      onMouseUp={handleBackdropMouseUp}
       onClick={handleBackdropClick}
     >
       {open && (

@@ -60,12 +60,6 @@
   color: var(--text-primary);
 }
 
-.tags {
-  display: flex;
-  gap: var(--space-1);
-  align-items: center;
-}
-
 .detail {
   font-size: var(--font-size-sm);
   line-height: 1.6;

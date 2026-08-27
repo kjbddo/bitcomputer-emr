@@ -120,6 +120,46 @@ describe("Field", () => {
   });
 });
 
+describe("Table 행 활성화", () => {
+  // 행에 버튼이 있으면 버튼의 keydown 이 행까지 버블링된다. 행 핸들러가
+  // preventDefault 를 부르면 버튼이 키보드로 눌리지 않고 대신 행이 선택된다.
+  // WaitingStatus 의 보류/완료/삭제 버튼에서 실제로 발생했던 회귀다.
+  it("행 안 버튼에서 올라온 Enter 는 행 활성화를 일으키지 않는다", () => {
+    const onActivate = vi.fn();
+    const onButton = vi.fn();
+    render(
+      <Table>
+        <tbody>
+          <tr {...rowActivateProps(onActivate)}>
+            <td>
+              <button type="button" onClick={onButton}>
+                삭제
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </Table>
+    );
+    fireEvent.keyDown(screen.getByRole("button", { name: "삭제" }), { key: "Enter" });
+    expect(onActivate).not.toHaveBeenCalled();
+  });
+
+  it("행 자신에서 누른 Enter 는 행을 활성화한다", () => {
+    const onActivate = vi.fn();
+    render(
+      <Table>
+        <tbody>
+          <tr {...rowActivateProps(onActivate)}>
+            <td>내용</td>
+          </tr>
+        </tbody>
+      </Table>
+    );
+    fireEvent.keyDown(screen.getByRole("row"), { key: "Enter" });
+    expect(onActivate).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("Table", () => {
   // 목록 위젯을 표로 승격할 때 원래 위젯의 aria-label 을 잃는 사고가 실제로 났다.
   it("aria-label 을 table 에 전달한다", () => {

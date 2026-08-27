@@ -64,8 +64,9 @@ describe("Modal", () => {
       </Modal>
     );
     const dialog = screen.getByRole("dialog");
-    // 실제 브라우저 클릭은 항상 같은 대상에서 mousedown 이 먼저 일어난다.
+    // 실제 브라우저 클릭은 같은 대상에서 mousedown -> mouseup -> click 순서로 일어난다.
     fireEvent.mouseDown(dialog);
+    fireEvent.mouseUp(dialog);
     fireEvent.click(dialog);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -93,6 +94,21 @@ describe("Modal", () => {
       </Modal>
     );
     fireEvent.mouseDown(screen.getByText("본문"));
+    fireEvent.mouseUp(screen.getByRole("dialog"));
+    fireEvent.click(screen.getByRole("dialog"));
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  // 반대 방향. 백드롭에서 누르고 콘텐츠 위에서 놓아도 click 대상은 <dialog> 가 된다.
+  it("백드롭에서 시작한 드래그가 콘텐츠에서 끝나도 onClose 를 호출하지 않는다", () => {
+    const onClose = vi.fn();
+    render(
+      <Modal open onClose={onClose} title="환자 검색">
+        본문
+      </Modal>
+    );
+    fireEvent.mouseDown(screen.getByRole("dialog"));
+    fireEvent.mouseUp(screen.getByText("본문"));
     fireEvent.click(screen.getByRole("dialog"));
     expect(onClose).not.toHaveBeenCalled();
   });
