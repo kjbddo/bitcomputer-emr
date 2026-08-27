@@ -1,5 +1,6 @@
 "use client";
 
+import { Panel, Table } from "@/components/ui";
 import styles from "./CertificateList.module.css";
 
 export type CertificateType = "general" | "military";
@@ -51,26 +52,40 @@ const MOCK_CERTIFICATES: CertificateItem[] = [
 ];
 
 export default function CertificateList({ selected, onSelect }: CertificateListProps) {
-  return (
-    <div className={styles.container}>
-      <div className={styles.header}>
-        <h3 className={styles.title}>진단서 목록</h3>
-        <span className={styles.count}>{MOCK_CERTIFICATES.length}건</span>
-      </div>
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTableRowElement>, item: CertificateItem) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onSelect(item);
+    }
+  };
 
-      <div className={styles.body}>
-        <div className={styles.listContainer}>
+  return (
+    <Panel
+      className={styles.container}
+      padding="none"
+      title="진단서 목록"
+      actions={<span className={styles.count}>{MOCK_CERTIFICATES.length}건</span>}
+    >
+      <Table>
+        <thead>
+          <tr>
+            <th scope="col">진단서 종류</th>
+          </tr>
+        </thead>
+        <tbody>
           {MOCK_CERTIFICATES.map((item) => (
-            <div
+            <tr
               key={item.id}
-              className={`${styles.listItem} ${selected?.id === item.id ? styles.selectedItem : ""}`}
+              tabIndex={0}
+              aria-selected={selected?.id === item.id || undefined}
               onClick={() => onSelect(item)}
+              onKeyDown={(event) => handleKeyDown(event, item)}
             >
-              <span className={styles.itemLabel}>{item.label}</span>
-            </div>
+              <td>{item.label}</td>
+            </tr>
           ))}
-        </div>
-      </div>
-    </div>
+        </tbody>
+      </Table>
+    </Panel>
   );
 }
