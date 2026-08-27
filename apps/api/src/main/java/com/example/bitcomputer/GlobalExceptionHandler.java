@@ -25,6 +25,12 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ex.getMessage());
     }
 
+    @ExceptionHandler(com.example.bitcomputer.exception.DuplicateDeptNameException.class)
+    public ResponseEntity<String> handleDuplicateDeptName(
+            com.example.bitcomputer.exception.DuplicateDeptNameException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ex.getMessage());
+    }
+
     // NoResourceFoundException 은 RuntimeException 의 하위 타입이라(ErrorResponseException
     // 경유), 이 핸들러가 없으면 아래 handleRuntimeException/handleGeneralException 이
     // 먼저 잡아 매핑되지 않은 모든 경로를 무조건 500 으로 응답해 버린다. 원래 Spring
