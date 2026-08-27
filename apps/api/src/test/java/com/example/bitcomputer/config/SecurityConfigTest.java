@@ -12,6 +12,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest
@@ -37,12 +38,18 @@ class SecurityConfigTest {
                .andExpect(status().isUnauthorized());
     }
 
+    // 로그인 실패는 (버그 수정 이후) 컨트롤러가 정당하게 401 을 응답하므로,
+    // "401 이 아니어야 한다"는 더 이상 "필터 체인에 막히지 않았다"의 증거가
+    // 못 된다 — 둘 다 401 이 나올 수 있다. 대신 필터 단에서 막힌 경우
+    // (HttpStatusEntryPoint, 본문 없음/기본 에러 페이지)와 컨트롤러까지 도달해
+    // 인증 실패 메시지를 응답한 경우를 본문으로 구분한다.
     @Test
     void loginEndpointIsPublic() throws Exception {
         mockMvc.perform(post("/api/user/login")
                        .contentType("application/json")
                        .content("{\"username\":\"none\",\"password\":\"none\"}"))
-               .andExpect(status().is(org.hamcrest.Matchers.not(401)));
+               .andExpect(status().isUnauthorized())
+               .andExpect(content().string("Invalid username or password"));
     }
 
     @Test

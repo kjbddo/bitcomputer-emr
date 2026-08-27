@@ -9,7 +9,6 @@ export default function SignupPage() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [username, setUsername] = useState("");
-  const [deptId, setDeptId] = useState("");
   const [role, setRole] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -25,7 +24,6 @@ export default function SignupPage() {
         username,
         password,
         role,
-        deptId: deptId || undefined,
       });
       router.push("/login");
     } catch (err: unknown) {
@@ -56,15 +54,6 @@ export default function SignupPage() {
             onChange={(e) => setUsername(e.target.value)}
             placeholder="employee01"
             required
-            style={{ padding: "8px 12px", border: "1px solid #ddd", borderRadius: 8 }}
-          />
-        </label>
-        <label style={{ display: "grid", gap: 6 }}>
-          <span>부서 ID</span>
-          <input
-            value={deptId}
-            onChange={(e) => setDeptId(e.target.value)}
-            placeholder="CARDIO"
             style={{ padding: "8px 12px", border: "1px solid #ddd", borderRadius: 8 }}
           />
         </label>
