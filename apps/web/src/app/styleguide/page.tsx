@@ -16,12 +16,20 @@ const SURFACE_TOKENS = [
   "surface-chrome-active",
 ];
 
-const TEXT_TOKENS = ["text-primary", "text-secondary", "text-muted", "text-on-chrome"];
+const TEXT_TOKENS = [
+  "text-primary",
+  "text-secondary",
+  "text-muted",
+  "text-on-chrome",
+  "text-on-fill",
+];
 
-// text-on-chrome 은 밝은 표면이 아니라 chrome 표면 위에서 쓰도록 설계된 토큰이므로,
-// 견본도 실제 사용 맥락(surface-chrome)에 맞춰 배경을 바꿔 보여준다.
+// 일부 텍스트 토큰은 밝은 표면이 아니라 특정 배경 위에서 쓰도록 설계됐다.
+// 견본도 실제 사용 맥락에 맞춰 배경을 바꿔 보여준다 — 기본 배경에 얹으면
+// 읽히지 않아서 견본 구실을 못 한다.
 const TEXT_TOKEN_BG: Record<string, string> = {
   "text-on-chrome": "surface-chrome",
+  "text-on-fill": "accent-fill",
 };
 
 const ROLE_PAIRS: Array<[string, string]> = [
