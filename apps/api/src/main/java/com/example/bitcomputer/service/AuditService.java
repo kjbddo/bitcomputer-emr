@@ -2,6 +2,7 @@ package com.example.bitcomputer.service;
 
 import com.example.bitcomputer.Repository.AccessAuditLogRepository;
 import com.example.bitcomputer.entity.AccessAuditLog;
+import com.example.bitcomputer.entity.Role;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
@@ -9,6 +10,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.Objects;
 
 @Service
 public class AuditService {
@@ -69,5 +71,31 @@ public class AuditService {
                 .map(a -> a.substring("ROLE_".length()))
                 .findFirst()
                 .orElse("UNKNOWN");
+    }
+
+    /**
+     * resolveActorRole(Authentication) 이 감사 로그용 문자열(ANONYMOUS/UNKNOWN 포함)을
+     * 반환하는 것과 달리, 이 메서드는 업무 로직(JWT 재발급 등)이 바로 쓸 수 있는
+     * Role enum 을 반환한다. 인증 정보가 없거나 authorities 에 유효한 ROLE_* 권한이
+     * 없으면 Role.DEFAULT 로 안전하게 떨어진다.
+     */
+    public static Role resolveActorRoleEnum(Authentication auth) {
+        if (auth == null) {
+            return Role.DEFAULT;
+        }
+        return auth.getAuthorities().stream()
+                .map(GrantedAuthority::getAuthority)
+                .filter(a -> a.startsWith("ROLE_"))
+                .map(a -> a.substring("ROLE_".length()))
+                .map(name -> {
+                    try {
+                        return Role.valueOf(name);
+                    } catch (IllegalArgumentException e) {
+                        return null;
+                    }
+                })
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(Role.DEFAULT);
     }
 }

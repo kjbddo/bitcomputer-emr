@@ -10,9 +10,12 @@ import com.example.bitcomputer.model.GenerateCertificateResponseDTO;
 import com.example.bitcomputer.model.GenerateTestCertificateRequestDTO;
 import com.example.bitcomputer.model.PastPrescriptionDTO;
 import com.example.bitcomputer.service.AgentDocumentService;
+import com.example.bitcomputer.service.AuditService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -95,11 +98,9 @@ public class AgentDocumentController {
      */
     @AuditPatientAccess(action = "CERTIFICATE_GENERATE")
     @PostMapping("/generate")
-    public ResponseEntity<?> generateCertificate(
-            @RequestBody GenerateCertificateRequestDTO request,
-            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+    public ResponseEntity<?> generateCertificate(@RequestBody GenerateCertificateRequestDTO request) {
         try {
-            String username = extractUsername(authHeader);
+            String username = currentUsername();
             if (username == null) {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                         .body(Map.of("error", "인증 정보가 없습니다."));
@@ -130,11 +131,9 @@ public class AgentDocumentController {
      * POST /api/agent/document/generate-test
      */
     @PostMapping("/generate-test")
-    public ResponseEntity<?> generateCertificateTest(
-            @RequestBody GenerateTestCertificateRequestDTO request,
-            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+    public ResponseEntity<?> generateCertificateTest(@RequestBody GenerateTestCertificateRequestDTO request) {
         try {
-            String username = extractUsername(authHeader);
+            String username = currentUsername();
             if (username == null) {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                         .body(Map.of("error", "인증 정보가 없습니다."));
@@ -171,15 +170,14 @@ public class AgentDocumentController {
             @RequestParam("agentUsed") boolean agentUsed,
             @RequestParam(value = "originalMedicalCertificate", required = false) String originalMedicalCertificate,
             @RequestParam(value = "savedMedicalCertificate", required = false) String savedMedicalCertificate,
-            @RequestParam(value = "feedbackType", required = false, defaultValue = "NONE") String feedbackType,
-            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+            @RequestParam(value = "feedbackType", required = false, defaultValue = "NONE") String feedbackType) {
         try {
-            String username = extractUsername(authHeader);
+            String username = currentUsername();
             if (username == null) {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                         .body(Map.of("error", "인증 정보가 없습니다."));
             }
-            Role role = extractRole(authHeader);
+            Role role = AuditService.resolveActorRoleEnum(SecurityContextHolder.getContext().getAuthentication());
 
             agentDocumentService.saveCertificate(
                     historyId, pdfFile, agentUsed,
@@ -201,17 +199,18 @@ public class AgentDocumentController {
         }
     }
 
-    private String extractUsername(String authHeader) {
-        if (authHeader == null || !authHeader.startsWith("Bearer ")) return null;
-        String token = authHeader.substring(7);
-        if (!jwtTokenProvider.validateToken(token)) return null;
-        return jwtTokenProvider.extractUsername(token);
-    }
-
-    private Role extractRole(String authHeader) {
-        if (authHeader == null || !authHeader.startsWith("Bearer ")) return Role.DEFAULT;
-        String token = authHeader.substring(7);
-        if (!jwtTokenProvider.validateToken(token)) return Role.DEFAULT;
-        return jwtTokenProvider.extractRole(token);
+    /**
+     * SecurityContext(요청마다 JwtAuthenticationFilter 가 쿠키의 JWT 로 채운다)에서
+     * 현재 로그인한 사용자명을 얻는다. 프론트엔드가 더 이상 Authorization 헤더를
+     * 보내지 않으므로(C2), Authorization 헤더만 보던 이 세 엔드포인트(generate,
+     * generate-test, save)도 다른 컨트롤러들과 같은 방식으로 인증 정보를 얻어야
+     * 한다 — 그렇지 않으면 쿠키만 든 요청은 항상 401 이 난다.
+     */
+    private String currentUsername() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null) {
+            return null;
+        }
+        return AuditService.resolveActorUsername(authentication);
     }
 }

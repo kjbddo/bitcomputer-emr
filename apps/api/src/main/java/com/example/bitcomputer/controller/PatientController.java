@@ -4,14 +4,16 @@ import com.example.bitcomputer.Repository.EmployeeRepository;
 import com.example.bitcomputer.annotation.AuditPatientAccess;
 import com.example.bitcomputer.entity.Employee;
 import com.example.bitcomputer.entity.Role;
-import com.example.bitcomputer.jwt.JwtTokenProvider;
 import com.example.bitcomputer.model.PatientDTO;
 import com.example.bitcomputer.model.HistoryDTO;
 import com.example.bitcomputer.model.WriteHistoryDTO;
+import com.example.bitcomputer.service.AuditService;
 import com.example.bitcomputer.service.HistoryService;
 import com.example.bitcomputer.service.PatientService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.format.annotation.DateTimeFormat;
 
@@ -27,14 +29,12 @@ public class PatientController {
 
     private final PatientService patientService;
     private final HistoryService historyService;
-    private final JwtTokenProvider jwtTokenProvider;
     private final EmployeeRepository employeeRepository;
 
     public PatientController(PatientService patientService, HistoryService historyService,
-                             JwtTokenProvider jwtTokenProvider, EmployeeRepository employeeRepository) {
+                             EmployeeRepository employeeRepository) {
         this.patientService = patientService;
         this.historyService = historyService;
-        this.jwtTokenProvider = jwtTokenProvider;
         this.employeeRepository = employeeRepository;
     }
 
@@ -101,19 +101,13 @@ public class PatientController {
     }
 
     @GetMapping("/get_role")
-    public ResponseEntity<Role> getRole(@RequestHeader(value = "Authorization", required = false) String authorizationHeader) {
-        if (authorizationHeader == null || !authorizationHeader.startsWith("Bearer ")) {
+    public ResponseEntity<Role> getRole() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
 
-        String token = authorizationHeader.substring(7);
-        if (!jwtTokenProvider.validateToken(token)) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
-        }
-
-        String username = jwtTokenProvider.extractUsername(token);
-        Employee employee = employeeRepository.findByUsername(username);
-
+        Employee employee = employeeRepository.findByUsername(AuditService.resolveActorUsername(authentication));
         if (employee == null) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
         }
@@ -122,19 +116,13 @@ public class PatientController {
     }
 
     @GetMapping("/get_me")
-    public ResponseEntity<Map<String, Object>> getMe(
-            @RequestHeader(value = "Authorization", required = false) String authorizationHeader) {
-        if (authorizationHeader == null || !authorizationHeader.startsWith("Bearer ")) {
+    public ResponseEntity<Map<String, Object>> getMe() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
 
-        String token = authorizationHeader.substring(7);
-        if (!jwtTokenProvider.validateToken(token)) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
-        }
-
-        String username = jwtTokenProvider.extractUsername(token);
-        Employee employee = employeeRepository.findByUsername(username);
+        Employee employee = employeeRepository.findByUsername(AuditService.resolveActorUsername(authentication));
         if (employee == null) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
         }
