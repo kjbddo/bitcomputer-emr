@@ -191,6 +191,7 @@ class SecurityConfigTest {
     }
 
     @Test
+    @DirtiesContext(methodMode = DirtiesContext.MethodMode.AFTER_METHOD)
     void adminUsersPathAllowsSuperUser() throws Exception {
         ensureTesterIsSeededAsSuperUser();
         mockMvc.perform(get("/api/admin/users")
