@@ -1,0 +1,47 @@
+.shell {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  min-height: 100vh;
+}
+
+.sidebar {
+  border-right: 1px solid #e5e5e5;
+  padding: 24px 16px;
+  background: #fafafa;
+}
+
+.title {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0 0 20px;
+}
+
+.navLink {
+  display: block;
+  padding: 8px 12px;
+  border-radius: 6px;
+  color: #333;
+  text-decoration: none;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.navLink:hover {
+  background: #eee;
+}
+
+.navLinkActive {
+  background: #1a4f8a;
+  color: #fff;
+}
+
+.content {
+  padding: 24px 32px;
+  overflow-x: auto;
+}
+
+.gate {
+  padding: 48px;
+  text-align: center;
+  color: #666;
+}

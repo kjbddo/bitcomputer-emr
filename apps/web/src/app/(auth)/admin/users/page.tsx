@@ -1,11 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { createUser, getAllUsers, setRole } from "@/services/super";
+import { createUser, getAllUsers, setRole } from "@/services/admin";
 import { User, Role } from "@/types/user";
 import styles from "./page.module.css";
 
-export default function SuperPage() {
+export default function AdminUsersPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +43,7 @@ export default function SuperPage() {
   async function handleRoleChange(userId: number, newRole: Role) {
     setUpdatingRoles((prev) => new Set(prev).add(userId));
     try {
-      await setRole({ id: userId, role: newRole });
+      await setRole(userId, newRole);
       // 성공 시 로컬 상태 업데이트
       setUsers((prevUsers) =>
         prevUsers.map((user) =>
