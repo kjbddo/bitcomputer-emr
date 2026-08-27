@@ -12,8 +12,10 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.authentication.session.NullAuthenticatedSessionStrategy;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfFilter;
+import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -50,7 +52,46 @@ public class SecurityConfig {
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .csrf(csrf -> csrf
                 .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
+                // Spring Security 6 기본값인 XorCsrfTokenRequestAttributeHandler 는
+                // X-XSRF-TOKEN 헤더 값이 BREACH 방지용으로 XOR 마스킹되어 있다고
+                // 가정하고 이를 디코딩한 뒤 실제 토큰과 비교한다. 그런데
+                // CookieCsrfTokenRepository 는 XSRF-TOKEN 쿠키에 마스킹되지 않은
+                // 원문(raw) 토큰을 그대로 굽는다. 그 결과 "쿠키 값을 그대로 읽어
+                // 헤더에 실어 보내는" 표준 SPA 더블서브밋 패턴(axios 의
+                // xsrfCookieName/xsrfHeaderName, 그리고 이 프로젝트의
+                // apps/web/src/services/http/client.ts 가 정확히 이렇게 동작한다)이
+                // 매번 403 으로 거부된다.
+                //
+                // CsrfTokenRequestAttributeHandler 는 헤더 값을 마스킹 해제 없이
+                // 원문 그대로 비교하므로 쿠키가 실제로 담고 있는 값과 일치한다.
+                // BREACH 완화를 포기하는 대신 쿠키 기반 더블서브밋 SPA 와 맞물리게
+                // 하는 것이며, Spring 공식 문서가 이 조합을 위해 안내하는 표준
+                // 구성이다.
+                .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler())
                 .ignoringRequestMatchers("/api/user/login", "/api/user/register")
+                // 두 번째(독립적인) 결함: HttpSecurity.csrf(...) 는 항상
+                // CsrfAuthenticationStrategy 를 SessionManagementConfigurer 에 등록한다
+                // (세션 고정 공격을 막기 위해 "새로 인증됐다" 싶으면 CSRF 쿠키를
+                // 지우고 새로 굽는다). 문제는 "새로 인증됐다"의 판정 기준이
+                // SessionManagementFilter 의 securityContextRepository.containsContext(request)
+                // 인데, SessionCreationPolicy.STATELESS 에서는 이게 NullSecurityContextRepository
+                // 라 언제나 false 다. 게다가 이 앱은 세션 로그인이 아니라 JwtAuthenticationFilter
+                // 가 "매 요청마다" 쿠키의 JWT 를 읽어 SecurityContext 를 채우므로,
+                // SessionManagementFilter 입장에서는 "인증된 모든 요청"이 다 "방금 새로
+                // 로그인함"으로 보인다. 그 결과 CsrfAuthenticationStrategy 가 인증된 요청마다
+                // (GET 포함) XSRF-TOKEN 쿠키를 삭제→재발급 시도하고, 그 삭제가 응답에
+                // 그대로 실려 나가 SPA 가 들고 있던 토큰이 매 요청 끝나자마자 무효화된다.
+                // 실전에서는 로그인 직후 첫 조회(GET) 한 번만으로 이미 쓰기 요청이 깨진다
+                // — csrfTokenRequestHandler 만 고쳐서는 해결되지 않는 별개의 결함이다.
+                //
+                // 트레이드오프: NullAuthenticatedSessionStrategy 로 바꾸면 "로그인 시 CSRF
+                // 토큰 회전" 방어가 빠진다. 그런데 이 앱의 실제 로그인(/api/user/login)은
+                // Spring 의 AuthenticationManager 를 거치지 않는 커스텀 컨트롤러라
+                // CsrfAuthenticationStrategy 가 애초에 "진짜 로그인 시점"을 구분해 회전시킨
+                // 적이 없다 — 그냥 인증된 모든 요청에서 무차별적으로 발동해 왔을 뿐이다.
+                // 즉 이 옵션을 끄는 것은 "정상 작동하던 로그인 시 회전 방어"를 포기하는
+                // 것이 아니라, 애초에 의도대로 동작한 적 없는 오작동을 끄는 것이다.
+                .sessionAuthenticationStrategy(new NullAuthenticatedSessionStrategy())
             )
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .exceptionHandling(e -> e

@@ -9,6 +9,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -110,5 +111,78 @@ class CsrfTest {
                        .cookie(doctorCookie())
                        .with(csrf()))
                .andExpect(status().is(org.hamcrest.Matchers.not(403)));
+    }
+
+    // 실제 브라우저 SPA 는 SecurityMockMvcRequestPostProcessors.csrf() 를 쓰지 않는다.
+    // GET 으로 XSRF-TOKEN 쿠키를 받아, 그 쿠키의 "원문" 값을 그대로 X-XSRF-TOKEN
+    // 헤더에 실어 POST 를 보낸다 — axios 의 xsrfCookieName/xsrfHeaderName 옵션,
+    // 그리고 apps/web/src/services/http/client.ts 가 정확히 이렇게 동작한다.
+    // csrf() 헬퍼는 리플렉션으로 헤더 값을 자동으로 만들어 마스킹 여부와 무관하게
+    // 통과시켜 버리므로 이 결함을 가려버린다 — 그래서 이 테스트는 csrf() 를 쓰지
+    // 않고 실제 더블서브밋 왕복을 그대로 재현한다.
+    //
+    // SecurityConfig 가 CookieCsrfTokenRepository.withHttpOnlyFalse() 와 함께
+    // csrfTokenRequestHandler 를 지정하지 않으면 Spring Security 6 기본값인
+    // XorCsrfTokenRequestAttributeHandler 가 적용되는데, 이 핸들러는 헤더 값이
+    // BREACH 방지용으로 XOR 마스킹돼 있다고 가정하고 디코딩을 시도한다. 하지만
+    // 쿠키에는 마스킹되지 않은 원문 토큰이 그대로 담기므로, 이를 그대로 헤더에
+    // 실어 보내면 디코딩 결과가 실제 토큰과 달라져 403 이 발생한다. 이 테스트는
+    // 그 회귀를 잡기 위한 것이다.
+    @Test
+    void doubleSubmitWithRawCookieValueInHeaderPassesCsrfCheck() throws Exception {
+        MvcResult getResult = mockMvc.perform(get("/actuator/health"))
+                .andExpect(status().is(org.hamcrest.Matchers.not(403)))
+                .andReturn();
+
+        jakarta.servlet.http.Cookie xsrfCookie = getResult.getResponse().getCookie("XSRF-TOKEN");
+        org.junit.jupiter.api.Assertions.assertNotNull(xsrfCookie, "XSRF-TOKEN 쿠키가 응답에 없다");
+        String rawToken = xsrfCookie.getValue();
+
+        mockMvc.perform(post("/api/patients")
+                       .cookie(doctorCookie(), xsrfCookie)
+                       .header("X-XSRF-TOKEN", rawToken)
+                       .contentType("application/json")
+                       .content("{}"))
+               .andExpect(status().is(org.hamcrest.Matchers.not(403)));
+    }
+
+    // 회귀 방지: csrfTokenRequestHandler 만으로는 잡히지 않는 별개의 결함이다.
+    //
+    // HttpSecurity.csrf(...) 는 항상 CsrfAuthenticationStrategy 를
+    // SessionManagementConfigurer 에 등록해, SessionManagementFilter 가 "이번 요청에서
+    // 처음 인증됨"이라 판단할 때마다 XSRF-TOKEN 쿠키를 지우고(saveToken(null, ...))
+    // 다시 굽게 한다 — 로그인 시점에 CSRF 토큰을 회전시켜 고정 공격을 막으려는
+    // 의도다. 그런데 "처음 인증됨"의 판정은 SessionManagementFilter 가
+    // securityContextRepository.containsContext(request) 로 하는데, 이 앱처럼
+    // SessionCreationPolicy.STATELESS(=NullSecurityContextRepository) 를 쓰고
+    // JwtAuthenticationFilter 가 매 요청마다 쿠키의 JWT 로 SecurityContext 를 새로
+    // 채우는 구조에서는 이 판정이 인증된 "모든" 요청에서 항상 true 로 나온다.
+    // 그 결과 인증된 요청마다(GET 포함) XSRF-TOKEN 쿠키가 삭제된 채로 응답이 나가,
+    // SPA 가 들고 있던 쿠키가 다음 요청 때는 이미 사라져 있다 — 두 번째 인증된
+    // 요청부터 CSRF 403 이 난다. SecurityConfig 의
+    // .sessionAuthenticationStrategy(new NullAuthenticatedSessionStrategy()) 가 이를 끈다.
+    //
+    // 이 결함은 한 번의 왕복(GET→POST)만으로는 드러나지 않는다 — 첫 인증 요청까지는
+    // 쿠키가 아직 없어 삭제 로직 자체가 스킵되기 때문이다(doubleSubmitWithRawCookieValueInHeaderPassesCsrfCheck()
+    // 참고). 그래서 인증된 요청을 "연속으로 두 번" 보내, 두 번째 응답에서도 여전히
+    // 쿠키가 살아있는지를 확인해야 한다.
+    @Test
+    void secondConsecutiveAuthenticatedRequestKeepsCsrfCookieAlive() throws Exception {
+        MvcResult first = mockMvc.perform(get("/actuator/health").cookie(doctorCookie()))
+                .andExpect(status().is(org.hamcrest.Matchers.not(403)))
+                .andReturn();
+
+        jakarta.servlet.http.Cookie firstXsrf = first.getResponse().getCookie("XSRF-TOKEN");
+        org.junit.jupiter.api.Assertions.assertNotNull(firstXsrf, "첫 인증 요청에서 XSRF-TOKEN 쿠키가 없다");
+
+        MvcResult second = mockMvc.perform(get("/actuator/health").cookie(doctorCookie(), firstXsrf))
+                .andExpect(status().is(org.hamcrest.Matchers.not(403)))
+                .andReturn();
+
+        String setCookieHeader = second.getResponse().getHeader("Set-Cookie");
+        boolean deletedXsrfCookie = setCookieHeader != null && setCookieHeader.startsWith("XSRF-TOKEN=;");
+        org.junit.jupiter.api.Assertions.assertFalse(deletedXsrfCookie,
+                "두 번째 인증 요청에서 XSRF-TOKEN 쿠키가 삭제됐다(SessionManagementFilter 가 매 요청을 "
+                        + "'새 인증'으로 오판): " + setCookieHeader);
     }
 }
