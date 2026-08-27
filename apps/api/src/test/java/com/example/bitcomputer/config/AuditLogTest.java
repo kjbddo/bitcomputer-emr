@@ -94,6 +94,29 @@ class AuditLogTest {
         assertEquals("RECEPTIONIST", denied.get(0).getActorRole());
     }
 
+    // I2 회귀: CSRF 거부(MissingCsrfTokenException 은 AccessDeniedException 의 하위 타입)가
+    // RBAC 권한 거부와 같은 ACCESS_DENIED/anonymous 로 뭉개지면 안 된다. action 이
+    // 분리돼 있어야 하고, jwtAuthenticationFilter 가 CsrfFilter 보다 앞이므로 쿠키에
+    // 유효한 JWT 가 있었다면 actor 도 anonymous 가 아니라 실제 사용자여야 한다.
+    @Test
+    @org.springframework.test.annotation.DirtiesContext(
+            methodMode = org.springframework.test.annotation.DirtiesContext.MethodMode.AFTER_METHOD)
+    void csrfRejectionIsRecordedDistinctlyFromRbacDenial() throws Exception {
+        mockMvc.perform(post("/api/patients/get_patient_id")
+                       .cookie(cookieFor(Role.DOCTOR, "dr.kim"))
+                       .contentType("application/json")
+                       .content("{}"))
+               .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+
+        var logs = auditRepository.findAll();
+        assertEquals(1, logs.size());
+        assertEquals("CSRF_REJECTED", logs.get(0).getAction());
+        assertEquals("DENIED", logs.get(0).getOutcome());
+        assertEquals("dr.kim", logs.get(0).getActorUsername(),
+                "jwtAuthenticationFilter 가 CsrfFilter 보다 앞이므로 actor 를 알 수 있어야 한다");
+        assertEquals("DOCTOR", logs.get(0).getActorRole());
+    }
+
     @Test
     void auditLogIsReadableBySuperUserOnly() throws Exception {
         mockMvc.perform(get("/api/audit/logs").cookie(cookieFor(Role.SUPER_USER, "admin")))

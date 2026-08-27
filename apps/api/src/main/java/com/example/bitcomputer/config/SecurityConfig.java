@@ -11,7 +11,6 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
-import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.authentication.session.NullAuthenticatedSessionStrategy;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfFilter;
@@ -145,7 +144,16 @@ public class SecurityConfig {
                 // ── 나머지 업무 API: 인증된 실제 역할이면 통과 (DEFAULT 제외) ──
                 .anyRequest().hasAnyRole("RECEPTIONIST", "NURSE", "DOCTOR", "SUPER_USER")
             )
-            .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+            // jwtAuthenticationFilter 를 CsrfFilter 보다 앞에 둔다(원래는
+            // UsernamePasswordAuthenticationFilter 보다만 앞이었는데, 그 위치는
+            // CsrfFilter 보다 뒤다). CsrfFilter 가 먼저 돌면 CSRF 토큰이 없거나
+            // 틀린 요청은 SecurityContext 가 비어 있는 채로 거부돼, RestAccessDeniedHandler
+            // 가 "누가" 시도했는지 알 수 없다(I2). CsrfFilter 자체는 인증 여부와
+            // 무관하게 쿠키의 토큰만 검증하므로, 인증 필터를 앞으로 옮겨도 CSRF
+            // 검증 로직에는 영향이 없다 — 대안으로 핸들러 안에서 쿠키의 JWT 를
+            // 직접 다시 파싱하는 방법도 검토했지만, JwtAuthenticationFilter 가 이미
+            // 하는 일을 또 한 곳에서 중복 구현하게 되어 이 쪽을 택했다.
+            .addFilterBefore(jwtAuthenticationFilter, CsrfFilter.class)
             .addFilterAfter(csrfCookieFilter, CsrfFilter.class);
 
         return http.build();
