@@ -19,6 +19,12 @@ describe("Panel", () => {
     render(<Panel title="목록" actions={<button type="button">추가</button>}>본문</Panel>);
     expect(screen.getByRole("button", { name: "추가" })).toBeInTheDocument();
   });
+
+  it("title 없이 actions 만 있어도 actions 를 렌더한다", () => {
+    render(<Panel actions={<button type="button">새로고침</button>}>본문</Panel>);
+    expect(screen.getByRole("button", { name: "새로고침" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading")).toBeNull();
+  });
 });
 
 describe("Button", () => {
@@ -44,6 +50,22 @@ describe("Badge", () => {
   it("내용을 렌더한다", () => {
     render(<Badge tone="warning">stub</Badge>);
     expect(screen.getByText("stub")).toBeInTheDocument();
+  });
+
+  // tone 을 무시하는 스텁 구현도 위 테스트는 통과한다. tone 이 실제로
+  // 표현에 반영되는지는 서로 다른 tone 의 class 가 달라지는 것으로 확인한다.
+  // 특정 class 이름에 결합하지 않으려고 값 비교 대신 차이만 단언한다.
+  it("tone 마다 다른 class 를 붙인다", () => {
+    const { container } = render(
+      <>
+        <Badge tone="success">완료</Badge>
+        <Badge tone="danger">거부</Badge>
+        <Badge>기본</Badge>
+      </>
+    );
+    const classNames = Array.from(container.querySelectorAll("span")).map((el) => el.className);
+    expect(classNames).toHaveLength(3);
+    expect(new Set(classNames).size).toBe(3);
   });
 });
 
