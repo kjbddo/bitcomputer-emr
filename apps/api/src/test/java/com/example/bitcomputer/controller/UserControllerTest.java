@@ -1,6 +1,8 @@
 package com.example.bitcomputer.controller;
 
 import com.example.bitcomputer.config.CookieFactory;
+import com.example.bitcomputer.exception.DuplicateUsernameException;
+import com.example.bitcomputer.exception.InvalidCredentialsException;
 import com.example.bitcomputer.jwt.JwtTokenProvider;
 import com.example.bitcomputer.jwt.TokenInfo;
 import com.example.bitcomputer.model.LoginRequestDTO;
@@ -49,7 +51,9 @@ class UserControllerTest {
     @BeforeEach
     void setup() {
         objectMapper = new ObjectMapper();
-        mockMvc = MockMvcBuilders.standaloneSetup(userController).build();
+        mockMvc = MockMvcBuilders.standaloneSetup(userController)
+                .setControllerAdvice(new com.example.bitcomputer.GlobalExceptionHandler())
+                .build();
     }
 
     @Nested
@@ -70,7 +74,7 @@ class UserControllerTest {
         @Test
         @DisplayName("중복 사용자 시 409 Conflict")
         void register_conflict() throws Exception {
-            doThrow(new IllegalArgumentException("Username already exists")).when(userService).registerUser(any(UserRegisterDTO.class));
+            doThrow(new DuplicateUsernameException("Username already exists")).when(userService).registerUser(any(UserRegisterDTO.class));
             UserRegisterDTO dto = new UserRegisterDTO();
             dto.setName("n"); dto.setDeptId(1); dto.setRole("r"); dto.setUsername("u"); dto.setPassword("p");
             mockMvc.perform(post("/api/user/register")
@@ -116,15 +120,31 @@ class UserControllerTest {
         }
 
         @Test
-        @DisplayName("인증 실패 시 401 Unauthorized")
+        @DisplayName("인증 실패 시 401 Unauthorized, 사용자 존재 여부는 노출하지 않음")
         void login_unauthorized() throws Exception {
-            when(userService.loginUser(any(LoginRequestDTO.class))).thenReturn(null);
+            when(userService.loginUser(any(LoginRequestDTO.class)))
+                    .thenThrow(new InvalidCredentialsException("Invalid username or password"));
             LoginRequestDTO dto = new LoginRequestDTO();
             dto.setUsername("u"); dto.setPassword("bad");
             mockMvc.perform(post("/api/user/login")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(dto)))
-                    .andExpect(status().isUnauthorized());
+                    .andExpect(status().isUnauthorized())
+                    .andExpect(content().string("Invalid username or password"));
+        }
+
+        @Test
+        @DisplayName("존재하지 않는 사용자도 동일한 401 메시지(사용자 존재 여부 비노출)")
+        void login_unknown_user_same_message_as_wrong_password() throws Exception {
+            when(userService.loginUser(any(LoginRequestDTO.class)))
+                    .thenThrow(new InvalidCredentialsException("Invalid username or password"));
+            LoginRequestDTO dto = new LoginRequestDTO();
+            dto.setUsername("nosuchuser"); dto.setPassword("wrong");
+            mockMvc.perform(post("/api/user/login")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(dto)))
+                    .andExpect(status().isUnauthorized())
+                    .andExpect(content().string("Invalid username or password"));
         }
     }
 

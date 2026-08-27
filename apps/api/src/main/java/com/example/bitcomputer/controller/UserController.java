@@ -1,6 +1,8 @@
 package com.example.bitcomputer.controller;
 
 import com.example.bitcomputer.config.CookieFactory;
+import com.example.bitcomputer.exception.DuplicateUsernameException;
+import com.example.bitcomputer.exception.InvalidCredentialsException;
 import com.example.bitcomputer.jwt.JwtTokenProvider;
 import com.example.bitcomputer.jwt.TokenInfo;
 import org.springframework.http.HttpHeaders;
@@ -27,28 +29,28 @@ public class UserController {
         this.cookieFactory = cookieFactory;
     }
 
-    @ExceptionHandler(IllegalArgumentException.class)
-    @ResponseStatus(HttpStatus.CONFLICT)
-    public ResponseEntity<String> handleIllegalArgumentException(IllegalArgumentException e) {
+    // 회원가입 시 아이디 중복 = 진짜 충돌(409).
+    @ExceptionHandler(DuplicateUsernameException.class)
+    public ResponseEntity<String> handleDuplicateUsername(DuplicateUsernameException e) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(e.getMessage());
+    }
+
+    // 로그인 인증 실패 = 401. 사용자 부재/비밀번호 불일치를 구분하지 않는
+    // 동일한 메시지만 내려준다(사용자 존재 여부 노출 금지).
+    @ExceptionHandler(InvalidCredentialsException.class)
+    public ResponseEntity<String> handleInvalidCredentials(InvalidCredentialsException e) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(e.getMessage());
     }
 
     @PostMapping("/register")
     public ResponseEntity<String> registerUser(@RequestBody UserRegisterDTO userRegisterDTO) {
-        try {
-            userService.registerUser(userRegisterDTO);
-            return ResponseEntity.status(HttpStatus.CREATED).body("User registered successfully");
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.status(HttpStatus.CONFLICT).body(e.getMessage());
-        }
+        userService.registerUser(userRegisterDTO);
+        return ResponseEntity.status(HttpStatus.CREATED).body("User registered successfully");
     }
 
     @PostMapping("/login")
     public ResponseEntity<TokenInfo> loginUser(@RequestBody LoginRequestDTO loginRequestDTO) {
         TokenInfo tokenInfo = userService.loginUser(loginRequestDTO);
-        if (tokenInfo == null) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(null);
-        }
         ResponseCookie cookie = cookieFactory.accessTokenCookie(
                 tokenInfo.getAccessToken(), jwtTokenProvider.getAccessTokenValiditySeconds());
         // 응답 본문에서는 access token 을 제거한다. 쿠키로만 전달한다.

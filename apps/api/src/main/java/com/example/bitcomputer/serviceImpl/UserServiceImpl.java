@@ -7,6 +7,8 @@ import com.example.bitcomputer.service.UserService;
 import com.example.bitcomputer.Repository.UserRepository;
 import com.example.bitcomputer.entity.Employee;
 import com.example.bitcomputer.entity.Role;
+import com.example.bitcomputer.exception.DuplicateUsernameException;
+import com.example.bitcomputer.exception.InvalidCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import com.example.bitcomputer.jwt.JwtTokenProvider;
@@ -18,8 +20,8 @@ public class UserServiceImpl implements UserService {
     private final JwtTokenProvider jwtTokenProvider;
     private final TokenBlacklistService tokenBlacklistService;
 
-    public UserServiceImpl(UserRepository userRepository, 
-    PasswordEncoder passwordEncoder, JwtTokenProvider jwtTokenProvider, 
+    public UserServiceImpl(UserRepository userRepository,
+    PasswordEncoder passwordEncoder, JwtTokenProvider jwtTokenProvider,
     TokenBlacklistService tokenBlacklistService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
@@ -29,10 +31,9 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public void registerUser(UserRegisterDTO userRegisterDTO) {
-        // TODO: Implement user registration logic
         Employee employee = new Employee();
         if (userRepository.findByUsername(userRegisterDTO.getUsername()) != null) {
-            throw new IllegalArgumentException("Username already exists");
+            throw new DuplicateUsernameException("Username already exists");
         }
         employee.setName(userRegisterDTO.getName());
         int requestedDeptId = userRegisterDTO.getDeptId();
@@ -49,13 +50,14 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public TokenInfo loginUser(LoginRequestDTO loginRequestDTO) {
-        // TODO Auto-generated method stub
+        // 사용자 부재/비밀번호 불일치를 동일한 예외·메시지로 던져 사용자 존재
+        // 여부를 노출하지 않는다.
         Employee employee = userRepository.findByUsername(loginRequestDTO.getUsername());
         if (employee == null) {
-            throw new IllegalArgumentException("Invalid username or password");
+            throw new InvalidCredentialsException("Invalid username or password");
         }
         if (!passwordEncoder.matches(loginRequestDTO.getPassword(), employee.getPassword())) {
-            throw new IllegalArgumentException("Invalid username or password");
+            throw new InvalidCredentialsException("Invalid username or password");
         }
         String accessToken = jwtTokenProvider.generateAccessToken(
                 employee.getUsername(), employee.getRole());
