@@ -1,0 +1,41 @@
+{
+  "caseCount": 1,
+  "successfulCases": 0,
+  "errorCases": 1,
+  "errorsByMessage": {
+    "Server error '502 Bad Gateway' for url 'http://localhost:8001/api/agent/prescription/recommend'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502": 1
+  },
+  "toolPathMetrics": {
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "tp": 0,
+    "fp": 0,
+    "fn": 0,
+    "perTool": {}
+  },
+  "answerQuality": {
+    "judgedCases": 0,
+    "averageOverallScore": null
+  },
+  "hallucination": {
+    "judgedCases": 0,
+    "hallucinationRate": null
+  },
+  "byControlGroup": {
+    "BASELINE_SAFE": {
+      "total": 1,
+      "errors": 1,
+      "hallucinations": 0
+    }
+  },
+  "runConfig": {
+    "scenarios": [
+      ".\\evals\\scenarios\\llm_prescription_eval_scenarios.jsonl"
+    ],
+    "mockAgent": false,
+    "apiUrl": "http://localhost:8001",
+    "skipJudges": true,
+    "judgeProviders": []
+  }
+}

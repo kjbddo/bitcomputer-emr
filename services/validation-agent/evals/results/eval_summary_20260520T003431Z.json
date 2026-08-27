@@ -1,0 +1,61 @@
+{
+  "caseCount": 2,
+  "execution": {
+    "successfulCases": 2,
+    "errorCases": 0,
+    "errorsByMessage": {}
+  },
+  "toolMetrics": {
+    "micro": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "evaluatedCases": 2,
+    "macroF1": 1.0,
+    "averageOrderScore": 1.0,
+    "repeatCaseRate": 0.0,
+    "perTool": {
+      "Disease Validator": {
+        "tp": 2,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "Prescription Validator": {
+        "tp": 2,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "X-ray Result Loader": {
+        "tp": 2,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      }
+    }
+  },
+  "hallucinationMetrics": {
+    "judgedCases": 0,
+    "hallucinationRate": null,
+    "hallucinationDetectionRate": null,
+    "safetyPassRate": null
+  },
+  "failures": [],
+  "runConfig": {
+    "scenarios": [
+      ".\\evals\\scenarios\\synthetic_tool_scenarios.jsonl"
+    ],
+    "agentUrl": "",
+    "judgeProviders": [],
+    "skipJudges": true,
+    "forceJudgeLabels": false
+  }
+}

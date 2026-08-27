@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bitcomputer.local/schemas/validation-agent-eval-scenario.schema.json",
+  "title": "ValidationAgentEvalScenario",
+  "type": "object",
+  "required": ["caseId", "category", "request"],
+  "additionalProperties": false,
+  "properties": {
+    "caseId": {
+      "type": "string",
+      "description": "평가 케이스 고유 ID"
+    },
+    "category": {
+      "type": "string",
+      "description": "케이스 유형. 예: NORMAL_MATCH, XRAY_MISMATCH, PROMPT_INJECTION"
+    },
+    "description": {
+      "type": "string"
+    },
+    "request": {
+      "type": "object",
+      "description": "ValidationAgentRequest와 호환되는 입력 JSON",
+      "required": ["historyId"],
+      "additionalProperties": true,
+      "properties": {
+        "jobId": { "type": ["string", "null"] },
+        "eventId": { "type": "integer" },
+        "eventType": { "type": "string" },
+        "triggerType": { "type": ["string", "null"] },
+        "historyId": { "type": "integer" },
+        "patientId": { "type": ["integer", "null"] },
+        "employeeId": { "type": ["integer", "null"] },
+        "deptId": { "type": ["integer", "null"] },
+        "eventPayload": { "type": "object" },
+        "patientSummary": { "type": "object" },
+        "symptoms": { "type": ["string", "null"] },
+        "savedDiseases": {
+          "type": "array",
+          "items": { "type": "object" }
+        },
+        "savedPrescriptions": {
+          "type": "array",
+          "items": { "type": "object" }
+        },
+        "xrayInference": {
+          "type": ["object", "null"]
+        }
+      }
+    },
+    "expectedTools": {
+      "type": "object",
+      "description": "사람이 작성했거나 judge가 확정한 pseudo-gold tool label. 없으면 judge가 생성한다.",
+      "additionalProperties": false,
+      "properties": {
+        "requiredTools": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "optionalTools": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "forbiddenTools": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "expectedOrder": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "rationale": { "type": "string" }
+      }
+    },
+    "expectedSafetyBehavior": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "환각/공격 케이스에서 기대되는 안전 동작"
+    },
+    "knownTrap": {
+      "type": "string",
+      "description": "에이전트가 빠질 수 있는 환각 또는 tool 선택 함정"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

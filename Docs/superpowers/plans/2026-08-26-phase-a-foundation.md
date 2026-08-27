@@ -344,21 +344,18 @@ git clone --depth 1 https://github.com/PatboongIsBetterthanSyuboong/AI_BackEnd.g
 ```bash
 cat > scripts/models.manifest.tsv <<'EOF'
 # path	sha256	url
-services/radiology-legacy/models/squid_exp1_256_mask/model.pth	REPLACE_WITH_SHA256	https://github.com/kjbddo/bitcomputer/releases/download/models-v1/model.pth
-services/radiology-legacy/models/squid_exp1_256_mask/discriminator.pth	REPLACE_WITH_SHA256	https://github.com/kjbddo/bitcomputer/releases/download/models-v1/discriminator.pth
+services/radiology-legacy/models/squid_exp1_256_mask/model.pth	REPLACE_WITH_SHA256	https://github.com/kjbddo/bitcomputer-emr/releases/download/models-v1/model.pth
+services/radiology-legacy/models/squid_exp1_256_mask/discriminator.pth	REPLACE_WITH_SHA256	https://github.com/kjbddo/bitcomputer-emr/releases/download/models-v1/discriminator.pth
 services/radiology-legacy/models/CheXmask/SegmentationModel/bestMSE.pt	REPLACE_WITH_SHA256	https://github.com/ngaggion/CheXmask-Database/raw/main/Weights/SegmentationModel/bestMSE.pt
 EOF
 ```
 
-두 곳을 실제 값으로 바꾼다. 치환하지 않으면 Step 4가 실패한다.
+`REPLACE_WITH_SHA256` 세 곳을 Step 1에서 얻은 해시로 치환한다. 치환하지 않으면 Step 4가 실패한다.
 
-1. `REPLACE_WITH_SHA256` 세 곳 → Step 1에서 얻은 해시
-2. Release URL의 `kjbddo/bitcomputer` → 실제 새 monorepo의 `<owner>/<repo>`
-
-저장소 이름을 아직 정하지 않았다면 지금 정한다. 확인:
+저장소는 `kjbddo/bitcomputer-emr`로 확정됐다. 아직 만들지 않았다면 생성한다.
 
 ```bash
-gh repo view --json nameWithOwner -q .nameWithOwner
+gh repo create kjbddo/bitcomputer-emr --private --source=. --remote=origin
 ```
 
 - [ ] **Step 3: 다운로드 스크립트 작성**
@@ -1691,13 +1688,23 @@ JS 가 토큰을 읽을 수 없으므로 XSS 로 인한 탈취 경로가 막힌�
 **Files:**
 - Modify: `apps/api/src/main/java/com/example/bitcomputer/jwt/JwtAuthenticationFilter.java`
 - Modify: `apps/api/src/main/java/com/example/bitcomputer/config/SecurityConfig.java`
+- Modify: `apps/api/src/main/java/com/example/bitcomputer/serviceImpl/UserServiceImpl.java:41-50`
+- Modify: `apps/api/src/main/java/com/example/bitcomputer/config/DataInitializer.java`
+- Modify: `infra/.env.example`
 - Create: `apps/api/src/test/java/com/example/bitcomputer/config/SecurityConfigTest.java`
+- Create: `apps/api/src/test/java/com/example/bitcomputer/config/RegistrationSecurityTest.java`
 
 **Interfaces:**
 - Consumes: Task 7의 `extractRole`, Task 8의 `CookieFactory.ACCESS_TOKEN_COOKIE`
-- Produces: 인증된 요청의 `SecurityContext`에 `ROLE_<Role.name()>` 권한이 실린다. 예: `ROLE_DOCTOR`
+- Produces:
+  - 인증된 요청의 `SecurityContext`에 `ROLE_<Role.name()>` 권한이 실린다. 예: `ROLE_DOCTOR`
+  - `POST /api/user/register`는 요청의 `role` 값과 무관하게 항상 `Role.DEFAULT`로 생성한다
+  - 부트스트랩 `SUPER_USER` 계정: username `admin`, 비밀번호는 `BOOTSTRAP_SUPERUSER_PASSWORD` 환경변수. 변수가 비어 있으면 계정을 만들지 않는다
+  - 역할 부여는 기존 `POST /api/super/create_user`, `PUT /api/super/set_role/{id}`로만 가능하다 (Task 15의 E2E가 이 경로를 쓴다)
 
-**주의:** 현재 `JwtAuthenticationFilter`에는 `/api/patients/`, `/api/agent/`, `/api/ai/` 등을 무조건 통과시키는 하드코딩 목록이 있다. 이 목록을 지우지 않으면 `SecurityConfig`를 고쳐도 인증이 걸리지 않는다.
+**주의 1:** 현재 `JwtAuthenticationFilter`에는 `/api/patients/`, `/api/agent/`, `/api/ai/` 등을 무조건 통과시키는 하드코딩 목록이 있다. 이 목록을 지우지 않으면 `SecurityConfig`를 고쳐도 인증이 걸리지 않는다.
+
+**주의 2:** 현재 `UserServiceImpl.registerUser`는 요청 본문의 `role`을 그대로 부여한다. `/api/user/register`가 공개 엔드포인트이므로, 이대로 두면 누구나 `{"role":"SUPER_USER"}`로 가입해 최고 권한을 얻는다. RBAC 전체가 이 한 경로로 무력화되므로 반드시 같은 태스크에서 막는다.
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
@@ -2077,6 +2084,163 @@ CSRF는 아직 건드리지 않는다. Task 10에서 켠다. 현재 상태는 �
             .csrf(csrf -> csrf.disable())  // Task 10 에서 CookieCsrfTokenRepository 로 교체
 ```
 
+- [ ] **Step 5b: 회원가입 권한 상승을 막는 실패 테스트 작성**
+
+```bash
+cat > apps/api/src/test/java/com/example/bitcomputer/config/RegistrationSecurityTest.java <<'EOF'
+package com.example.bitcomputer.config;
+
+import com.example.bitcomputer.Repository.UserRepository;
+import com.example.bitcomputer.entity.Employee;
+import com.example.bitcomputer.entity.Role;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.web.servlet.MockMvc;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+
+@SpringBootTest
+@org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
+@ActiveProfiles("test")
+@Import(TestRedisConfig.class)
+class RegistrationSecurityTest {
+
+    @Autowired private MockMvc mockMvc;
+    @Autowired private UserRepository userRepository;
+
+    private void register(String username, String requestedRole) throws Exception {
+        mockMvc.perform(post("/api/user/register")
+                .contentType("application/json")
+                .content("""
+                        {"name":"%s","deptId":1,"role":"%s","username":"%s","password":"Passw0rd!"}
+                        """.formatted(username, requestedRole, username)));
+    }
+
+    @Test
+    void selfRegistrationCannotClaimSuperUser() throws Exception {
+        register("attacker", "SUPER_USER");
+        Employee saved = userRepository.findByUsername("attacker");
+        assertNotNull(saved);
+        assertEquals(Role.DEFAULT, saved.getRole(),
+                "공개 가입으로 SUPER_USER 를 얻을 수 있으면 RBAC 전체가 무력화된다");
+    }
+
+    @Test
+    void selfRegistrationCannotClaimDoctor() throws Exception {
+        register("fake.doctor", "DOCTOR");
+        assertEquals(Role.DEFAULT, userRepository.findByUsername("fake.doctor").getRole());
+    }
+
+    @Test
+    void selfRegistrationWithoutRoleIsDefault() throws Exception {
+        mockMvc.perform(post("/api/user/register")
+                .contentType("application/json")
+                .content("""
+                        {"name":"plain","deptId":1,"username":"plain","password":"Passw0rd!"}
+                        """));
+        assertEquals(Role.DEFAULT, userRepository.findByUsername("plain").getRole());
+    }
+}
+EOF
+```
+
+실패 확인:
+
+```bash
+cd apps/api && ./gradlew test --tests '*RegistrationSecurityTest*'; cd ../..
+```
+
+Expected: FAIL — `selfRegistrationCannotClaimSuperUser`가 `SUPER_USER`를 받는다
+
+- [ ] **Step 5c: `registerUser`가 role 을 무시하도록 수정**
+
+`apps/api/src/main/java/com/example/bitcomputer/serviceImpl/UserServiceImpl.java`의 `registerUser`에서 요청 role 파싱 블록을 지우고 항상 `DEFAULT`로 둔다.
+
+```java
+        // 공개 가입은 항상 DEFAULT 다. 요청 본문의 role 은 신뢰하지 않는다.
+        // 역할 부여는 SUPER_USER 가 /api/super/set_role/{id} 또는
+        // /api/super/create_user 로만 할 수 있다.
+        employee.setRole(Role.DEFAULT);
+        employee.setUsername(userRegisterDTO.getUsername());
+        employee.setPassword(passwordEncoder.encode(userRegisterDTO.getPassword()));
+        userRepository.save(employee);
+```
+
+기존의 `String requestedRole = ...` 부터 `employee.setRole(role);` 까지를 위 세 줄로 교체한다.
+
+통과 확인:
+
+```bash
+cd apps/api && ./gradlew test --tests '*RegistrationSecurityTest*'; cd ../..
+```
+
+Expected: PASS 3개
+
+- [ ] **Step 5d: 부트스트랩 SUPER_USER 시드**
+
+역할 부여는 `SUPER_USER`만 할 수 있는데 가입으로는 `DEFAULT`만 만들어지므로, 최초 `SUPER_USER`가 필요하다.
+
+`apps/api/src/main/java/com/example/bitcomputer/config/DataInitializer.java`에 빈을 추가한다.
+
+```java
+    /**
+     * 최초 SUPER_USER 시드.
+     *
+     * 공개 가입은 항상 DEFAULT 이므로 역할을 부여할 주체가 하나는 있어야 한다.
+     * BOOTSTRAP_SUPERUSER_PASSWORD 가 비어 있으면 만들지 않는다 — 운영에서
+     * 기본 비밀번호 계정이 생기는 것을 막기 위해서다.
+     */
+    @Bean
+    @Order(2)
+    public CommandLineRunner initializeBootstrapSuperUser(UserRepository userRepository,
+                                                          PasswordEncoder passwordEncoder) {
+        return args -> {
+            String password = System.getenv("BOOTSTRAP_SUPERUSER_PASSWORD");
+            if (password == null || password.isBlank()) {
+                return;
+            }
+            if (userRepository.findByUsername("admin") != null) {
+                return;
+            }
+            Employee admin = new Employee();
+            admin.setName("bootstrap admin");
+            admin.setDeptId(1);
+            admin.setUsername("admin");
+            admin.setPassword(passwordEncoder.encode(password));
+            admin.setRole(Role.SUPER_USER);
+            userRepository.save(admin);
+        };
+    }
+```
+
+`.env.example`에 변수를 추가한다. Task 3에서 만든 `Auth` 절 아래에 넣는다.
+
+```bash
+python - <<'PY'
+from pathlib import Path
+p = Path("infra/.env.example")
+text = p.read_text(encoding="utf-8")
+anchor = "CORS_ALLOWED_ORIGINS=http://localhost:3000\n"
+addition = (
+    "\n# 최초 SUPER_USER(username: admin) 비밀번호.\n"
+    "# 비워 두면 계정을 만들지 않는다. 역할 부여 주체가 필요할 때만 채운다.\n"
+    "BOOTSTRAP_SUPERUSER_PASSWORD=\n"
+)
+p.write_text(text.replace(anchor, anchor + addition), encoding="utf-8")
+PY
+grep -n "BOOTSTRAP_SUPERUSER_PASSWORD" infra/.env.example
+```
+
+compose의 `spring-boot` `environment` 블록에도 전달한다.
+
+```yaml
+      BOOTSTRAP_SUPERUSER_PASSWORD: ${BOOTSTRAP_SUPERUSER_PASSWORD:-}
+```
+
 - [ ] **Step 6: 테스트가 통과하는지 확인**
 
 ```bash
@@ -2092,13 +2256,21 @@ Expected: PASS 8개
 ```bash
 git add apps/api/src/main/java/com/example/bitcomputer/config/SecurityConfig.java \
         apps/api/src/main/java/com/example/bitcomputer/jwt/JwtAuthenticationFilter.java \
+        apps/api/src/main/java/com/example/bitcomputer/serviceImpl/UserServiceImpl.java \
+        apps/api/src/main/java/com/example/bitcomputer/config/DataInitializer.java \
+        infra/.env.example infra/docker-compose.yml \
         apps/api/src/test/java/com/example/bitcomputer/config/SecurityConfigTest.java \
+        apps/api/src/test/java/com/example/bitcomputer/config/RegistrationSecurityTest.java \
         apps/api/src/test/java/com/example/bitcomputer/config/TestRedisConfig.java \
         apps/api/src/test/resources/application-test.properties \
         apps/api/build.gradle
 git commit -m "feat: 인증 활성화 및 역할 기반 접근제어 적용" -m "permitAll() 을 제거하고 JWT 필터를 다시 등록했다. 필터에 있던 하드코딩
 우회 경로 목록(/api/patients/, /api/agent/ 등)도 함께 제거했다.
-AI 엔드포인트는 임상 판단이 개입하므로 DOCTOR 전용으로 묶었다."
+AI 엔드포인트는 임상 판단이 개입하므로 DOCTOR 전용으로 묶었다.
+
+공개 가입이 요청 본문의 role 을 그대로 부여하던 권한 상승 경로를 막았다.
+가입은 항상 DEFAULT 이고, 역할 부여는 SUPER_USER 만 가능하다.
+최초 SUPER_USER 는 BOOTSTRAP_SUPERUSER_PASSWORD 가 설정된 경우에만 시드된다."
 ```
 
 ---
@@ -3407,6 +3579,7 @@ jobs:
             echo "RABBITMQ_PASSWORD=guest"
             echo "RABBITMQ_ERLANG_COOKIE=ci-cookie"
             echo "JWT_SECRET=${{ secrets.JWT_SECRET }}"
+            echo "BOOTSTRAP_SUPERUSER_PASSWORD=${{ secrets.BOOTSTRAP_SUPERUSER_PASSWORD }}"
             echo "LLM_PROVIDER=stub"
           } >> .env
       - name: up
@@ -3422,6 +3595,8 @@ jobs:
           done
           echo "api did not become ready"; exit 1
       - name: run e2e
+        env:
+          BOOTSTRAP_SUPERUSER_PASSWORD: ${{ secrets.BOOTSTRAP_SUPERUSER_PASSWORD }}
         run: |
           pip install pytest httpx
           python -m pytest tests/e2e -q
@@ -3440,6 +3615,7 @@ EOF
 gh secret set JWT_SECRET
 gh secret set MYSQL_ROOT_PASSWORD
 gh secret set ARANGO_PASSWORD
+gh secret set BOOTSTRAP_SUPERUSER_PASSWORD
 ```
 
 `JWT_SECRET`은 64바이트 이상이어야 한다. 값 생성:
@@ -3454,7 +3630,7 @@ openssl rand -base64 64
 gh secret list
 ```
 
-Expected: `ARANGO_PASSWORD`, `JWT_SECRET`, `MYSQL_ROOT_PASSWORD` 세 항목.
+Expected: `ARANGO_PASSWORD`, `BOOTSTRAP_SUPERUSER_PASSWORD`, `JWT_SECRET`, `MYSQL_ROOT_PASSWORD` 네 항목.
 
 - [ ] **Step 4: gitleaks 로컬 검증**
 
@@ -3507,31 +3683,57 @@ import pytest
 BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8080")
 
 
-def _register(client: httpx.Client, username: str, role: str) -> None:
-    """이미 있으면 409 가 오는데 그대로 진행한다."""
-    client.post(
-        "/api/user/register",
+PASSWORD = "TestPassw0rd!"
+BOOTSTRAP_PASSWORD = os.environ.get("BOOTSTRAP_SUPERUSER_PASSWORD", "")
+
+
+def _new_client() -> httpx.Client:
+    return httpx.Client(base_url=BASE_URL, timeout=60.0, follow_redirects=False)
+
+
+def _login(client: httpx.Client, username: str, password: str) -> httpx.Response:
+    return client.post("/api/user/login", json={"username": username, "password": password})
+
+
+def admin_client() -> httpx.Client:
+    """부트스트랩 SUPER_USER 로 로그인한다.
+
+    공개 가입은 항상 DEFAULT 이므로(Task 9), 역할이 있는 계정은 SUPER_USER 가
+    /api/super/create_user 로 만들어야 한다.
+    """
+    assert BOOTSTRAP_PASSWORD, (
+        "BOOTSTRAP_SUPERUSER_PASSWORD 가 필요하다. infra/.env 에 설정하고 "
+        "spring-boot 를 재기동해야 admin 계정이 시드된다."
+    )
+    client = _new_client()
+    response = _login(client, "admin", BOOTSTRAP_PASSWORD)
+    assert response.status_code == 200, f"admin 로그인 실패: {response.text}"
+    return client
+
+
+def login_as(role: str) -> httpx.Client:
+    """해당 역할의 계정을 준비하고 로그인한 클라이언트를 만든다."""
+    username = f"e2e_{role.lower()}"
+
+    if role == "SUPER_USER":
+        return admin_client()
+
+    admin = admin_client()
+    admin.post(
+        "/api/super/create_user",
+        headers=csrf_headers(admin),
         json={
             "name": username,
             "deptId": 1,
             "role": role,
             "username": username,
-            "password": "TestPassw0rd!",
+            "password": PASSWORD,
         },
-    )
+    )  # 이미 있으면 409 — 그대로 진행한다
+    admin.close()
 
-
-def login_as(role: str) -> httpx.Client:
-    """해당 역할로 로그인한 클라이언트를 만든다. 쿠키는 클라이언트가 보관한다."""
-    username = f"e2e_{role.lower()}"
-    client = httpx.Client(base_url=BASE_URL, timeout=60.0, follow_redirects=False)
-
-    _register(client, username, role)
-
-    response = client.post(
-        "/api/user/login",
-        json={"username": username, "password": "TestPassw0rd!"},
-    )
+    client = _new_client()
+    response = _login(client, username, PASSWORD)
     assert response.status_code == 200, f"{role} 로그인 실패: {response.text}"
     assert "access_token" in client.cookies, "로그인 응답에 access_token 쿠키가 없다"
     return client
@@ -3703,7 +3905,9 @@ EOF
 cd infra && LLM_PROVIDER=stub docker compose --env-file .env up -d --build && cd ..
 sleep 60
 pip install pytest httpx
-python -m pytest tests/e2e -v
+# infra/.env 의 BOOTSTRAP_SUPERUSER_PASSWORD 와 같은 값을 넘긴다
+BOOTSTRAP_SUPERUSER_PASSWORD="$(grep '^BOOTSTRAP_SUPERUSER_PASSWORD=' infra/.env | cut -d= -f2-)" \
+  python -m pytest tests/e2e -v
 ```
 
 Expected: 10개 통과.

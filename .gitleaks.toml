@@ -1,0 +1,17 @@
+title = "BitComputer gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "예시 파일과 테스트 픽스처는 검사에서 제외한다"
+paths = [
+  '''infra/\.env\.example''',
+  '''apps/api/src/test/resources/application-test\.properties''',
+  # ArangoDB _key 값(예: MENTION_530524451_DM)이 generic-api-key 규칙의
+  # 엔트로피 임계값에 걸리는 오탐. 실제 비밀값이 아닌 익명화된 진료 픽스처다.
+  '''services/prescription/patient_ctx\.visit_.*\.json''',
+  # application-test.properties 의 테스트용 jwt.secret 값을 그대로 인용한
+  # 설계 문서. 실제 값이 아니다.
+  '''Docs/superpowers/plans/2026-08-26-phase-a-foundation\.md''',
+]

@@ -1,0 +1,4 @@
+# path	sha256	url
+services/radiology-legacy/squid_exp1_256_mask/model.pth	1b51d9d77dc74ae2226009d1efd998494c9de72983a5e2cf75a67a2429ffe159	https://github.com/kjbddo/bitcomputer-emr/releases/download/models-v1/model.pth
+services/radiology-legacy/squid_exp1_256_mask/discriminator.pth	17c21989aac521f89c9e42aac5081f144e18c091089dcf6728109609c5aefd69	https://github.com/kjbddo/bitcomputer-emr/releases/download/models-v1/discriminator.pth
+services/radiology-legacy/utils/CheXmask-Database-main/Weights/SegmentationModel/bestMSE.pt	b76bbb8c8ad9774cdf3ac81c9edf04bcc800b3c7f7eacf24ce7249038f3c640f	https://github.com/kjbddo/bitcomputer-emr/releases/download/models-v1/bestMSE.pt

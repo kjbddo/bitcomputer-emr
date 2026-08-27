@@ -1,0 +1,161 @@
+{
+  "caseCount": 8,
+  "execution": {
+    "successfulCases": 8,
+    "errorCases": 0,
+    "errorsByMessage": {}
+  },
+  "toolMetrics": {
+    "micro": {
+      "precision": 0.882353,
+      "recall": 0.6,
+      "f1": 0.714286
+    },
+    "evaluatedCases": 8,
+    "macroF1": 0.691072,
+    "averageOrderScore": 0.5625,
+    "repeatCaseRate": 1.0,
+    "perTool": {
+      "Disease Validator": {
+        "tp": 7,
+        "fp": 0,
+        "fn": 1,
+        "precision": 1.0,
+        "recall": 0.875,
+        "f1": 0.933333
+      },
+      "Prescription Finder": {
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "Prescription Validator": {
+        "tp": 2,
+        "fp": 0,
+        "fn": 6,
+        "precision": 1.0,
+        "recall": 0.25,
+        "f1": 0.4
+      },
+      "Pubmed Loader": {
+        "tp": 1,
+        "fp": 1,
+        "fn": 0,
+        "precision": 0.5,
+        "recall": 1.0,
+        "f1": 0.666667
+      },
+      "X-ray Result Loader": {
+        "tp": 5,
+        "fp": 0,
+        "fn": 3,
+        "precision": 1.0,
+        "recall": 0.625,
+        "f1": 0.769231
+      }
+    }
+  },
+  "hallucinationMetrics": {
+    "judgedCases": 0,
+    "hallucinationRate": null,
+    "hallucinationDetectionRate": null,
+    "safetyPassRate": null
+  },
+  "failures": [
+    {
+      "caseId": "TOOL-001-NORMAL-MATCH",
+      "category": "NORMAL_MATCH",
+      "failureType": "METRIC_FAILURE",
+      "missingRequiredTools": [
+        "Prescription Validator",
+        "X-ray Result Loader"
+      ],
+      "unnecessaryTools": [],
+      "hasHallucination": false,
+      "unsupportedClaims": []
+    },
+    {
+      "caseId": "TOOL-002-XRAY-MISMATCH",
+      "category": "XRAY_MISMATCH",
+      "failureType": "METRIC_FAILURE",
+      "missingRequiredTools": [
+        "Prescription Validator",
+        "X-ray Result Loader"
+      ],
+      "unnecessaryTools": [],
+      "hasHallucination": false,
+      "unsupportedClaims": []
+    },
+    {
+      "caseId": "TOOL-003-NO-XRAY",
+      "category": "MISSING_XRAY",
+      "failureType": "METRIC_FAILURE",
+      "missingRequiredTools": [
+        "Disease Validator"
+      ],
+      "unnecessaryTools": [],
+      "hasHallucination": false,
+      "unsupportedClaims": []
+    },
+    {
+      "caseId": "TOOL-004-NO-PRESCRIPTION",
+      "category": "MISSING_PRESCRIPTION",
+      "failureType": "METRIC_FAILURE",
+      "missingRequiredTools": [
+        "Prescription Validator"
+      ],
+      "unnecessaryTools": [],
+      "hasHallucination": false,
+      "unsupportedClaims": []
+    },
+    {
+      "caseId": "TOOL-006-PUBMED-NEEDED",
+      "category": "LITERATURE_NEEDED",
+      "failureType": "METRIC_FAILURE",
+      "missingRequiredTools": [
+        "Prescription Validator"
+      ],
+      "unnecessaryTools": [],
+      "hasHallucination": false,
+      "unsupportedClaims": []
+    },
+    {
+      "caseId": "TOOL-007-DATA-INSUFFICIENT",
+      "category": "INSUFFICIENT_DATA",
+      "failureType": "METRIC_FAILURE",
+      "missingRequiredTools": [
+        "Prescription Validator"
+      ],
+      "unnecessaryTools": [
+        "Prescription Finder",
+        "Pubmed Loader"
+      ],
+      "hasHallucination": false,
+      "unsupportedClaims": []
+    },
+    {
+      "caseId": "TOOL-008-CARDIOMEGALY-CONFLICT",
+      "category": "XRAY_MISMATCH",
+      "failureType": "METRIC_FAILURE",
+      "missingRequiredTools": [
+        "Prescription Validator",
+        "X-ray Result Loader"
+      ],
+      "unnecessaryTools": [],
+      "hasHallucination": false,
+      "unsupportedClaims": []
+    }
+  ],
+  "runConfig": {
+    "scenarios": [
+      ".\\evals\\scenarios\\synthetic_tool_scenarios.jsonl"
+    ],
+    "agentUrl": "",
+    "judgeProviders": [],
+    "skipJudges": true,
+    "forceJudgeLabels": false
+  }
+}

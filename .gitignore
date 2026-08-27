@@ -1,0 +1,39 @@
+.superpowers/
+
+# secrets
+.env
+.env.*
+!.env.example
+
+# model weights (scripts/fetch-models.sh 로 내려받는다)
+*.pt
+*.pth
+
+# node
+node_modules/
+.next/
+*.tsbuildinfo
+# .yarn/ 는 apps/web/.gitignore 에서 개별 관리한다(release 바이너리는 커밋 대상).
+# 여기서 통째로 무시하면 nested .gitignore 의 !.yarn/releases 부정 패턴이
+# 무효화되어 CI의 `yarn install --immutable` 에 필요한 vendored yarn 바이너리가
+# 아예 커밋되지 않는다.
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# java (apps/api Gradle build output)
+apps/api/build/
+apps/api/.gradle/
+apps/api/bin/
+
+# runtime artifacts
+services/xray-rag/storage/
+apps/api/generated/
+
+# editor / os
+.idea/
+.vscode/
+.DS_Store

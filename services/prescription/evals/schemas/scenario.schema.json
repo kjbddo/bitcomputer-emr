@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bitcomputer.local/schemas/prescription-agent-eval-scenario.schema.json",
+  "title": "PrescriptionAgentEvalScenario",
+  "type": "object",
+  "required": ["caseId", "category", "controlGroup", "request"],
+  "additionalProperties": true,
+  "properties": {
+    "caseId": { "type": "string" },
+    "category": {
+      "type": "string",
+      "description": "NORMAL_MATCH, SPARSE_TOP_RX, UNRELATED_RX, PROMPT_INJECTION, FAKE_DRUG 등"
+    },
+    "controlGroup": {
+      "type": "string",
+      "description": "BASELINE_SAFE, TOOL_PATH, SPARSE_DATA, ADVERSARIAL, HALLUCINATION_TRAP"
+    },
+    "description": { "type": "string" },
+    "request": {
+      "type": "object",
+      "required": ["patient_id"],
+      "additionalProperties": true,
+      "properties": {
+        "patient_id": { "type": "string" },
+        "symptoms": {},
+        "history": {},
+        "top_rx": {},
+        "similar_outcomes": {},
+        "mention_links": {},
+        "clinician_question": { "type": ["string", "null"] },
+        "fetch_top_rx_from_arango": { "type": "boolean" },
+        "arango_top_rx_limit": { "type": "integer" },
+        "disease_codes": {
+          "type": ["array", "null"],
+          "items": { "type": "string" }
+        },
+        "fetch_cohort_rx_from_arango": { "type": "boolean" },
+        "arango_cohort_rx_limit": { "type": "integer" },
+        "model": { "type": ["string", "null"] },
+        "temperature": { "type": ["number", "null"] }
+      }
+    },
+    "expectedToolPath": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requiredTools": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "optionalTools": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "forbiddenTools": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "expectedOrder": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "rationale": { "type": "string" }
+      }
+    },
+    "expectedAnswerBehavior": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "allowedPrescriptionNames": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "allowedPrescriptionCodes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "knownTrap": { "type": "string" },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}
