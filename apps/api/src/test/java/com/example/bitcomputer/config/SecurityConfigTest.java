@@ -17,7 +17,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
 @ActiveProfiles("test")
-@org.springframework.context.annotation.Import(TestRedisConfig.class)
+@org.springframework.context.annotation.Import({TestRedisConfig.class, TestRabbitConfig.class})
 class SecurityConfigTest {
 
     @Autowired

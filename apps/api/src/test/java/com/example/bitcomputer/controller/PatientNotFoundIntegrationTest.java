@@ -1,6 +1,7 @@
 package com.example.bitcomputer.controller;
 
 import com.example.bitcomputer.config.CookieFactory;
+import com.example.bitcomputer.config.TestRabbitConfig;
 import com.example.bitcomputer.config.TestRedisConfig;
 import com.example.bitcomputer.entity.Role;
 import com.example.bitcomputer.jwt.JwtTokenProvider;
@@ -22,7 +23,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
 @ActiveProfiles("test")
-@Import(TestRedisConfig.class)
+@Import({TestRedisConfig.class, TestRabbitConfig.class})
 class PatientNotFoundIntegrationTest {
 
     @Autowired
