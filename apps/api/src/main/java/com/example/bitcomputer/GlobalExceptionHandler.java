@@ -40,8 +40,15 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ex.getMessage());
     }
 
+    // IllegalArgumentException 은 컨트롤러가 로컬에서 잡지 않은 온갖 입력 검증 오류에서도
+    // 던져진다(예: HistoryDiagnoseServiceImpl/HistoryDiseaseServiceImpl 의 "이미 존재함",
+    // "id가 유효하지 않음" 등 — 해당 컨트롤러들은 try/catch 가 없어 여기까지 올라온다).
+    // 401 로 응답하면 프론트엔드의 401 → /login 리다이렉트 인터셉터가 이를 "로그아웃"으로
+    // 오인해, 단순 입력 오류가 강제 로그아웃처럼 보인다(I5). 400 이 실제 성격에 맞다.
+    // UserController 는 자체 @ExceptionHandler(IllegalArgumentException.class) 로 409 를
+    // 응답하므로(중복 아이디는 진짜 충돌이다) 이 전역 핸들러보다 우선 적용돼 영향이 없다.
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<String> handleIllegalArgumentException(IllegalArgumentException ex) {
-        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid token: " + ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ex.getMessage());
     }
 }
