@@ -6,75 +6,16 @@ import { describe, expect, it } from "vitest";
 const WEB_ROOT = resolve(__dirname, "../../..");
 
 /**
- * 재스킨이 끝난 영역만 스캔한다. Task 12 에서 ["src"] 로 확대한다.
- * 존재하지 않는 경로는 조용히 건너뛴다.
+ * 전 코드베이스를 스캔한다. Task 12 에서 좁은 SCAN_DIRS + SCAN_FILES 이원 관리를
+ * 걷어내고 이 하나로 통일했다.
  */
-const SCAN_DIRS = [
-  "src/styles",
-  "src/components/ui",
-  "src/components/theme",
-  "src/components/common",
-  "src/app/(dashboard)",
-  "src/app/(auth)",
-];
+const SCAN_DIRS = ["src"];
 
 /**
- * 색상 리터럴이 허용되는 파일.
- *
- * `admin/users/page.module.css`는 SCAN_DIRS 가 관리자 경로까지 넓어지며 함께
- * 딸려 들어왔지만 Task 8 의 대상이 아니었다 — 테이블·배지 전면 재스킨이 필요한
- * 별도 분량이라 Task 12 가 처리한다. 임시 예외이며, 아래 "불필요해진 ALLOWED 예외"
- * 테스트가 그 파일이 정리되는 순간 실패해 이 항목의 제거를 강제한다.
+ * 색상 리터럴이 허용되는 파일. tokens.css 는 원시 램프 정의 그 자체이므로
+ * 영구 예외다.
  */
-const ALLOWED = new Set([
-  "src/styles/tokens.css",
-  "src/app/(auth)/admin/users/page.module.css",
-]);
-
-/**
- * SCAN_DIRS 가 아직 덮지 않는 디렉터리(`src/components/*`)에 살지만 개별적으로
- * 재스킨을 마친 파일들. 가드가 SCAN_DIRS 로만 순회하면 이 파일들은 검사 대상에서
- * 빠져 색상 리터럴이 조용히 되돌아와도 잡히지 않는다 — 그래서 파일 단위로 명시
- * 등록해 offences() 가 SCAN_DIRS 순회와 별도로 확인하게 한다.
- *
- * Task 8 이 재스킨했지만 보호하지 못하고 남겨둔 두 파일로 시작해, Task 10 이
- * 마이그레이션한 환자접수 화면 파일들을 더한다. Task 11 은 여기에 계속 추가하고,
- * Task 12 는 SCAN_DIRS 를 ["src"] 로 확대하며 이 목록 전체를 걷어낸다.
- */
-const SCAN_FILES: string[] = [
-  "src/components/Header.module.css",
-  "src/components/Sidebar.module.css",
-  "src/components/PatientForm.tsx",
-  "src/components/PatientForm.module.css",
-  "src/components/MedicalInfo.tsx",
-  "src/components/MedicalInfo.module.css",
-  "src/components/SpecialNote.tsx",
-  "src/components/SpecialNote.module.css",
-  "src/components/PatientInfoBar.tsx",
-  "src/components/PatientInfoBar.module.css",
-  "src/components/History.tsx",
-  "src/components/HistoryDiagnose.module.css",
-  "src/components/ActionBar.tsx",
-  "src/components/ActionBar.module.css",
-  "src/components/SearchPatientModal.tsx",
-  "src/components/SearchPatientModal.module.css",
-  "src/components/WaitingStatus.tsx",
-  "src/components/WaitingStatus.module.css",
-  "src/components/Calender.tsx",
-  "src/components/Calender.module.css",
-  "src/components/Disease.tsx",
-  "src/components/Disease.module.css",
-  "src/components/ViewDataBase.tsx",
-  "src/components/ViewDataBase.module.css",
-  "src/components/TimeLine.tsx",
-  "src/components/TimeLine.module.css",
-  "src/components/ChatbotPopup.tsx",
-  "src/components/ChatbotPopup.module.css",
-  "src/components/Diagnosis.tsx",
-  "src/components/Diagnosis.module.css",
-  "src/components/AIReport.tsx",
-  "src/components/AIReport.module.css",
-];
+const ALLOWED = new Set(["src/styles/tokens.css"]);
 
 /**
  * 영구 예외. 나머지 ALLOWED 항목은 임시이며, 아래 "불필요해진 ALLOWED 예외" 테스트가
@@ -141,14 +82,6 @@ function offences(): string[] {
       const rel = relative(WEB_ROOT, file).split(sep).join("/");
       if (ALLOWED.has(rel)) continue;
       found.push(...fileOffences(file, rel));
-    }
-  }
-  for (const rel of SCAN_FILES) {
-    const absolutePath = join(WEB_ROOT, ...rel.split("/"));
-    try {
-      found.push(...fileOffences(absolutePath, rel));
-    } catch {
-      // 파일이 없으면 조용히 건너뛴다 (SCAN_DIRS 순회와 동일한 정책).
     }
   }
   return found;
