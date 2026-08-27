@@ -21,11 +21,10 @@ const SCAN_DIRS = [
 /**
  * 색상 리터럴이 허용되는 파일.
  *
- * `admin/users/page.module.css`는 SCAN_DIRS 가 `src/app/(auth)/admin` 전체로
- * 넓어지며 함께 딸려 들어왔지만, Task 8 의 대상(`layout.tsx`/`layout.module.css`)이
- * 아니다 — 테이블·배지 전면 재스킨이 필요한 별도 분량이라 여기서 손대지 않는다.
- * Header.module.css/Sidebar.module.css 가 Task 12 까지 스캔 밖에 남는 것과 같은
- * 종류의 임시 예외이며, 후속 재스킨 태스크가 이 항목을 지우고 실제로 마이그레이션해야 한다.
+ * `admin/users/page.module.css`는 SCAN_DIRS 가 관리자 경로까지 넓어지며 함께
+ * 딸려 들어왔지만 Task 8 의 대상이 아니었다 — 테이블·배지 전면 재스킨이 필요한
+ * 별도 분량이라 Task 12 가 처리한다. 임시 예외이며, 아래 "불필요해진 ALLOWED 예외"
+ * 테스트가 그 파일이 정리되는 순간 실패해 이 항목의 제거를 강제한다.
  */
 const ALLOWED = new Set([
   "src/styles/tokens.css",

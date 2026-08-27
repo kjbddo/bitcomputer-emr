@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
+import AuthLinkSwap from "@/components/common/AuthLink";
 import { login } from "@/services/auth";
 import { Button, Field, Panel } from "@/components/ui";
 import styles from "./page.module.css";
@@ -65,9 +65,7 @@ export default function LoginPage() {
           </form>
         </Panel>
 
-        <p className={styles.footer}>
-          계정이 없으신가요? <Link href="/signup">회원가입</Link>
-        </p>
+        <AuthLinkSwap />
       </div>
     </div>
   );
