@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Badge, Button, EmptyState, Panel } from "@/components/ui";
+import { Badge, Button, EmptyState, Panel, rowActivateProps } from "@/components/ui";
 import styles from "./TimeLine.module.css";
 import { getPatientHistories } from "@/services/history";
 import type { HistoryEntry } from "@/types/history";
@@ -195,13 +195,12 @@ export default function TimeLine({
                         ? "더블클릭: 해당 내원 기록 불러오기"
                         : undefined
                     }
+                    {...(onHistoryEntryDoubleClick
+                      ? rowActivateProps<HTMLElement>(() => onHistoryEntryDoubleClick(entry))
+                      : {})}
                   >
                     <div className={styles.dateRow}>
                       <span className={styles.date}>{formatDate(entry.entryDate)}</span>
-                      <div className={styles.tags}>
-                        <Badge tone="accent">초진</Badge>
-                        <Badge tone="neutral">보험</Badge>
-                      </div>
                     </div>
                     <div className={styles.detail}>{formatSymptom(entry.symptomDetail)}</div>
                     <div className={styles.meta}>
