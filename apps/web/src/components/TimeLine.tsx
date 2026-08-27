@@ -124,6 +124,7 @@ export default function TimeLine({
   return (
     <Panel
       className={styles.container}
+      aria-label="환자 내원 타임라인"
       title="내원정보 TimeLine"
       actions={
         <div className={styles.yearNav}>

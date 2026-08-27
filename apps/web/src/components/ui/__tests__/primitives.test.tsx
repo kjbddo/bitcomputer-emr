@@ -20,6 +20,17 @@ describe("Panel", () => {
     expect(screen.getByRole("button", { name: "추가" })).toBeInTheDocument();
   });
 
+  // 이름 없는 <section> 은 ARIA 랜드마크로 계산되지 않는다. 이관 전 자체 셸이
+  // aria-label 을 갖고 있던 컴포넌트(TimeLine)가 그것을 잃지 않도록 통과시킨다.
+  it("aria-label 을 section 에 전달해 region 랜드마크가 되게 한다", () => {
+    render(
+      <Panel aria-label="환자 내원 타임라인" title="내원정보 TimeLine">
+        본문
+      </Panel>
+    );
+    expect(screen.getByRole("region", { name: "환자 내원 타임라인" })).toBeInTheDocument();
+  });
+
   it("title 없이 actions 만 있어도 actions 를 렌더한다", () => {
     render(<Panel actions={<button type="button">새로고침</button>}>본문</Panel>);
     expect(screen.getByRole("button", { name: "새로고침" })).toBeInTheDocument();
