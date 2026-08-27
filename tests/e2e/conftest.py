@@ -71,11 +71,17 @@ def login_as(role: str) -> httpx.Client:
 def csrf_headers(client: httpx.Client) -> dict[str, str]:
     """상태 변경 요청에 필요한 CSRF 헤더를 만든다.
 
-    XSRF-TOKEN 쿠키는 로그인 응답을 포함해 매 응답마다 내려온다
-    (CsrfCookieFilter). 여기서는 호출 시점의 쿠키 잔에서 값을 읽으므로
-    반드시 토큰을 발급하는 요청 이후에 호출해야 한다.
+    서버(CookieCsrfTokenRepository + CsrfCookieFilter 조합)는 XSRF-TOKEN 쿠키를
+    "실려 들어온" 요청마다 그 자리에서 무효화(Max-Age=0)하고, 쿠키가 없는 요청에
+    한해서만 새 토큰을 발급한다 — 사실상 1회용이다. 그래서 뮤테이션 요청을
+    연달아 보내면 두 번째 요청부터는 클라이언트가 들고 있는 토큰이 이미 죽어
+    있다. 토큰이 없을 때는 가벼운 GET(공개 엔드포인트)으로 새 토큰을 먼저
+    받아온 뒤 그 값을 헤더에 실어 보낸다.
     """
     token = client.cookies.get("XSRF-TOKEN")
+    if not token:
+        client.get("/actuator/health")
+        token = client.cookies.get("XSRF-TOKEN")
     return {"X-XSRF-TOKEN": token} if token else {}
 
 
