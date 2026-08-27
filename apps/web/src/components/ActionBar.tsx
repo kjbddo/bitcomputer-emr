@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Button } from "@/components/ui";
 import styles from "./ActionBar.module.css";
 import SearchPatientModal from "./SearchPatientModal";
 import { PatientInfo } from "./PatientInfoBar";
@@ -36,23 +37,17 @@ export default function ActionBar({ onPatientSelect, onRegisterClick }: ActionBa
         </div>
 
         <div className={styles.rightSection}>
-          <button
-            className={`${styles.button} ${styles.registerButton}`}
-            onClick={onRegisterClick}
-          >
+          <Button type="button" variant="primary" onClick={onRegisterClick}>
             환자 등록
-          </button>
-          <button
-            className={`${styles.button} ${styles.searchButton}`}
-            onClick={handleSearchClick}
-          >
+          </Button>
+          <Button type="button" variant="secondary" onClick={handleSearchClick}>
             환자 조회
-          </button>
+          </Button>
         </div>
       </div>
 
       <SearchPatientModal
-        isOpen={isSearchModalOpen}
+        open={isSearchModalOpen}
         onClose={closeSearchModal}
         title="환자 조회"
         onSelectPatient={(patient) => {
