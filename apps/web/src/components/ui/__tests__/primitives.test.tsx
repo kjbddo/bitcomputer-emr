@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { Badge, Button, EmptyState, Panel } from "../index";
+import { Badge, Button, EmptyState, Field, Panel, Table } from "../index";
 
 describe("Panel", () => {
   it("title 을 헤딩으로 렌더한다", () => {
@@ -74,5 +74,58 @@ describe("EmptyState", () => {
     render(<EmptyState title="내역이 없습니다" description="환자를 먼저 선택하세요" />);
     expect(screen.getByText("내역이 없습니다")).toBeInTheDocument();
     expect(screen.getByText("환자를 먼저 선택하세요")).toBeInTheDocument();
+  });
+});
+
+describe("Field", () => {
+  it("라벨을 입력에 연결한다", () => {
+    render(
+      <Field label="환자명" htmlFor="patient-name">
+        <input id="patient-name" />
+      </Field>
+    );
+    expect(screen.getByLabelText("환자명")).toBeInTheDocument();
+  });
+
+  it("error 를 alert 로 노출하고 aria-describedby 로 연결한다", () => {
+    render(
+      <Field label="환자명" htmlFor="patient-name" error="필수 항목입니다">
+        <input id="patient-name" />
+      </Field>
+    );
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("필수 항목입니다");
+    expect(screen.getByLabelText("환자명")).toHaveAttribute("aria-describedby", alert.id);
+  });
+
+  it("required 면 입력에 required 를 전달한다", () => {
+    render(
+      <Field label="환자명" htmlFor="patient-name" required>
+        <input id="patient-name" />
+      </Field>
+    );
+    expect(screen.getByLabelText("환자명")).toBeRequired();
+  });
+});
+
+describe("Table", () => {
+  it("table 시맨틱을 유지한다", () => {
+    render(
+      <Table>
+        <thead>
+          <tr>
+            <th scope="col">이름</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>김환자</td>
+          </tr>
+        </tbody>
+      </Table>
+    );
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "이름" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "김환자" })).toBeInTheDocument();
   });
 });

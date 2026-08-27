@@ -1,0 +1,48 @@
+.scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-base);
+}
+
+.table th {
+  padding: 0 var(--space-3);
+  height: var(--row-height);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 0 var(--space-3);
+  height: var(--row-height);
+  border-top: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.table tbody tr:hover {
+  background: var(--accent-bg);
+}
+
+.table tbody tr[aria-selected="true"] {
+  background: var(--accent-bg);
+  box-shadow: inset 2px 0 0 var(--accent-fill);
+}
+
+.dense th,
+.dense td {
+  height: var(--control-height-sm);
+}
+
+.sticky thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
