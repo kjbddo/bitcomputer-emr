@@ -11,21 +11,8 @@
   --slate-900: #0f172a;
   --slate-950: #020617;
   --white: #ffffff;
+  /* 램프 스톱 사이에 끼워 넣는 원시값 — 다크 모드 오버레이 전용 색으로, 어떤 슬레이트 램프 단계와도 일치하지 않는다. */
   --overlay-dark: #293548;
-  /*
-   * --white 와 값이 같은 원시 토큰. globals.css 의 .print-surface 가 이 값을
-   * 참조한다. 두 가지 이유로 var(--white) 참조가 아니라 hex 리터럴로 다시 적는다:
-   *
-   * 1. 색상 리터럴 가드(no-hardcoded-color.test.ts)의 CSS_COLOR_KEYWORD 정규식은
-   *    `.css` 선언 값에서 "white" 라는 부분 문자열을 단어 경계로 잡아낸다.
-   *    `var(--white)` 를 그대로 non-tokens.css 파일에서 참조하면 "--white" 안의
-   *    "white" 가 그 정규식에 그대로 걸린다(가드는 tokens.css 만 예외 처리한다).
-   * 2. 대비비 가드(contrast.test.ts)는 라이트 블록의 값이 `var(...)` 로 시작하면
-   *    "의미 토큰"으로 보고 다크 블록에도 같은 이름이 있어야 한다고 요구한다.
-   *    이 토큰은 테마를 따라가지 않도록 고정하는 것이 목적이라 다크 블록에
-   *    재정의가 있으면 안 된다 — var() 참조가 아니라 원시 값이어야 그 분류를
-   *    피한다.
-   */
 
   --blue-100: #dbeafe;
   --blue-400: #60a5fa;
