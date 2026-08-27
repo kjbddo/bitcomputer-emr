@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { Badge, Button, EmptyState, Panel } from "@/components/ui";
 import styles from "./TimeLine.module.css";
 import { getPatientHistories } from "@/services/history";
 import type { HistoryEntry } from "@/types/history";
@@ -121,103 +122,101 @@ export default function TimeLine({
   }, [groupedByYear]);
 
   return (
-    <section className={styles.container} aria-label="환자 내원 타임라인">
-      <div className={styles.header}>
-        <h3 className={styles.title}>내원정보 TimeLine</h3>
+    <Panel
+      className={styles.container}
+      title="내원정보 TimeLine"
+      actions={
         <div className={styles.yearNav}>
-          <button type="button" className={styles.arrowButton} disabled>
+          <Button type="button" variant="ghost" size="sm" disabled aria-label="이전 연도">
             ◀
-          </button>
+          </Button>
           <span>{activeYear}</span>
-          <button type="button" className={styles.arrowButton} disabled>
+          <Button type="button" variant="ghost" size="sm" disabled aria-label="다음 연도">
             ▶
-          </button>
+          </Button>
         </div>
-      </div>
-
-      <div className={styles.content}>
-        {!patientId ? (
-          <div className={styles.placeholder}>환자를 선택하면 내원 기록을 확인할 수 있습니다.</div>
-        ) : loading ? (
-          <div className={styles.loading}>
-            <div className={styles.skeleton} />
-            <div className={styles.skeleton} />
-            <div className={styles.skeleton} />
-          </div>
-        ) : error ? (
-          <div className={styles.error}>{error}</div>
-        ) : (
-          <>
-            {currentVisit ? (
-              <article className={`${styles.item} ${styles.receptionItem}`}>
-                <div className={styles.dateRow}>
-                  <span className={styles.date}>
-                    {displayValue(currentVisit.visitDate ?? currentVisit.entryDate)}
-                  </span>
+      }
+    >
+      {!patientId ? (
+        <EmptyState title="환자를 선택하면 내원 기록을 확인할 수 있습니다." />
+      ) : loading ? (
+        <div className={styles.loading}>
+          <div className={styles.skeleton} />
+          <div className={styles.skeleton} />
+          <div className={styles.skeleton} />
+        </div>
+      ) : error ? (
+        <EmptyState title={error} />
+      ) : (
+        <>
+          {currentVisit ? (
+            <article className={`${styles.item} ${styles.receptionItem}`}>
+              <div className={styles.dateRow}>
+                <Badge tone="accent">접수</Badge>
+                <span className={styles.date}>
+                  {displayValue(currentVisit.visitDate ?? currentVisit.entryDate)}
+                </span>
+              </div>
+              <div className={styles.infoGrid}>
+                <div>
+                  <span className={styles.infoLabel}>진료과목</span>
+                  <strong>{displayValue(currentVisit.department)}</strong>
                 </div>
-                <div className={styles.infoGrid}>
-                  <div>
-                    <span className={styles.infoLabel}>진료과목</span>
-                    <strong>{displayValue(currentVisit.department)}</strong>
-                  </div>
-                  <div>
-                    <span className={styles.infoLabel}>진료의사</span>
-                    <strong>{displayValue(currentVisit.doctor)}</strong>
-                  </div>
-                  <div className={styles.infoWide}>
-                    <span className={styles.infoLabel}>증상</span>
-                    <strong>{displayValue(currentVisit.symptom)}</strong>
-                  </div>
+                <div>
+                  <span className={styles.infoLabel}>진료의사</span>
+                  <strong>{displayValue(currentVisit.doctor)}</strong>
                 </div>
-              </article>
-            ) : null}
-            {histories.length === 0 ? (
-          <div className={styles.emptyState}>등록된 내원 기록이 없습니다.</div>
-        ) : (
-          [...groupedByYear.entries()].map(([year, entries]) => (
-            <div key={year} className={styles.list} aria-label={`${year}년 내원 기록`}>
-              {entries.map((entry) => (
-                <article
-                  key={entry.id}
-                  className={`${styles.item}${
-                    onHistoryEntryDoubleClick ? ` ${styles.itemClickable}` : ""
-                  }`}
-                  onDoubleClick={
-                    onHistoryEntryDoubleClick
-                      ? () => onHistoryEntryDoubleClick(entry)
-                      : undefined
-                  }
-                  title={
-                    onHistoryEntryDoubleClick
-                      ? "더블클릭: 해당 내원 기록 불러오기"
-                      : undefined
-                  }
-                >
-                  <div className={styles.dateRow}>
-                  <span className={styles.date}>{formatDate(entry.entryDate)}</span>
-                    <div className={styles.tags}>
-                      <span className={styles.tag}>초진</span>
-                      <span>보험</span>
+                <div className={styles.infoWide}>
+                  <span className={styles.infoLabel}>증상</span>
+                  <strong>{displayValue(currentVisit.symptom)}</strong>
+                </div>
+              </div>
+            </article>
+          ) : null}
+          {histories.length === 0 ? (
+            <EmptyState title="등록된 내원 기록이 없습니다." />
+          ) : (
+            [...groupedByYear.entries()].map(([year, entries]) => (
+              <div key={year} className={styles.list} aria-label={`${year}년 내원 기록`}>
+                {entries.map((entry) => (
+                  <article
+                    key={entry.id}
+                    className={`${styles.item}${
+                      onHistoryEntryDoubleClick ? ` ${styles.itemClickable}` : ""
+                    }`}
+                    onDoubleClick={
+                      onHistoryEntryDoubleClick
+                        ? () => onHistoryEntryDoubleClick(entry)
+                        : undefined
+                    }
+                    title={
+                      onHistoryEntryDoubleClick
+                        ? "더블클릭: 해당 내원 기록 불러오기"
+                        : undefined
+                    }
+                  >
+                    <div className={styles.dateRow}>
+                      <span className={styles.date}>{formatDate(entry.entryDate)}</span>
+                      <div className={styles.tags}>
+                        <Badge tone="accent">초진</Badge>
+                        <Badge tone="neutral">보험</Badge>
+                      </div>
                     </div>
-                  </div>
-                  <div className={styles.detail}>{formatSymptom(entry.symptomDetail)}</div>
-                  <div className={styles.meta}>
-                    <span>담당의 ID: {entry.employeeId}</span>
-                    <span>진료과: {entry.deptId}</span>
-                  </div>
-                  <div className={styles.statusRow}>
-                    <span>진료비 : ₩ 0</span>
-                  </div>
-                </article>
-              ))}
-            </div>
-          ))
-            )}
-          </>
-        )}
-      </div>
-    </section>
+                    <div className={styles.detail}>{formatSymptom(entry.symptomDetail)}</div>
+                    <div className={styles.meta}>
+                      <span>담당의 ID: {entry.employeeId}</span>
+                      <span>진료과: {entry.deptId}</span>
+                    </div>
+                    <div className={styles.statusRow}>
+                      <span>진료비 : ₩ 0</span>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ))
+          )}
+        </>
+      )}
+    </Panel>
   );
 }
-
-
