@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, forwardRef, useImperativeHandle } from "react";
+import { Button, Field, Panel } from "@/components/ui";
 import styles from "./PatientForm.module.css";
 import { post } from "@/services/http/client";
 
@@ -186,125 +187,112 @@ const PatientForm = forwardRef<PatientFormRef>((props, ref) => {
   };
 
   return (
-    <div className={styles.container}>
-      <div className={styles.header}>
-        <h3>환자 정보 입력</h3>
-        <button
-          type="button"
-          onClick={fillSampleData}
-          className={styles.sampleButton}
-        >
+    <Panel
+      className={styles.container}
+      title="환자 정보 입력"
+      actions={
+        <Button type="button" variant="secondary" size="sm" onClick={fillSampleData}>
           샘플 데이터
-        </button>
-      </div>
-      <div className={styles.content}>
-        <form className={styles.form}>
+        </Button>
+      }
+    >
+      <form className={styles.form}>
         <div className={styles.row}>
-          <label className={styles.field}>
-            <span className={styles.label}>환자명 *</span>
+          <Field label="환자명" htmlFor="patient-name" required>
             <input
+              id="patient-name"
               type="text"
               name="name"
               value={formData.name}
               onChange={handleChange}
-              className={styles.input}
               required
             />
-          </label>
+          </Field>
 
-          <label className={styles.field}>
-            <span className={styles.label}>생년월일 *</span>
+          <Field label="생년월일" htmlFor="patient-birth-date" required>
             <input
+              id="patient-birth-date"
               type="date"
               name="birthDate"
               value={formData.birthDate}
               onChange={handleChange}
-              className={styles.input}
               required
             />
-          </label>
+          </Field>
         </div>
 
         <div className={styles.row}>
-          <label className={styles.field}>
-            <span className={styles.label}>연락처 *</span>
+          <Field label="연락처" htmlFor="patient-phone" required>
             <input
+              id="patient-phone"
               type="tel"
               name="phone"
               value={formData.phone}
               onChange={handleChange}
               placeholder="010-0000-0000"
-              className={styles.input}
               required
             />
-          </label>
+          </Field>
 
-          <label className={styles.field}>
-            <span className={styles.label}>성별 *</span>
+          <Field label="성별" htmlFor="patient-gender" required>
             <select
+              id="patient-gender"
               name="gender"
               value={formData.gender}
               onChange={handleChange}
-              className={styles.input}
               required
             >
               <option value="M">남성</option>
               <option value="F">여성</option>
             </select>
-          </label>
+          </Field>
         </div>
 
-        <label className={styles.field}>
-          <span className={styles.label}>주민등록번호 *</span>
+        <Field label="주민등록번호" htmlFor="patient-identity-number" required>
           <input
+            id="patient-identity-number"
             type="text"
             name="identityNumber"
             value={formData.identityNumber}
             onChange={handleChange}
             placeholder="000000-0000000"
-            className={styles.input}
             required
           />
-        </label>
+        </Field>
 
-        <label className={styles.field}>
-          <span className={styles.label}>내원번호 *</span>
+        <Field label="내원번호" htmlFor="patient-visit-number" required>
           <input
+            id="patient-visit-number"
             type="text"
             name="visitNumber"
             value={formData.visitNumber}
             onChange={handleChange}
             placeholder="예: 530524502"
-            className={styles.input}
             required
           />
-        </label>
+        </Field>
 
-        <label className={styles.field}>
-          <span className={styles.label}>주소</span>
+        <Field label="주소" htmlFor="patient-address">
           <input
+            id="patient-address"
             type="text"
             name="address"
             value={formData.address}
             onChange={handleChange}
-            className={styles.input}
           />
-        </label>
+        </Field>
 
-        <label className={styles.field}>
-          <span className={styles.label}>증상</span>
+        <Field label="증상" htmlFor="patient-symptoms">
           <textarea
+            id="patient-symptoms"
             name="symptoms"
             value={formData.symptoms}
             onChange={handleChange}
             rows={3}
-            className={styles.textarea}
           />
-        </label>
-
+        </Field>
       </form>
-      </div>
-    </div>
+    </Panel>
   );
 });
 

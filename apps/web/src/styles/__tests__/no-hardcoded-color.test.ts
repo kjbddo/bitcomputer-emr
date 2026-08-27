@@ -32,6 +32,27 @@ const ALLOWED = new Set([
 ]);
 
 /**
+ * SCAN_DIRS 가 아직 덮지 않는 디렉터리(`src/components/*`)에 살지만 개별적으로
+ * 재스킨을 마친 파일들. 가드가 SCAN_DIRS 로만 순회하면 이 파일들은 검사 대상에서
+ * 빠져 색상 리터럴이 조용히 되돌아와도 잡히지 않는다 — 그래서 파일 단위로 명시
+ * 등록해 offences() 가 SCAN_DIRS 순회와 별도로 확인하게 한다.
+ *
+ * Task 8 이 재스킨했지만 보호하지 못하고 남겨둔 두 파일로 시작해, Task 10 이
+ * 마이그레이션한 환자접수 화면 파일들을 더한다. Task 11 은 여기에 계속 추가하고,
+ * Task 12 는 SCAN_DIRS 를 ["src"] 로 확대하며 이 목록 전체를 걷어낸다.
+ */
+const SCAN_FILES: string[] = [
+  "src/components/Header.module.css",
+  "src/components/Sidebar.module.css",
+  "src/components/PatientForm.tsx",
+  "src/components/PatientForm.module.css",
+  "src/components/MedicalInfo.tsx",
+  "src/components/MedicalInfo.module.css",
+  "src/components/SpecialNote.tsx",
+  "src/components/SpecialNote.module.css",
+];
+
+/**
  * 영구 예외. 나머지 ALLOWED 항목은 임시이며, 아래 "불필요해진 ALLOWED 예외" 테스트가
  * 해당 파일이 정리되는 순간 실패해 항목 제거를 강제한다.
  */
@@ -96,6 +117,14 @@ function offences(): string[] {
       const rel = relative(WEB_ROOT, file).split(sep).join("/");
       if (ALLOWED.has(rel)) continue;
       found.push(...fileOffences(file, rel));
+    }
+  }
+  for (const rel of SCAN_FILES) {
+    const absolutePath = join(WEB_ROOT, ...rel.split("/"));
+    try {
+      found.push(...fileOffences(absolutePath, rel));
+    } catch {
+      // 파일이 없으면 조용히 건너뛴다 (SCAN_DIRS 순회와 동일한 정책).
     }
   }
   return found;
