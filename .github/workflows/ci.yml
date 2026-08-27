@@ -113,9 +113,18 @@ jobs:
             echo "BOOTSTRAP_SUPERUSER_PASSWORD=${{ secrets.BOOTSTRAP_SUPERUSER_PASSWORD }}"
             echo "LLM_PROVIDER=stub"
           } >> .env
+      - name: free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       - name: up
         working-directory: infra
-        run: docker compose --env-file .env up -d --build
+        # E2E 는 로그인 -> 환자 -> 상병 -> AI 처방 추천 경로만 검증한다.
+        # torch 를 설치하는 flask-radiology / xraygraph 와 이 경로에 관여하지 않는
+        # certificate-api / validation-agent / frontend 는 빌드하지 않는다.
+        # 러너 디스크(14GB)로는 전체 이미지를 빌드할 수 없다.
+        run: |
+          docker compose --env-file .env up -d --build             mysql redis rabbitmq arangodb arango-init prescription-api spring-boot
       - name: wait for api
         run: |
           for i in $(seq 1 60); do
