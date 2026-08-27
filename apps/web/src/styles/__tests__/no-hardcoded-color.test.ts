@@ -13,8 +13,9 @@ const SCAN_DIRS = [
   "src/styles",
   "src/components/ui",
   "src/components/theme",
+  "src/components/common",
   "src/app/(dashboard)",
-  "src/app/(auth)/admin",
+  "src/app/(auth)",
 ];
 
 /**
