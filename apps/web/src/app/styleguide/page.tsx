@@ -173,24 +173,24 @@ export default function StyleguidePage() {
       <Section title="Field" description="기본 / hint / error / required">
         <form className={styles.form} onSubmit={(event) => event.preventDefault()}>
           <Field label="환자명" htmlFor="field-plain">
-            <input id="field-plain" className={styles.input} placeholder="예: 홍길동" />
+            <input id="field-plain" placeholder="예: 홍길동" />
           </Field>
 
           <Field label="연락처" htmlFor="field-hint" hint="'-' 없이 숫자만 입력합니다.">
-            <input id="field-hint" className={styles.input} placeholder="01012345678" />
+            <input id="field-hint" placeholder="01012345678" />
           </Field>
 
           <Field label="주민등록번호" htmlFor="field-error" error="형식이 올바르지 않습니다.">
-            <input id="field-error" className={styles.input} defaultValue="000000-0000000" />
+            <input id="field-error" defaultValue="000000-0000000" />
           </Field>
 
           <Field label="진료과" htmlFor="field-required" required>
-            <input id="field-required" className={styles.input} placeholder="예: 내과" />
+            <input id="field-required" placeholder="예: 내과" />
           </Field>
         </form>
       </Section>
 
-      <Section title="Table" description="기본 / dense / stickyHeader / 선택 행(aria-selected)">
+      <Section title="Table" description="기본 / dense / stickyHeader / 선택 행(aria-current)">
         <div className={styles.grid}>
           <Panel title="기본" padding="none">
             <Table>
@@ -239,31 +239,29 @@ export default function StyleguidePage() {
           </Panel>
 
           <Panel title="stickyHeader (스크롤하며 확인)" padding="none">
-            <div className={styles.tableScrollBox}>
-              <Table stickyHeader>
-                <thead>
-                  <tr>
-                    <th>이름</th>
-                    <th>시간</th>
-                    <th>상태</th>
+            <Table stickyHeader maxHeight={180}>
+              <thead>
+                <tr>
+                  <th>이름</th>
+                  <th>시간</th>
+                  <th>상태</th>
+                </tr>
+              </thead>
+              <tbody>
+                {QUEUE_ROWS.map((row) => (
+                  <tr key={row.id}>
+                    <td>{row.name}</td>
+                    <td>{row.time}</td>
+                    <td>
+                      <Badge tone={row.tone}>{row.label}</Badge>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {QUEUE_ROWS.map((row) => (
-                    <tr key={row.id}>
-                      <td>{row.name}</td>
-                      <td>{row.time}</td>
-                      <td>
-                        <Badge tone={row.tone}>{row.label}</Badge>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </Table>
-            </div>
+                ))}
+              </tbody>
+            </Table>
           </Panel>
 
-          <Panel title="선택 행(aria-selected)" padding="none">
+          <Panel title="선택 행(aria-current)" padding="none">
             <Table>
               <thead>
                 <tr>
@@ -274,7 +272,7 @@ export default function StyleguidePage() {
               </thead>
               <tbody>
                 {QUEUE_ROWS.slice(0, 4).map((row) => (
-                  <tr key={row.id} aria-selected={row.id === "2" || undefined}>
+                  <tr key={row.id} aria-current={row.id === "2" || undefined}>
                     <td>{row.name}</td>
                     <td>{row.time}</td>
                     <td>
