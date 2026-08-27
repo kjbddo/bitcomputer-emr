@@ -49,8 +49,8 @@ public class UserServiceImpl implements UserService {
         }
         employee.setDeptId(deptId);
         // 공개 가입은 항상 DEFAULT 다. 요청 본문의 role 은 신뢰하지 않는다.
-        // 역할 부여는 SUPER_USER 가 /api/super/set_role/{id} 또는
-        // /api/super/create_user 로만 할 수 있다.
+        // 역할 부여는 SUPER_USER 가 /api/admin/users/{id}/role 또는
+        // /api/admin/users 로만 할 수 있다.
         employee.setRole(Role.DEFAULT);
         employee.setUsername(userRegisterDTO.getUsername());
         employee.setPassword(passwordEncoder.encode(userRegisterDTO.getPassword()));

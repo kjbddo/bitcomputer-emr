@@ -25,14 +25,14 @@ import com.example.bitcomputer.model.RoleUpdateDTO;
 import com.example.bitcomputer.model.UserRegisterDTO;
 
 @RestController
-@RequestMapping("/api/super")
-public class SuperUserController {
+@RequestMapping("/api/admin")
+public class AdminController {
 
     private final EmployeeRepository employeeRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
 
-    public SuperUserController(EmployeeRepository employeeRepository,
+    public AdminController(EmployeeRepository employeeRepository,
                                PasswordEncoder passwordEncoder,
                                JwtTokenProvider jwtTokenProvider) {
         this.employeeRepository = employeeRepository;
@@ -40,7 +40,7 @@ public class SuperUserController {
         this.jwtTokenProvider = jwtTokenProvider;
     }
 
-    @PutMapping("/set_role/{id}")
+    @PutMapping("/users/{id}/role")
     public ResponseEntity<String> setRole(
             @PathVariable int id,
             @RequestBody RoleUpdateDTO request,
@@ -72,7 +72,7 @@ public class SuperUserController {
         return ResponseEntity.ok("Role set successfully");
     }
 
-    @PostMapping("/create_user")
+    @PostMapping("/users")
     public ResponseEntity<String> createUser(
             @RequestBody UserRegisterDTO request,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
@@ -108,7 +108,7 @@ public class SuperUserController {
         return ResponseEntity.status(HttpStatus.CREATED).body("User created successfully");
     }
 
-    @GetMapping("/get_all_users")
+    @GetMapping("/users")
     public ResponseEntity<?> getAllEmployees(
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         ResponseEntity<String> authError = validateSuperUser(authHeader);

@@ -10,6 +10,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -22,6 +23,15 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(EntityNotFoundException.class)
     public ResponseEntity<String> handleEntityNotFound(EntityNotFoundException ex) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ex.getMessage());
+    }
+
+    // NoResourceFoundException 은 RuntimeException 의 하위 타입이라(ErrorResponseException
+    // 경유), 이 핸들러가 없으면 아래 handleRuntimeException/handleGeneralException 이
+    // 먼저 잡아 매핑되지 않은 모든 경로를 무조건 500 으로 응답해 버린다. 원래 Spring
+    // 이 던지는 상태 그대로(404 Not Found) 응답하도록 명시적으로 처리한다.
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<String> handleNoResourceFound(NoResourceFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body("리소스를 찾을 수 없습니다.");
     }
 
     // ResponseStatusException 은 RuntimeException 의 하위 타입이라, 이 핸들러가 없으면

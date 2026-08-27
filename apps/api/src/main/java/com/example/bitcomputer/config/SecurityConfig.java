@@ -105,7 +105,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
                 // ── SUPER_USER 전용 ──
-                .requestMatchers("/api/super/**", "/api/audit/**").hasRole("SUPER_USER")
+                .requestMatchers("/api/admin/**", "/api/audit/**").hasRole("SUPER_USER")
 
                 // ── AI 기능: 임상 판단이 개입하므로 DOCTOR 전용 ──
                 .requestMatchers("/api/agent/**", "/api/ai/**",
