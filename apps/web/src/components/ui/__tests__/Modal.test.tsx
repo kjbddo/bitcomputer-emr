@@ -63,7 +63,10 @@ describe("Modal", () => {
         본문
       </Modal>
     );
-    fireEvent.click(screen.getByRole("dialog"));
+    const dialog = screen.getByRole("dialog");
+    // 실제 브라우저 클릭은 항상 같은 대상에서 mousedown 이 먼저 일어난다.
+    fireEvent.mouseDown(dialog);
+    fireEvent.click(dialog);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -75,6 +78,22 @@ describe("Modal", () => {
       </Modal>
     );
     fireEvent.click(screen.getByText("본문"));
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  // 콘텐츠(예: textarea)에서 드래그로 텍스트를 선택하다가 마우스를 백드롭
+  // 위에서 놓으면, 브라우저가 만드는 click 이벤트의 target 은 mousedown·
+  // mouseup 대상의 공통 조상인 <dialog> 자신이 된다 — 백드롭 클릭과
+  // 구분되지 않아 의도치 않게 닫혀버린다(실제 경로: AI 제안 거부로 이어짐).
+  it("콘텐츠에서 시작한 드래그가 백드롭에서 끝나도 onClose 를 호출하지 않는다", () => {
+    const onClose = vi.fn();
+    render(
+      <Modal open onClose={onClose} title="환자 검색">
+        본문
+      </Modal>
+    );
+    fireEvent.mouseDown(screen.getByText("본문"));
+    fireEvent.click(screen.getByRole("dialog"));
     expect(onClose).not.toHaveBeenCalled();
   });
 });
