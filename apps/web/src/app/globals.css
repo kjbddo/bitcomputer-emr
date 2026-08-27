@@ -60,3 +60,34 @@ textarea:disabled {
 table {
   border-collapse: collapse;
 }
+
+/*
+ * 인쇄/PDF 캡처 스코프.
+ *
+ * MedicalCertificate 는 html2canvas 로 화면을 캡처해 PDF로 뽑는다. html2canvas 는
+ * getComputedStyle 로 이미 해석된 값을 읽으므로, 다크 모드에서 캡처하면 CSS 변수가
+ * 다크 값으로 해석되어 검은 배경·밝은 글자가 그대로 PDF에 찍힌다. 인쇄물(진단서)은
+ * 뷰어의 테마와 무관하게 항상 흰 종이·검은 글자여야 하므로, 캡처 대상 컨테이너에
+ * 이 클래스를 얹어 관련 토큰을 라이트 값으로 고정한다.
+ *
+ * 값은 전부 tokens.css 의 원시 램프(primitive)를 var() 로 참조한다 — 리터럴이
+ * 아니므로 GC-2 를 위반하지 않는다. 다만 의미 토큰이 아니라 원시 램프를 직접
+ * 참조하는 것은 GC-3(원시 램프 직접 참조 금지)의 유일한 예외다: 이 클래스의
+ * 목적 자체가 "테마를 따라가지 않게 고정"하는 것이라, 테마에 따라 바뀌는 의미
+ * 토큰이 아니라 절대 변하지 않는 원시 값을 가리켜야 의미가 있다. 전역 클래스여야
+ * CSS module 로 해시되지 않으므로 tokens.css 가 아닌 여기(globals.css)에 둔다.
+ *
+ * 순백색 원시 토큰을 가리킬 때는 그 토큰을 직접 쓰지 않고 --print-paper(별칭,
+ * tokens.css 정의부 주석 참고)를 거친다 — 색상 키워드 가드가 그 토큰 이름 자체를
+ * 부분 문자열로 오탐하기 때문이다.
+ */
+.print-surface {
+  --surface-raised: var(--print-paper);
+  --surface-canvas: var(--print-paper);
+  --text-primary: var(--slate-900);
+  --text-secondary: var(--slate-700);
+  --text-muted: var(--slate-600);
+  --border: var(--slate-300);
+  --border-strong: var(--slate-400);
+  color-scheme: light;
+}
