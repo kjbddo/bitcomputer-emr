@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { Button, EmptyState, Panel } from "@/components/ui";
 import styles from "./HistoryDiagnose.module.css";
 import {
   getPatientHistories,
@@ -137,100 +138,93 @@ export default function History({ employeeId, patientId, refreshKey }: HistoryPr
   };
 
   return (
-    <div className={styles.container}>
-      <div className={styles.header}>
-        <h3>과거 진료 기록</h3>
-      </div>
-      <div className={styles.content}>
-        <div className={styles.dateSection}>
-          <div className={styles.dateInputs}>
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              className={styles.dateInput}
-            />
-            <span className={styles.dateSeparator}>-</span>
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-              className={styles.dateInput}
-            />
-          </div>
-          <div className={styles.periodButtons}>
-            {periods.map((period) => (
-              <button
-                key={period}
-                type="button"
-                onClick={() => handlePeriodSelect(period)}
-                className={`${styles.periodButton} ${selectedPeriod === period ? styles.active : ""}`}
-              >
-                {period}
-              </button>
-            ))}
-            <button type="button" className={styles.searchButton} onClick={() => setSelectedPeriod("직접선택")}>
-              조회
-            </button>
-          </div>
+    <Panel className={styles.container} title="과거 진료 기록">
+      <div className={styles.dateSection}>
+        <div className={styles.dateInputs}>
+          <input
+            type="date"
+            aria-label="조회 시작일"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+          />
+          <span className={styles.dateSeparator}>-</span>
+          <input
+            type="date"
+            aria-label="조회 종료일"
+            value={endDate}
+            onChange={(e) => setEndDate(e.target.value)}
+          />
         </div>
-
-        {!patientId ? (
-          <div className={styles.emptyMessage}>환자를 선택하면 과거 진료 기록을 확인할 수 있습니다.</div>
-        ) : loading ? (
-          <div className={styles.emptyMessage}>불러오는 중...</div>
-        ) : error ? (
-          <div className={styles.emptyMessage}>{error}</div>
-        ) : records.length === 0 ? (
-          <div className={styles.emptyMessage}>해당 기간에 기록된 진료가 없습니다.</div>
-        ) : (
-          <div className={styles.historyList}>
-            {records.map((record) => (
-              <div key={record.history.id} className={styles.historyItem}>
-                <div className={styles.historyHeader}>
-                  <span className={styles.historyDate}>{formatDate(record.history.entryDate)}</span>
-                  <span className={styles.historyHospital}>
-                    {`진료과: ${record.history.deptId} · 담당의 ID: ${record.history.employeeId}`}
-                  </span>
-                </div>
-
-                {record.history.symptomDetail && (
-                  <div className={styles.symptom}>
-                    증상 메모: <span>{record.history.symptomDetail}</span>
-                  </div>
-                )}
-
-                <div className={styles.detailsList}>
-                  {record.diseases.map((disease) => (
-                    <div key={`disease-${disease.id}`} className={styles.detailItem}>
-                      <div className={styles.detailCode}>{disease.code}</div>
-                      <div className={styles.detailContent}>
-                        <div className={styles.detailValue}>{disease.name}</div>
-                        {disease.degree ? (
-                          <div className={styles.detailDescription}>중증도: {disease.degree}</div>
-                        ) : null}
-                      </div>
-                    </div>
-                  ))}
-
-                  {record.diagnoses.map((diagnose) => (
-                    <div key={`diagnose-${diagnose.id}`} className={styles.detailItem}>
-                      <div className={styles.detailCode}>{diagnose.code}</div>
-                      <div className={styles.detailContent}>
-                        <div className={styles.detailValue}>{diagnose.name}</div>
-                        <div className={styles.detailDescription}>{formatDiagnoseMeta(diagnose)}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        <div className={styles.periodButtons}>
+          {periods.map((period) => (
+            <Button
+              key={period}
+              type="button"
+              variant={selectedPeriod === period ? "primary" : "secondary"}
+              size="sm"
+              onClick={() => handlePeriodSelect(period)}
+            >
+              {period}
+            </Button>
+          ))}
+          <Button type="button" variant="primary" size="sm" onClick={() => setSelectedPeriod("직접선택")}>
+            조회
+          </Button>
+        </div>
       </div>
-    </div>
+
+      {!patientId ? (
+        <EmptyState title="환자를 선택하면 과거 진료 기록을 확인할 수 있습니다." />
+      ) : loading ? (
+        <EmptyState title="불러오는 중..." />
+      ) : error ? (
+        <EmptyState title={error} />
+      ) : records.length === 0 ? (
+        <EmptyState title="해당 기간에 기록된 진료가 없습니다." />
+      ) : (
+        <div className={styles.historyList}>
+          {records.map((record) => (
+            <div key={record.history.id} className={styles.historyItem}>
+              <div className={styles.historyHeader}>
+                <span className={styles.historyDate}>{formatDate(record.history.entryDate)}</span>
+                <span className={styles.historyHospital}>
+                  {`진료과: ${record.history.deptId} · 담당의 ID: ${record.history.employeeId}`}
+                </span>
+              </div>
+
+              {record.history.symptomDetail && (
+                <div className={styles.symptom}>
+                  증상 메모: <span>{record.history.symptomDetail}</span>
+                </div>
+              )}
+
+              <div className={styles.detailsList}>
+                {record.diseases.map((disease) => (
+                  <div key={`disease-${disease.id}`} className={styles.detailItem}>
+                    <div className={styles.detailCode}>{disease.code}</div>
+                    <div className={styles.detailContent}>
+                      <div className={styles.detailValue}>{disease.name}</div>
+                      {disease.degree ? (
+                        <div className={styles.detailDescription}>중증도: {disease.degree}</div>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+
+                {record.diagnoses.map((diagnose) => (
+                  <div key={`diagnose-${diagnose.id}`} className={styles.detailItem}>
+                    <div className={styles.detailCode}>{diagnose.code}</div>
+                    <div className={styles.detailContent}>
+                      <div className={styles.detailValue}>{diagnose.name}</div>
+                      <div className={styles.detailDescription}>{formatDiagnoseMeta(diagnose)}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Panel>
   );
 }
-
-
-
