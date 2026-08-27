@@ -23,6 +23,9 @@ public class AuditInterceptor implements HandlerInterceptor {
         this.auditService = auditService;
     }
 
+    private static final String AUDIT_CONTEXT_ATTRIBUTE =
+            AuditInterceptor.class.getName() + ".context";
+
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
         if (!(handler instanceof HandlerMethod method)) {
@@ -33,34 +36,57 @@ public class AuditInterceptor implements HandlerInterceptor {
             return true;
         }
 
-        // 감사 로그 기록 실패(제약 위반, DB 다운 등)가 진료 행위 자체를 막아서는
-        // 안 된다 — 병원 EMR 에서 감사 DB 의 일시적 장애 때문에 의사가 차트를
-        // 못 보는 상황은 감사 로그 유실보다 훨씬 나쁘다. 여기서는 실패를 삼키고
-        // ERROR 로 남긴 뒤(사고 재구성에 필요한 행위자/행동/대상/결과는 로그
-        // 메시지에 담는다) 요청은 그대로 통과시킨다(fail-open).
-        //
-        // 행위자(누가)는 record(...) 안에서 SecurityContextHolder 로부터 도출되므로,
-        // record(...) 가 실패했을 때 남기는 이 catch 블록의 로그에도 같은 방식으로
-        // 직접 도출해 둔다 — "누가" 가 빠진 감사 폴백 로그는 사고 재구성에 쓸모가
-        // 없다. try 진입 전에 미리 읽어 두는 이유는, 실패 이후 시점에는 인증
-        // 컨텍스트가 이미 정리됐을 수도 있기 때문이다.
+        // preHandle 은 컨트롤러가 실행되기 "전"이라 요청이 실제로 통과했는지(2xx)
+        // 아니면 거부/실패했는지(4xx/5xx)를 알 수 없다 — 여기서 바로 기록하면 401
+        // 로 거부된 요청도 GRANTED 로 남는다(I1). 그래서 여기서는 필요한 값만
+        // 모아 요청 속성에 담아 두고, 실제 기록은 응답 상태를 알 수 있는
+        // afterCompletion 에서 한다.
         String action = annotation.action();
         Integer patientId = parsePathVariable(request, "patientId", "id");
         Integer historyId = parsePathVariable(request, "historyId");
         String clientIp = auditService.clientIp(request);
         String detail = request.getMethod() + " " + request.getRequestURI();
+
+        request.setAttribute(AUDIT_CONTEXT_ATTRIBUTE,
+                new AuditContext(action, patientId, historyId, clientIp, detail));
+        return true;
+    }
+
+    @Override
+    public void afterCompletion(HttpServletRequest request, HttpServletResponse response,
+                                Object handler, Exception ex) {
+        AuditContext context = (AuditContext) request.getAttribute(AUDIT_CONTEXT_ATTRIBUTE);
+        if (context == null) {
+            return;
+        }
+
+        // 2xx/3xx 는 GRANTED, 그 외(4xx/5xx — 인증/권한 거부는 물론 서버 오류까지)는
+        // DENIED 로 남긴다. 컨트롤러가 던진 예외는 GlobalExceptionHandler 가 이미
+        // 상태 코드로 변환해 응답에 반영한 뒤이므로(그래서 이 시점의 ex 인자는
+        // 사실상 항상 null 이다), response.getStatus() 하나만 보면 된다.
+        String outcome = response.getStatus() < 400 ? AuditService.GRANTED : AuditService.DENIED;
+
+        // 감사 로그 기록 실패(제약 위반, DB 다운 등)가 진료 행위 자체를 막아서는
+        // 안 된다 — 병원 EMR 에서 감사 DB 의 일시적 장애 때문에 의사가 차트를
+        // 못 보는 상황은 감사 로그 유실보다 훨씬 나쁘다. 여기서는 실패를 삼키고
+        // ERROR 로 남긴 뒤(사고 재구성에 필요한 행위자/행동/대상/결과는 로그
+        // 메시지에 담는다) 요청은 그대로 통과시킨다(fail-open).
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         String actorUsername = AuditService.resolveActorUsername(authentication);
         String actorRole = AuditService.resolveActorRole(authentication);
         try {
-            auditService.record(action, patientId, historyId, clientIp, AuditService.GRANTED, detail);
-        } catch (Exception ex) {
+            auditService.record(context.action(), context.patientId(), context.historyId(),
+                    context.clientIp(), outcome, context.detail());
+        } catch (Exception recordEx) {
             log.error("감사 로그 기록 실패(fail-open, 요청은 계속 진행): actor={}, actorRole={}, "
                             + "action={}, patientId={}, historyId={}, ip={}, outcome={}, detail={}",
-                    actorUsername, actorRole, action, patientId, historyId, clientIp,
-                    AuditService.GRANTED, detail, ex);
+                    actorUsername, actorRole, context.action(), context.patientId(), context.historyId(),
+                    context.clientIp(), outcome, context.detail(), recordEx);
         }
-        return true;
+    }
+
+    private record AuditContext(String action, Integer patientId, Integer historyId,
+                                String clientIp, String detail) {
     }
 
     @SuppressWarnings("unchecked")

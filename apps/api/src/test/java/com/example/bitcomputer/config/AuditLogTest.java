@@ -1,6 +1,8 @@
 package com.example.bitcomputer.config;
 
 import com.example.bitcomputer.Repository.AccessAuditLogRepository;
+import com.example.bitcomputer.Repository.PatientRepository;
+import com.example.bitcomputer.entity.Patient;
 import com.example.bitcomputer.entity.Role;
 import com.example.bitcomputer.jwt.JwtTokenProvider;
 import org.junit.jupiter.api.BeforeEach;
@@ -10,6 +12,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+
+import java.time.LocalDate;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -25,6 +29,7 @@ class AuditLogTest {
     @Autowired private MockMvc mockMvc;
     @Autowired private JwtTokenProvider jwtTokenProvider;
     @Autowired private AccessAuditLogRepository auditRepository;
+    @Autowired private PatientRepository patientRepository;
 
     private jakarta.servlet.http.Cookie cookieFor(Role role, String username) {
         return new jakarta.servlet.http.Cookie(
@@ -39,7 +44,16 @@ class AuditLogTest {
 
     @Test
     void patientLookupIsRecorded() throws Exception {
-        mockMvc.perform(get("/api/patients/1").cookie(cookieFor(Role.DOCTOR, "dr.kim")));
+        Patient patient = new Patient();
+        patient.setName("환자");
+        patient.setPhoneNumber("010-0000-0000");
+        patient.setIdentityNumber("audit-log-" + System.nanoTime());
+        patient.setVisitNumber("V1");
+        patient.setBirth(LocalDate.of(1990, 1, 1));
+        patient.setGender("M");
+        Patient saved = patientRepository.save(patient);
+
+        mockMvc.perform(get("/api/patients/" + saved.getId()).cookie(cookieFor(Role.DOCTOR, "dr.kim")));
 
         var logs = auditRepository.findAll();
         assertEquals(1, logs.size());
@@ -47,6 +61,19 @@ class AuditLogTest {
         assertEquals("DOCTOR", logs.get(0).getActorRole());
         assertEquals("GRANTED", logs.get(0).getOutcome());
         assertNotNull(logs.get(0).getRequestIp());
+    }
+
+    // I1 회귀: AuditInterceptor 가 preHandle 에서 무조건 GRANTED 를 기록하면, 존재하지
+    // 않는 환자를 조회해 404 로 끝난 요청도 GRANTED 로 남는다. afterCompletion 에서
+    // 응답 상태를 보고 기록하도록 고친 뒤에는 이런 경우도 DENIED 로 남아야 한다.
+    @Test
+    void notFoundPatientLookupIsRecordedAsDenied() throws Exception {
+        mockMvc.perform(get("/api/patients/999999").cookie(cookieFor(Role.DOCTOR, "dr.kim")))
+               .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNotFound());
+
+        var logs = auditRepository.findAll();
+        assertEquals(1, logs.size());
+        assertEquals("DENIED", logs.get(0).getOutcome());
     }
 
     @Test
