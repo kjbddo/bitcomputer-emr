@@ -58,6 +58,8 @@ const SCAN_FILES: string[] = [
   "src/components/ActionBar.module.css",
   "src/components/SearchPatientModal.tsx",
   "src/components/SearchPatientModal.module.css",
+  "src/components/WaitingStatus.tsx",
+  "src/components/WaitingStatus.module.css",
 ];
 
 /**
