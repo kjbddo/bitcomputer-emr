@@ -68,6 +68,8 @@ const SCAN_FILES: string[] = [
   "src/components/ViewDataBase.module.css",
   "src/components/TimeLine.tsx",
   "src/components/TimeLine.module.css",
+  "src/components/ChatbotPopup.tsx",
+  "src/components/ChatbotPopup.module.css",
 ];
 
 /**
