@@ -1,8 +1,44 @@
+import type { KeyboardEvent } from "react";
 import styles from "./Table.module.css";
+
+/**
+ * 클릭(또는 더블클릭) 가능한 행/카드에 Enter·Space 키보드 활성화를 붙인다.
+ *
+ * 다섯 곳(CertificateList, CertificateBottom, CertificatePatientSearch,
+ * ViewDataBase, SearchPatientModal)이 동일한 "Enter 또는 Space → preventDefault
+ * → 선택 콜백" 로직을 각자 구현하고 있었다. 새로 클릭 가능한 행을 추가할 때
+ * 이 헬퍼를 함께 스프레드하면 키보드 경로 누락을 구조적으로 막을 수 있다.
+ * <tr> 이 기본이지만, 제네릭으로 다른 요소(TimeLine 의 <article> 카드 등)에도
+ * 그대로 쓸 수 있다.
+ *
+ * 사용: <tr onClick={...} {...rowActivateProps(() => onSelect(item))}>
+ */
+export function rowActivateProps<T extends HTMLElement = HTMLTableRowElement>(
+  onActivate: () => void
+): {
+  tabIndex: number;
+  onKeyDown: (event: KeyboardEvent<T>) => void;
+} {
+  return {
+    tabIndex: 0,
+    onKeyDown: (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        onActivate();
+      }
+    },
+  };
+}
 
 interface TableProps {
   dense?: boolean;
   stickyHeader?: boolean;
+  /**
+   * stickyHeader 와 함께 쓴다. .scroll 래퍼의 세로 스크롤포트 높이를 지정해
+   * 헤더가 그 안에서 실제로 고정되도록 한다(px 숫자 또는 CSS 길이 문자열).
+   * stickyHeader 없이 지정해도 효과가 없다.
+   */
+  maxHeight?: number | string;
   className?: string;
   /**
    * 표에 접근성 이름을 붙인다.
@@ -17,12 +53,18 @@ interface TableProps {
 export default function Table({
   dense,
   stickyHeader,
+  maxHeight,
   className,
   "aria-label": ariaLabel,
   children,
 }: TableProps) {
   return (
-    <div className={styles.scroll}>
+    <div
+      className={[styles.scroll, stickyHeader ? styles.scrollSticky : null]
+        .filter(Boolean)
+        .join(" ")}
+      style={stickyHeader && maxHeight !== undefined ? { maxHeight } : undefined}
+    >
       <table
         className={[
           styles.table,

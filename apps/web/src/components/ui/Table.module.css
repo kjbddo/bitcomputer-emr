@@ -3,6 +3,18 @@
   overflow-x: auto;
 }
 
+/*
+ * stickyHeader 전용: .scroll 자신을 세로 스크롤포트로 만든다. position: sticky 는
+ * 가장 가까운 스크롤 컨테이너를 기준으로 고정되는데, overflow-x: auto 만으로도
+ * (CSS Overflow 3 규칙에 따라 다른 축이 auto 로 계산되어) .scroll 이 이미 스크롤
+ * 컨테이너가 되어버린다. 부모 쪽에 별도 스크롤 박스를 두면 두 스크롤 컨테이너가
+ * 경합해 헤더가 고정되지 않으므로, 세로 스크롤은 .scroll 자신이 담당하게 한다.
+ * 실제 높이 제한은 호출부가 maxHeight prop 으로 지정한다.
+ */
+.scrollSticky {
+  overflow-y: auto;
+}
+
 .table {
   width: 100%;
   border-collapse: collapse;
@@ -31,7 +43,7 @@
   background: var(--accent-bg);
 }
 
-.table tbody tr[aria-selected="true"] {
+.table tbody tr[aria-current="true"] {
   background: var(--accent-bg);
   box-shadow: inset 2px 0 0 var(--accent-fill);
 }

@@ -1,7 +1,8 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { fireEvent } from "@testing-library/react";
 
-import { Badge, Button, EmptyState, Field, Panel, Table } from "../index";
+import { Badge, Button, EmptyState, Field, Panel, Table, rowActivateProps } from "../index";
 
 describe("Panel", () => {
   it("title 을 헤딩으로 렌더한다", () => {
@@ -153,5 +154,148 @@ describe("Table", () => {
     expect(screen.getByRole("table")).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "이름" })).toBeInTheDocument();
     expect(screen.getByRole("cell", { name: "김환자" })).toBeInTheDocument();
+  });
+
+  it("table 을 스크롤 가능한 wrapper div 로 감싼다", () => {
+    const { container } = render(
+      <Table>
+        <tbody>
+          <tr>
+            <td>행</td>
+          </tr>
+        </tbody>
+      </Table>
+    );
+    const table = screen.getByRole("table");
+    const wrapper = table.parentElement;
+    expect(wrapper).not.toBeNull();
+    expect(wrapper).not.toBe(container);
+    expect(wrapper?.tagName).toBe("DIV");
+  });
+
+  it("dense 는 table 에 별도 class 를 붙인다", () => {
+    const { rerender } = render(
+      <Table>
+        <tbody>
+          <tr>
+            <td>행</td>
+          </tr>
+        </tbody>
+      </Table>
+    );
+    const plainClass = screen.getByRole("table").className;
+
+    rerender(
+      <Table dense>
+        <tbody>
+          <tr>
+            <td>행</td>
+          </tr>
+        </tbody>
+      </Table>
+    );
+    const denseClass = screen.getByRole("table").className;
+    expect(denseClass).not.toBe(plainClass);
+  });
+
+  it("className 을 table 에 전달한다", () => {
+    render(
+      <Table className="custom-table">
+        <tbody>
+          <tr>
+            <td>행</td>
+          </tr>
+        </tbody>
+      </Table>
+    );
+    expect(screen.getByRole("table").className).toContain("custom-table");
+  });
+
+  // stickyHeader 는 헤더가 실제로 화면에 고정되는지가 핵심이라, position: sticky
+  // 가 걸린 조상이 아니라 그 sticky 가 기준으로 삼는 스크롤 컨테이너 자체가
+  // Table 내부(.scroll)에 있는지를 확인한다. 이 스크롤 컨테이너가 외부 래퍼로
+  // 새어나가면(예: 부모가 별도로 overflow-y:auto 박스를 두면) 두 스크롤
+  // 컨테이너가 경합해 헤더가 고정되지 않는다(리뷰에서 확인된 실제 버그).
+  it("stickyHeader + maxHeight 는 wrapper 를 세로 스크롤 컨테이너로 만든다", () => {
+    render(
+      <Table stickyHeader maxHeight={120}>
+        <thead>
+          <tr>
+            <th>이름</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>행</td>
+          </tr>
+        </tbody>
+      </Table>
+    );
+    const wrapper = screen.getByRole("table").parentElement as HTMLElement;
+    expect(wrapper.style.maxHeight).toBe("120px");
+    expect(wrapper.className).toContain("scrollSticky");
+  });
+
+  it("stickyHeader 없이 maxHeight 를 줘도 효과가 없다", () => {
+    render(
+      <Table maxHeight={120}>
+        <tbody>
+          <tr>
+            <td>행</td>
+          </tr>
+        </tbody>
+      </Table>
+    );
+    const wrapper = screen.getByRole("table").parentElement as HTMLElement;
+    expect(wrapper.style.maxHeight).toBe("");
+  });
+});
+
+describe("rowActivateProps", () => {
+  it("Enter 키에서 preventDefault 하고 콜백을 호출한다", () => {
+    const onActivate = vi.fn();
+    render(
+      <table>
+        <tbody>
+          <tr data-testid="row" {...rowActivateProps(onActivate)}>
+            <td>행</td>
+          </tr>
+        </tbody>
+      </table>
+    );
+    const row = screen.getByTestId("row");
+    expect(row).toHaveAttribute("tabIndex", "0");
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(onActivate).toHaveBeenCalledTimes(1);
+  });
+
+  it("Space 키에서도 콜백을 호출한다", () => {
+    const onActivate = vi.fn();
+    render(
+      <table>
+        <tbody>
+          <tr data-testid="row" {...rowActivateProps(onActivate)}>
+            <td>행</td>
+          </tr>
+        </tbody>
+      </table>
+    );
+    fireEvent.keyDown(screen.getByTestId("row"), { key: " " });
+    expect(onActivate).toHaveBeenCalledTimes(1);
+  });
+
+  it("다른 키에서는 콜백을 호출하지 않는다", () => {
+    const onActivate = vi.fn();
+    render(
+      <table>
+        <tbody>
+          <tr data-testid="row" {...rowActivateProps(onActivate)}>
+            <td>행</td>
+          </tr>
+        </tbody>
+      </table>
+    );
+    fireEvent.keyDown(screen.getByTestId("row"), { key: "ArrowDown" });
+    expect(onActivate).not.toHaveBeenCalled();
   });
 });

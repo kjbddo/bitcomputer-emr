@@ -4,5 +4,5 @@ export { default as EmptyState } from "./EmptyState";
 export { default as Field } from "./Field";
 export { default as Modal } from "./Modal";
 export { default as Panel } from "./Panel";
-export { default as Table } from "./Table";
+export { default as Table, rowActivateProps } from "./Table";
 export { default as ThemeToggle } from "./ThemeToggle";
