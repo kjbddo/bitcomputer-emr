@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import Header from "@/components/Header";
 import { getRole } from "@/services/auth";
 import { Role } from "@/types/user";
 import styles from "./layout.module.css";
@@ -39,24 +40,27 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   }
 
   return (
-    <div className={styles.shell}>
-      <nav className={styles.sidebar}>
-        <h1 className={styles.title}>관리자 콘솔</h1>
-        {NAV.map((item) => (
-          <Link
-            key={item.href}
-            href={item.href}
-            className={
-              pathname === item.href
-                ? `${styles.navLink} ${styles.navLinkActive}`
-                : styles.navLink
-            }
-          >
-            {item.label}
-          </Link>
-        ))}
-      </nav>
-      <main className={styles.content}>{children}</main>
+    <div className={styles.page}>
+      <Header />
+      <div className={styles.shell}>
+        <nav className={styles.sidebar}>
+          <h1 className={styles.title}>관리자 콘솔</h1>
+          {NAV.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={
+                pathname === item.href
+                  ? `${styles.navLink} ${styles.navLinkActive}`
+                  : styles.navLink
+              }
+            >
+              {item.label}
+            </Link>
+          ))}
+        </nav>
+        <main className={styles.content}>{children}</main>
+      </div>
     </div>
   );
 }
