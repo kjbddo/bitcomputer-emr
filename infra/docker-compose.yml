@@ -162,8 +162,8 @@ services:
       PRESCRIPTION_AGENT_PATH: /api/agent/prescription/recommend
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672
-      RABBITMQ_USERNAME: guest
-      RABBITMQ_PASSWORD: guest
+      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-guest}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
       VALIDATION_RABBITMQ_REQUEST_QUEUE: validation.prescription.request
       VALIDATION_RABBITMQ_RESULT_QUEUE: validation.prescription.result
       LLM_PROVIDER: ${LLM_PROVIDER:-real}
@@ -239,14 +239,16 @@ services:
       VALIDATION_AGENT_BASE_URL: http://validation-agent:8002
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672
-      RABBITMQ_USERNAME: guest
-      RABBITMQ_PASSWORD: guest
+      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-guest}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
       VALIDATION_RABBITMQ_REQUEST_QUEUE: validation.prescription.request
       VALIDATION_RABBITMQ_RESULT_QUEUE: validation.prescription.result
       VALIDATION_SCHEDULER_ENABLED: "false"
       RADIOLOGY_ENGINE: xray
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       IMAGE_STORAGE_PATH: BitComputer/images
+      JWT_SECRET: ${JWT_SECRET}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
       BOOTSTRAP_SUPERUSER_PASSWORD: ${BOOTSTRAP_SUPERUSER_PASSWORD:-}
     ports:

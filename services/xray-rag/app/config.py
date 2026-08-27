@@ -13,6 +13,37 @@ from pathlib import Path
 from functools import lru_cache
 from typing import Optional
 
+
+def _find_project_root(start: Path) -> Path:
+    """모노레포 루트를 표시하는 마커(형제 `services/`, `apps/` 디렉터리)를 찾을 때까지
+    상위 디렉터리로 올라간다.
+
+    호스트에서는 이 파일이 `services/xray-rag/app/config.py` 에 있으므로 고정된
+    `parents[N]` 인덱스로도 루트를 찾을 수 있었지만, Dockerfile 은 `app/`, `scripts/`
+    만 `/app/app`, `/app/scripts` 로 골라서 복사하고 `xray-rag` 상위 디렉터리 계층은
+    복사하지 않는다. 그 결과 컨테이너 안에서는 이 파일이 `/app/app/config.py` 에
+    있게 되어, 호스트 기준으로 계산한 고정 인덱스(`parents[3]`)가 존재하지 않는
+    상위 디렉터리를 가리키며 `IndexError` 로 임포트 시점에 죽었다.
+
+    고정 인덱스 대신 마커 디렉터리를 찾을 때까지 걸어 올라가면 호스트에서는
+    기존과 동일하게 리포지토리 루트를 찾고, 컨테이너처럼 마커가 없는 레이아웃에서는
+    파일시스템 루트에 도달한 시점에 멈춰 폴백값을 반환한다 — 여기서 계산되는
+    PROJECT_ROOT 는 STORAGE_DIR/SQUID_MODEL_DIR 의 "기본값"을 만드는 데만 쓰이고,
+    컨테이너에서는 두 값 모두 환경변수로 직접 주입되므로 폴백값이 틀려도
+    실제로 사용되지 않는다. 중요한 건 임포트 시점에 죽지 않는 것이다.
+    """
+    current = start.parent
+    while True:
+        if (current / "services").is_dir() and (current / "apps").is_dir():
+            return current
+        if current.parent == current:
+            # 마커를 찾지 못함(예: 컨테이너 레이아웃) — 파일시스템 루트에서 멈춘다.
+            return current
+        current = current.parent
+
+
+_PROJECT_ROOT = _find_project_root(Path(__file__).resolve())
+
 # 프로젝트 루트의 .env 를 가능한 한 빨리 로드한다.
 # - OS 환경변수가 이미 설정돼 있으면 그쪽이 우선 (override=False).
 #   → Docker compose 가 ARANGO_PASSWORD 등을 직접 주입한 컨테이너 환경에서는
@@ -22,7 +53,6 @@ from typing import Optional
 try:
     from dotenv import load_dotenv  # type: ignore
 
-    _PROJECT_ROOT = Path(__file__).resolve().parents[3]
     for _candidate in (_PROJECT_ROOT / ".env", _PROJECT_ROOT / "services" / "xray-rag" / ".env"):
         if _candidate.exists():
             load_dotenv(_candidate, override=False)
@@ -52,7 +82,7 @@ def _float(v: Optional[str], default: float) -> float:
 
 
 class Settings:
-    PROJECT_ROOT: Path = Path(__file__).resolve().parents[3]
+    PROJECT_ROOT: Path = _PROJECT_ROOT
     APP_ROOT: Path = Path(__file__).resolve().parent
 
     # ArangoDB
