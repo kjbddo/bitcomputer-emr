@@ -72,6 +72,8 @@ const SCAN_FILES: string[] = [
   "src/components/ChatbotPopup.module.css",
   "src/components/Diagnosis.tsx",
   "src/components/Diagnosis.module.css",
+  "src/components/AIReport.tsx",
+  "src/components/AIReport.module.css",
 ];
 
 /**
