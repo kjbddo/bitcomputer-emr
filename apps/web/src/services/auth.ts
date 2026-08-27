@@ -15,7 +15,6 @@ export interface LoginResponseBody {
 
 export interface SignupRequestBody {
   name: string;
-  deptId?: string;
   role: string;
   username: string;
   password: string;

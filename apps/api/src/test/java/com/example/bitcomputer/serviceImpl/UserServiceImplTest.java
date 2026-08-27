@@ -1,5 +1,6 @@
 package com.example.bitcomputer.serviceImpl;
 
+import com.example.bitcomputer.Repository.DeptRepository;
 import com.example.bitcomputer.Repository.UserRepository;
 import com.example.bitcomputer.entity.Employee;
 import com.example.bitcomputer.entity.Role;
@@ -27,6 +28,8 @@ class UserServiceImplTest {
     @Mock
     UserRepository userRepository;
     @Mock
+    DeptRepository deptRepository;
+    @Mock
     PasswordEncoder passwordEncoder;
     @Mock
     JwtTokenProvider jwtTokenProvider;
@@ -51,12 +54,44 @@ class UserServiceImplTest {
             assertThatThrownBy(() -> userService.registerUser(dto))
                     .isInstanceOf(DuplicateUsernameException.class)
                     .hasMessageContaining("exists");
+            verify(deptRepository, never()).existsById(anyInt());
+        }
+
+        @Test
+        @DisplayName("존재하지 않는 부서면 IllegalArgumentException(400)")
+        void invalid_dept() {
+            when(userRepository.findByUsername(anyString())).thenReturn(null);
+            when(deptRepository.existsById(eq(99))).thenReturn(false);
+            UserRegisterDTO dto = new UserRegisterDTO();
+            dto.setUsername("u2"); dto.setPassword("p"); dto.setName("n"); dto.setDeptId(99); dto.setRole("DOCTOR");
+            assertThatThrownBy(() -> userService.registerUser(dto))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .isNotInstanceOf(DuplicateUsernameException.class);
+            verify(userRepository, never()).save(any(Employee.class));
+        }
+
+        @Test
+        @DisplayName("deptId 미지정 시 기본 부서(1)로 저장")
+        void register_defaults_to_unassigned_dept() {
+            when(userRepository.findByUsername(anyString())).thenReturn(null);
+            when(deptRepository.existsById(eq(1))).thenReturn(true);
+            when(passwordEncoder.encode(anyString())).thenReturn("enc");
+            UserRegisterDTO dto = new UserRegisterDTO();
+            dto.setUsername("ok"); dto.setPassword("p"); dto.setName("n"); dto.setRole("DOCTOR");
+            // deptId 미지정 시 int 기본값 0
+
+            userService.registerUser(dto);
+
+            org.mockito.ArgumentCaptor<Employee> captor = org.mockito.ArgumentCaptor.forClass(Employee.class);
+            verify(userRepository).save(captor.capture());
+            assertThat(captor.getValue().getDeptId()).isEqualTo(1);
         }
 
         @Test
         @DisplayName("성공 시 저장 수행")
         void register_success() {
             when(userRepository.findByUsername(anyString())).thenReturn(null);
+            when(deptRepository.existsById(eq(1))).thenReturn(true);
             when(passwordEncoder.encode(anyString())).thenReturn("enc");
             UserRegisterDTO dto = new UserRegisterDTO();
             dto.setUsername("ok"); dto.setPassword("p"); dto.setName("n"); dto.setDeptId(1); dto.setRole("DOCTOR");

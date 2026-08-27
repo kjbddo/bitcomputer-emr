@@ -1,6 +1,9 @@
 package com.example.bitcomputer;
 
 import jakarta.persistence.EntityNotFoundException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -10,6 +13,11 @@ import org.springframework.web.server.ResponseStatusException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    private static final String GENERIC_ERROR_MESSAGE =
+            "요청을 처리하는 중 오류가 발생했습니다.";
 
     @ExceptionHandler(EntityNotFoundException.class)
     public ResponseEntity<String> handleEntityNotFound(EntityNotFoundException ex) {
@@ -25,9 +33,14 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(ex.getStatusCode()).body(ex.getReason());
     }
 
-    @ExceptionHandler(Exception.class)
-    public ResponseEntity<String> handleGeneralException(Exception ex) {
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("An error occurred: " + ex.getMessage());
+    // DataIntegrityViolationException(제약 조건 위반 등)도 RuntimeException 의 하위
+    // 타입이다 — 이 핸들러가 없으면 handleRuntimeException 이 잡아 원본 SQL 문,
+    // 테이블/컬럼/제약조건 이름이 그대로 응답 본문에 실려 나간다(정보 노출).
+    // 전체 예외는 서버 로그에만 남기고, 클라이언트에는 안전한 일반 메시지만 준다.
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<String> handleDataIntegrityViolation(DataIntegrityViolationException ex) {
+        log.error("데이터 무결성 제약 위반", ex);
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(GENERIC_ERROR_MESSAGE);
     }
 
     @ExceptionHandler(AccessDeniedException.class)
@@ -35,18 +48,33 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(ex.getMessage());
     }
 
+    // RuntimeException.getMessage() 는 여기 잡히는 하위 타입에 따라 드라이버/라이브러리
+    // 내부 메시지(쿼리, 스택 일부 등)를 포함할 수 있다 — 그대로 응답에 실으면 정보
+    // 노출로 이어진다. 전체 내용은 ERROR 로 서버에만 남기고, 클라이언트에는 일반
+    // 메시지만 내려준다.
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<String> handleRuntimeException(RuntimeException ex) {
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ex.getMessage());
+        log.error("처리되지 않은 RuntimeException", ex);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(GENERIC_ERROR_MESSAGE);
+    }
+
+    // Exception 최상위 캐치-올. 마찬가지로 ex.getMessage() 를 그대로 내려주면
+    // 무엇이 올라오든(체크 예외 포함) 내부 정보가 노출될 수 있다.
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<String> handleGeneralException(Exception ex) {
+        log.error("처리되지 않은 예외", ex);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(GENERIC_ERROR_MESSAGE);
     }
 
     // IllegalArgumentException 은 컨트롤러가 로컬에서 잡지 않은 온갖 입력 검증 오류에서도
     // 던져진다(예: HistoryDiagnoseServiceImpl/HistoryDiseaseServiceImpl 의 "이미 존재함",
-    // "id가 유효하지 않음" 등 — 해당 컨트롤러들은 try/catch 가 없어 여기까지 올라온다).
+    // "id가 유효하지 않음", UserServiceImpl.registerUser 의 "존재하지 않는 부서" 등 —
+    // 해당 컨트롤러들은 try/catch 가 없어 여기까지 올라온다).
     // 401 로 응답하면 프론트엔드의 401 → /login 리다이렉트 인터셉터가 이를 "로그아웃"으로
     // 오인해, 단순 입력 오류가 강제 로그아웃처럼 보인다(I5). 400 이 실제 성격에 맞다.
-    // UserController 는 자체 @ExceptionHandler(IllegalArgumentException.class) 로 409 를
-    // 응답하므로(중복 아이디는 진짜 충돌이다) 이 전역 핸들러보다 우선 적용돼 영향이 없다.
+    // 회원가입 아이디 중복(DuplicateUsernameException)과 로그인 인증 실패
+    // (InvalidCredentialsException)는 UserController 자체 @ExceptionHandler 로
+    // 각각 409/401 을 응답하므로 이 전역 핸들러보다 우선 적용돼 영향이 없다.
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<String> handleIllegalArgumentException(IllegalArgumentException ex) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ex.getMessage());

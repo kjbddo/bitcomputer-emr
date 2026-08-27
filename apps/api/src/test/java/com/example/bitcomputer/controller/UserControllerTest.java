@@ -82,6 +82,19 @@ class UserControllerTest {
                             .content(objectMapper.writeValueAsString(dto)))
                     .andExpect(status().isConflict());
         }
+
+        @Test
+        @DisplayName("존재하지 않는 부서면 400 Bad Request")
+        void register_invalid_dept() throws Exception {
+            doThrow(new IllegalArgumentException("존재하지 않는 부서입니다. deptId=99"))
+                    .when(userService).registerUser(any(UserRegisterDTO.class));
+            UserRegisterDTO dto = new UserRegisterDTO();
+            dto.setName("n"); dto.setDeptId(99); dto.setRole("r"); dto.setUsername("u"); dto.setPassword("p");
+            mockMvc.perform(post("/api/user/register")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(dto)))
+                    .andExpect(status().isBadRequest());
+        }
     }
 
     @Nested
