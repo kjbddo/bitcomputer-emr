@@ -17,7 +17,7 @@ import org.springframework.format.annotation.DateTimeFormat;
 
 import java.util.Map;
 
-import java.util.Date;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.LinkedHashMap;
 
@@ -56,9 +56,9 @@ public class PatientController {
     @PostMapping("/search_history/{id}")
     public ResponseEntity<Map<String, Object>> searchHistory(@PathVariable("id") int employeeId, 
     @RequestParam("patientId") int patientId, 
-    @RequestParam(value = "startDate", required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date startDate, 
-    @RequestParam(value = "endDate", required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date endDate) {
-        if (startDate != null && endDate != null && startDate.after(endDate)) {
+    @RequestParam(value = "startDate", required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") LocalDate startDate,
+    @RequestParam(value = "endDate", required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") LocalDate endDate) {
+        if (startDate != null && endDate != null && startDate.isAfter(endDate)) {
             return ResponseEntity.badRequest().build();
         }
 

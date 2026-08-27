@@ -44,7 +44,7 @@ class PatientControllerTest {
 
     @BeforeEach
     void setup() {
-        objectMapper = new ObjectMapper();
+        objectMapper = new ObjectMapper().findAndRegisterModules();
         mockMvc = MockMvcBuilders.standaloneSetup(patientController).build();
     }
 
@@ -60,7 +60,7 @@ class PatientControllerTest {
         req.setPhoneNumber("010");
         req.setIdentityNumber("900101-1234567");
         req.setGender("M");
-        req.setBirth(new java.util.Date());
+        req.setBirth(java.time.LocalDate.now());
 
         mockMvc.perform(post("/api/patients/get_patient_id")
                         .contentType(MediaType.APPLICATION_JSON)

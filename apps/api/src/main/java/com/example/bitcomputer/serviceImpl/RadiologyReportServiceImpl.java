@@ -18,10 +18,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.time.LocalDate;
-import java.time.ZoneId;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
 
 @Slf4j
@@ -145,7 +142,7 @@ public class RadiologyReportServiceImpl implements RadiologyReportService {
         report.setDeptId(request.getDeptId());
         report.setSymptomDetail(request.getSymptomDetail());
         report.setMemo(request.getMemo());
-        report.setEntryDate(convertToLocalDate(request.getEntryDate()));
+        report.setEntryDate(request.getEntryDate());
         report.setDetailImageAddress(request.getDetailImageAddress()); // 임시 경로
         report.setResult(null);
         report.setSummary(null);
@@ -212,7 +209,7 @@ public class RadiologyReportServiceImpl implements RadiologyReportService {
         report.setDeptId(request.getDeptId());
         report.setSymptomDetail(request.getSymptomDetail());
         report.setMemo(request.getMemo());
-        report.setEntryDate(convertToLocalDate(request.getEntryDate()));
+        report.setEntryDate(request.getEntryDate());
         report.setDetailImageAddress(request.getDetailImageAddress());
     }
 
@@ -268,15 +265,4 @@ public class RadiologyReportServiceImpl implements RadiologyReportService {
         log.info("이미지 경로 업데이트됨 - radiologyRequestId: {}, imagePath: {}", radiologyRequestId, imagePath);
     }
 
-    private LocalDate convertToLocalDate(Date date) {
-        if (date == null) {
-            return null;
-        }
-        // java.sql.Date는 toInstant()를 지원하지 않으므로 직접 변환
-        if (date instanceof java.sql.Date) {
-            return ((java.sql.Date) date).toLocalDate();
-        }
-        // java.util.Date인 경우
-        return date.toInstant().atZone(ZoneId.systemDefault()).toLocalDate();
-    }
 }

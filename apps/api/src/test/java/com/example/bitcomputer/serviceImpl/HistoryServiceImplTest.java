@@ -18,7 +18,6 @@ import jakarta.persistence.EntityNotFoundException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Collections;
-import java.util.Date;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.*;
@@ -47,7 +46,7 @@ class HistoryServiceImplTest {
             History saved = new History(); saved.setId(1);
             when(historyRepository.save(any(History.class))).thenReturn(saved);
             HistoryDTO req = new HistoryDTO();
-            req.setEmployeeId(1); req.setPatientId(2); req.setDeptId(3); req.setEntryDate(new Date());
+            req.setEmployeeId(1); req.setPatientId(2); req.setDeptId(3); req.setEntryDate(LocalDate.now());
             HistoryDTO res = historyService.writeHistory(req);
             assertThat(res.getId()).isEqualTo(1);
         }
@@ -142,7 +141,7 @@ class HistoryServiceImplTest {
             when(patientRepository.findById(eq(2))).thenReturn(Optional.of(p));
             when(historyRepository.searchHistories(eq(2), any(LocalDateTime.class), any(LocalDateTime.class)))
                     .thenReturn(Collections.emptyList());
-            var res = historyService.searchHistory(2, new Date(), new Date());
+            var res = historyService.searchHistory(2, LocalDate.now(), LocalDate.now());
             assertThat(res).containsKeys("patientId", "histories");
         }
     }

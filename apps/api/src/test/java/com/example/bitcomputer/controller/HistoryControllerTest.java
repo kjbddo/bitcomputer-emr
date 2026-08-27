@@ -15,7 +15,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
-import java.util.Date;
+import java.time.LocalDate;
 import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.*;
@@ -38,7 +38,7 @@ class HistoryControllerTest {
 
     @BeforeEach
     void setup() {
-        objectMapper = new ObjectMapper();
+        objectMapper = new ObjectMapper().findAndRegisterModules();
         mockMvc = MockMvcBuilders.standaloneSetup(historyController).build();
     }
 
@@ -53,7 +53,7 @@ class HistoryControllerTest {
             when(historyService.writeHistory(any(HistoryDTO.class))).thenReturn(saved);
 
             HistoryDTO req = new HistoryDTO();
-            req.setEmployeeId(1); req.setPatientId(2); req.setDeptId(3); req.setEntryDate(new Date());
+            req.setEmployeeId(1); req.setPatientId(2); req.setDeptId(3); req.setEntryDate(LocalDate.now());
 
             mockMvc.perform(post("/api/histories/write_history")
                             .contentType(MediaType.APPLICATION_JSON)

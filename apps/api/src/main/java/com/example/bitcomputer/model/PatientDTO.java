@@ -3,7 +3,7 @@ package com.example.bitcomputer.model;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Data;
 
-import java.util.Date;
+import java.time.LocalDate;
 
 @Data
 public class PatientDTO {
@@ -14,6 +14,6 @@ public class PatientDTO {
     String visitNumber;
 
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd")
-    Date birth;
+    LocalDate birth;
     String gender;
 }

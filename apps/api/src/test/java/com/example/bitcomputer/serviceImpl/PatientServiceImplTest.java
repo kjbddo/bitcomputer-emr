@@ -13,7 +13,7 @@ import org.mockito.MockitoAnnotations;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.util.Date;
+import java.time.LocalDate;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -33,7 +33,7 @@ class PatientServiceImplTest {
     private PatientDTO valid() {
         PatientDTO d = new PatientDTO();
         d.setName("n"); d.setPhoneNumber("010"); d.setIdentityNumber("900101-1234567");
-        d.setBirth(new Date()); d.setGender("M");
+        d.setBirth(LocalDate.now()); d.setGender("M");
         return d;
     }
 

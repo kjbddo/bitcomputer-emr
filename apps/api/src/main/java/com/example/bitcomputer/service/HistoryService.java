@@ -3,7 +3,7 @@ package com.example.bitcomputer.service;
 import com.example.bitcomputer.model.HistoryDTO;
 import com.example.bitcomputer.model.WriteHistoryDTO;
 
-import java.util.Date;
+import java.time.LocalDate;
 import java.util.Map;
 
 public interface HistoryService {
@@ -11,7 +11,7 @@ public interface HistoryService {
 
     HistoryDTO updateHistory(int id, HistoryDTO request);
 
-    Map<String, Object> searchHistory(int patientId, Date startDate, Date endDate);
+    Map<String, Object> searchHistory(int patientId, LocalDate startDate, LocalDate endDate);
 
     HistoryDTO writeHistory(WriteHistoryDTO request);
 

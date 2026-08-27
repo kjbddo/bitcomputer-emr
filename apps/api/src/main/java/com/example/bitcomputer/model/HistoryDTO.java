@@ -3,6 +3,7 @@ package com.example.bitcomputer.model;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Data;
 
+import java.time.LocalDate;
 import java.util.Date;
 
 @Data
@@ -17,5 +18,5 @@ public class HistoryDTO {
     Date endDate;
 
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd")
-    Date entryDate;
+    LocalDate entryDate;
 }

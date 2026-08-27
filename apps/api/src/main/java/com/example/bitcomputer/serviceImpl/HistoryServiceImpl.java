@@ -13,8 +13,6 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.time.ZoneId;
-import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -89,14 +87,14 @@ public class HistoryServiceImpl implements HistoryService {
         dto.setMemo(history.getMemo());
 
         LocalDateTime entryDate = history.getEntryDate();
-        dto.setEntryDate(convertToDate(entryDate));
+        dto.setEntryDate(convertToLocalDate(entryDate));
 
         return dto;
     }
 
     //Description: 로그인한 직원이 조건에 따라 환자의 진료 기록을 검색. 검색 성공 시, 조건에 맞는 진료 기록 목록을 반환.
     @Override
-    public Map<String, Object> searchHistory(int patientId, Date startDate, Date endDate) {
+    public Map<String, Object> searchHistory(int patientId, LocalDate startDate, LocalDate endDate) {
         Patient patient = patientRepository.findById(patientId)
                 .orElseThrow(() -> new EntityNotFoundException("Patient not found with id " + patientId));
 
@@ -138,20 +136,20 @@ public class HistoryServiceImpl implements HistoryService {
         return mapToDto(historyRepository.save(history));
     }
 
-    private LocalDateTime convertToLocalDateTime(Date entryDate) {
+    private LocalDateTime convertToLocalDateTime(LocalDate entryDate) {
         if (entryDate == null) {
             return LocalDateTime.now();
         }
 
-        return LocalDateTime.ofInstant(entryDate.toInstant(), ZoneId.systemDefault());
+        return entryDate.atStartOfDay();
     }
 
-    private Date convertToDate(LocalDateTime entryDate) {
+    private LocalDate convertToLocalDate(LocalDateTime entryDate) {
         if (entryDate == null) {
             return null;
         }
 
-        return Date.from(entryDate.atZone(ZoneId.systemDefault()).toInstant());
+        return entryDate.toLocalDate();
     }
 
     private PatientDTO mapPatientToDto(Patient patient) {
@@ -160,33 +158,25 @@ public class HistoryServiceImpl implements HistoryService {
         dto.setName(patient.getName());
         dto.setPhoneNumber(patient.getPhoneNumber());
         dto.setIdentityNumber(patient.getIdentityNumber());
-        dto.setBirth(convertToDate(patient.getBirth()));
+        dto.setBirth(patient.getBirth());
         dto.setGender(patient.getGender());
         return dto;
     }
 
-    private Date convertToDate(LocalDate localDate) {
-        if (localDate == null) {
-            return null;
-        }
-
-        return Date.from(localDate.atStartOfDay(ZoneId.systemDefault()).toInstant());
-    }
-
-    private LocalDateTime convertToStartOfDay(Date date) {
+    private LocalDateTime convertToStartOfDay(LocalDate date) {
         if (date == null) {
             return null;
         }
 
-        return LocalDateTime.ofInstant(date.toInstant(), ZoneId.systemDefault()).with(LocalTime.MIN);
+        return date.atStartOfDay();
     }
 
-    private LocalDateTime convertToEndOfDay(Date date) {
+    private LocalDateTime convertToEndOfDay(LocalDate date) {
         if (date == null) {
             return null;
         }
 
-        return LocalDateTime.ofInstant(date.toInstant(), ZoneId.systemDefault()).with(LocalTime.MAX);
+        return date.atTime(LocalTime.MAX);
     }
 }
 

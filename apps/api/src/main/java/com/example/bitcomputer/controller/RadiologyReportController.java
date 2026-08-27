@@ -98,7 +98,7 @@ public class RadiologyReportController {
             tempRequest.setDeptId(deptId);
             tempRequest.setSymptomDetail(symptomDetail);
             tempRequest.setMemo(memo);
-            tempRequest.setEntryDate(java.sql.Date.valueOf(entryDate));
+            tempRequest.setEntryDate(entryDate);
             tempRequest.setDetailImageAddress("temp/temp_" + java.util.UUID.randomUUID().toString()); // 임시 경로
             tempRequest.setView(normalizeView(view));
             
@@ -117,7 +117,7 @@ public class RadiologyReportController {
             request.setDeptId(deptId);
             request.setSymptomDetail(symptomDetail);
             request.setMemo(memo);
-            request.setEntryDate(java.sql.Date.valueOf(entryDate));
+            request.setEntryDate(entryDate);
             request.setDetailImageAddress(imageRelativePath);
             request.setView(normalizeView(view));
             

@@ -485,10 +485,7 @@ public class AgentServiceImpl implements AgentService {
         StringBuilder line = new StringBuilder("[과거 진료");
         if (h.getEntryDate() != null) {
             line.append(" ")
-                    .append(ENTRY_FMT.format(
-                            h.getEntryDate().toInstant()
-                                    .atZone(java.time.ZoneId.systemDefault())
-                                    .toLocalDate()));
+                    .append(ENTRY_FMT.format(h.getEntryDate()));
         }
         line.append("] ");
         boolean hasContent = false;

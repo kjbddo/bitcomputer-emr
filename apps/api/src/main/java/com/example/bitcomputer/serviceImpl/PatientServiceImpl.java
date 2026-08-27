@@ -7,15 +7,11 @@ import com.example.bitcomputer.entity.Role;
 import com.example.bitcomputer.model.PatientDTO;
 import com.example.bitcomputer.service.PatientService;
 
-import org.springframework.boot.autoconfigure.couchbase.CouchbaseProperties.Authentication;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.time.LocalDate;
-import java.time.ZoneId;
-import java.util.Date;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -59,7 +55,7 @@ public class PatientServiceImpl implements PatientService {
         patient.setPhoneNumber(request.getPhoneNumber());
         patient.setIdentityNumber(request.getIdentityNumber());
         patient.setVisitNumber(request.getVisitNumber());
-        patient.setBirth(convertToLocalDate(request.getBirth()));
+        patient.setBirth(request.getBirth());
         patient.setGender(request.getGender());
 
         Patient saved = patientRepository.save(patient);
@@ -123,19 +119,8 @@ public class PatientServiceImpl implements PatientService {
         dto.setPhoneNumber(patient.getPhoneNumber());
         dto.setIdentityNumber(patient.getIdentityNumber());
         dto.setVisitNumber(patient.getVisitNumber());
-        dto.setBirth(convertToDate(patient.getBirth()));
+        dto.setBirth(patient.getBirth());
         dto.setGender(patient.getGender());
         return dto;
-    }
-
-    private LocalDate convertToLocalDate(Date date) {
-        return date.toInstant().atZone(ZoneId.systemDefault()).toLocalDate();
-    }
-
-    private Date convertToDate(LocalDate localDate) {
-        if (localDate == null) {
-            return null;
-        }
-        return Date.from(localDate.atStartOfDay(ZoneId.systemDefault()).toInstant());
     }
 }

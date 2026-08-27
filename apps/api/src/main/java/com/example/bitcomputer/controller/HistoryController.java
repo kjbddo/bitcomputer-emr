@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.Date;
+import java.time.LocalDate;
 import java.util.Map;
 
 @RestController
@@ -46,10 +46,10 @@ public class HistoryController {
     public ResponseEntity<Map<String, Object>> searchHistory(
             @PathVariable("id") int employeeId,
             @RequestParam("patientId") int patientId,
-            @RequestParam(value = "startDate", required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date startDate,
-            @RequestParam(value = "endDate", required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") Date endDate) {
+            @RequestParam(value = "startDate", required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") LocalDate startDate,
+            @RequestParam(value = "endDate", required = false) @DateTimeFormat(pattern = "yyyy-MM-dd") LocalDate endDate) {
 
-        if (startDate != null && endDate != null && startDate.after(endDate)) {
+        if (startDate != null && endDate != null && startDate.isAfter(endDate)) {
             return ResponseEntity.badRequest().build();
         }
 
