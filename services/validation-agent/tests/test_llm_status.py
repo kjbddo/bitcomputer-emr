@@ -337,3 +337,58 @@ def test_second_pubmed_call_downgrades_to_fallback_when_llm_query_is_deduped(mon
         "이 스텝을 촉발한 결정이 llm 이었더라도 fallback 으로 다운그레이드돼야 한다"
     )
     assert pubmed_entries[1]["actionInput"]["query"] == "cough treatment"
+
+
+def test_finalize_decision_leaves_trace_entry(monkeypatch):
+    # Finding A (GC-2): 모델이 1회차에 FINALIZE 를 결정하면 루프가
+    # `_execute_decided_tool` 을 부르기 전에 break 해서 트레이스에 아무 흔적도
+    # 남지 않았다. llmStatus 는 실제로 LLM 이 결정했으므로 정확히 "real" 이지만,
+    # 트레이스는 모델 관여를 전혀 보여주지 못해 두 값을 같이 보는 소비자가
+    # 앞뒤를 맞출 수 없었다(리뷰 H1 — "더 확인할 것 없음" 은 흔한 정상 종료다).
+    monkeypatch.setenv("LLM_PROVIDER", "real")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
+    monkeypatch.setattr(agent, "_create_llm", lambda: None)
+    monkeypatch.setattr(
+        agent,
+        "_llm_tool_decision",
+        _sequenced_llm_decision([
+            {"thought": "더 확인할 것이 없다", "action": "FINALIZE", "actionInput": {}},
+        ]),
+    )
+
+    response = run_validation_agent(_request())
+
+    assert response.llmStatus == "real"
+    finalize_entries = [e for e in response.reasoningTrace if e["action"] == "FINALIZE"]
+    assert finalize_entries, "FINALIZE 결정도 트레이스에 남아야 한다(GC-2) — 아니면 llmStatus=real 이 근거 없는 주장이 된다"
+    assert finalize_entries[0]["source"] == "llm"
+    assert finalize_entries[0]["observation"] == {"status": "FINALIZED"}
+
+
+def test_hallucinated_action_produces_trace_entry(monkeypatch):
+    # Finding B (GC-2): `_execute_decided_tool` 은 인식되는 액션마다
+    # `if action == ...: return` 체인이고 terminal else 가 없어서, 모델이
+    # 존재하지 않는 도구 이름을 결정하면 모든 분기를 통과해 아무것도 하지 않고
+    # 리턴했다 — 트레이스도, observation 도, 로그도 없이 다음 반복으로 조용히
+    # 넘어갔다(리뷰 H2).
+    monkeypatch.setenv("LLM_PROVIDER", "real")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
+    monkeypatch.setattr(agent, "_create_llm", lambda: None)
+    monkeypatch.setattr(
+        agent,
+        "_llm_tool_decision",
+        _sequenced_llm_decision([
+            {"thought": "환각 도구 호출", "action": "Nonexistent Tool", "actionInput": {"foo": "bar"}},
+            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
+        ]),
+    )
+
+    response = run_validation_agent(_request())
+
+    unknown_entries = [e for e in response.reasoningTrace if e["action"] == "Nonexistent Tool"]
+    assert unknown_entries, "인식되지 않는 액션도 트레이스에 남아야 한다(GC-2) — 조용히 드롭하면 안 된다"
+    assert unknown_entries[0]["source"] == "llm"
+    assert unknown_entries[0]["observation"] == {
+        "status": "UNKNOWN_ACTION",
+        "evidence": ["Nonexistent Tool"],
+    }

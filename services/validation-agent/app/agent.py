@@ -100,6 +100,18 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
         decision_sources.append(source)
         action = str(decision.get("action") or "FINALIZE")
         if action == "FINALIZE":
+            # 결정 자체는 났지만 도구 실행이 없어 _invoke_tool 이 절대 불리지
+            # 않는 유일한 분기다. 트레이스가 "도구 호출"만 기록하면 이 결정은
+            # 흔적 없이 사라져, llmStatus="real" 이 근거로 삼을 트레이스 항목이
+            # 하나도 없는 상태가 된다(리뷰 H1, GC-2). _invoke_tool 이 만드는
+            # 항목과 같은 shape/키로 직접 기록한다.
+            reasoning_trace.append({
+                "thought": str(decision.get("thought") or "추가로 확인할 것이 없어 종료를 결정했다."),
+                "action": "FINALIZE",
+                "actionInput": decision.get("actionInput") if isinstance(decision.get("actionInput"), dict) else {},
+                "observation": {"status": "FINALIZED"},
+                "source": source,
+            })
             break
         _execute_decided_tool(
             decision,
@@ -523,6 +535,20 @@ def _execute_decided_tool(
         candidates = finder_result.get("candidatePrescriptions") or []
         if candidates:
             state["candidate_prescriptions"] = _normalize_prescription_candidates(candidates)
+        return
+
+    # 인식하지 못하는 액션(모델의 도구명 환각 등)이다. 위 분기 전부를 그냥
+    # 통과시켜 아무 트레이스도, observation 도 남기지 않고 리턴하면 GC-2("절대
+    # 조용히 버리지 않는다") 위반이다(리뷰 H2). 인식된 액션과 같은
+    # shape/키(thought/action/actionInput/observation/source)로 드롭 사실
+    # 자체를 트레이스에 남긴다.
+    reasoning_trace.append({
+        "thought": thought,
+        "action": action,
+        "actionInput": action_input,
+        "observation": {"status": "UNKNOWN_ACTION", "evidence": [action]},
+        "source": source,
+    })
 
 
 def _summary_for_current_state(state: ValidationState) -> str:
