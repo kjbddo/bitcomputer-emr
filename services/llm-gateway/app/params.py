@@ -25,6 +25,9 @@ def normalize_params(
     Returns:
         (정규화된 본문, 무엇을 드롭·변환했는지의 기록)
     """
+    # 얕은 복사다. 지금은 최상위 키만 읽고 쓰므로 충분하지만,
+    # 나중에 messages 나 response_format 같은 중첩 구조를 건드리게 되면
+    # 이 복사는 호출자의 입력을 더 이상 보호하지 못한다.
     result = dict(payload)
     notes: List[str] = []
 

@@ -5,13 +5,16 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
 class Settings:
     upstream_base_url: str
-    api_key: str
+    # repr=False 가 없으면 dataclass 기본 repr 이 키를 그대로 찍는다.
+    # 이 객체는 요청·재시도·에러 처리 경로로 넘겨 다니도록 설계됐으므로,
+    # 로깅 한 줄이나 트레이스백 하나로 키가 새는 경로가 실재한다(GC-7).
+    api_key: str = field(repr=False)
     model: str
     reasoning_effort: str
     timeout_seconds: float
