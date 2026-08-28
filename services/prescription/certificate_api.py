@@ -23,7 +23,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Dict, Literal, Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -39,6 +39,7 @@ except ImportError:
     load_dotenv = None
 
 from certificate_agent import SYSTEM_CERTIFICATE, build_certificate_agent_prompt
+from certificate_verification import verify_certificate
 from llm_provider import resolve_provider, stub_certificate_response
 
 logger = logging.getLogger("certificate_api")
@@ -129,6 +130,7 @@ class CertificateGenerateResponse(BaseModel):
     # 거짓 신호를 조용히 내보내게 된다. prescription_api.PrescriptionRecommendResponse.llmStatus
     # 와 동일한 강도로 맞춘다.
     llmStatus: Literal["real", "stub"]
+    verification: Optional[Dict[str, Any]] = None
 
 
 # ── FastAPI 앱 ─────────────────────────────────────────────────────────────────
@@ -241,6 +243,23 @@ def _invoke_gateway_text(system_prompt: str, user_prompt: str, model: str) -> st
         raise HTTPException(status_code=502, detail=f"LLM 게이트웨이 호출 실패: {exc}") from exc
 
 
+def _safe_verify_certificate(req: Any, text: str) -> Dict[str, Any]:
+    """검증을 돌리되 본 응답을 실패시키지 않는다(GC-4)."""
+    try:
+        return verify_certificate(
+            diseases=getattr(req, "diseases", None) or [],
+            diagnoses=getattr(req, "diagnoses", None) or [],
+            text=text,
+        ).to_dict()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("진단서 검증 실패, skipped 로 처리")
+        return {
+            "status": "skipped",
+            "checks": [],
+            "skippedReason": f"검증기 예외: {type(exc).__name__}",
+        }
+
+
 @app.post("/api/ai/document/generate", response_model=CertificateGenerateResponse)
 def generate_certificate(req: CertificateGenerateRequest) -> CertificateGenerateResponse:
     user_msg = build_certificate_agent_prompt(
@@ -272,7 +291,11 @@ def generate_certificate(req: CertificateGenerateRequest) -> CertificateGenerate
     logger.info(
         "진단서 생성 완료 - history_id=%d, length=%d", req.history_id, len(certificate)
     )
-    return CertificateGenerateResponse(medicalCertificate=certificate, llmStatus=llm_status)
+    return CertificateGenerateResponse(
+        medicalCertificate=certificate,
+        llmStatus=llm_status,
+        verification=_safe_verify_certificate(req, certificate),
+    )
 
 
 if __name__ == "__main__":
