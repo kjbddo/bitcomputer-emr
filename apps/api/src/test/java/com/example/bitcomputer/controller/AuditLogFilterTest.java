@@ -60,20 +60,28 @@ class AuditLogFilterTest {
                 LocalDateTime.of(2026, 2, 1, 10, 0)));
         repository.save(row("front.park", "ACCESS_DENIED", null, "DENIED",
                 LocalDateTime.of(2026, 3, 1, 10, 0)));
+        // M2: combinesFilters 가 actorUsername=kim 만으로 이미 1건으로 좁혀지면
+        // action/outcome 절을 지워도 여전히 통과한다 - 아무것도 검증하지 못하는
+        // 약한 테스트였다. dr.kim 의 두 번째 행(다른 action/outcome)을 더해
+        // actorUsername 단독으로는 2건이 걸리게 만들어, action/outcome 절이 실제로
+        // 좁히는 일을 하게 한다. filtersByDateRange 의 범위(1/15~2/15)와 겹치지
+        // 않도록 1/10 로 둔다.
+        repository.save(row("dr.kim", "ACCESS_DENIED", null, "DENIED",
+                LocalDateTime.of(2026, 1, 10, 9, 0)));
     }
 
     @Test
     void noFilterReturnsAll() throws Exception {
         mockMvc.perform(get("/api/audit/logs").cookie(adminCookie()))
                .andExpect(status().isOk())
-               .andExpect(jsonPath("$.totalElements").value(3));
+               .andExpect(jsonPath("$.totalElements").value(4));
     }
 
     @Test
     void filtersByActorUsernamePartialMatch() throws Exception {
         mockMvc.perform(get("/api/audit/logs?actorUsername=dr.").cookie(adminCookie()))
                .andExpect(status().isOk())
-               .andExpect(jsonPath("$.totalElements").value(2));
+               .andExpect(jsonPath("$.totalElements").value(3));
     }
 
     @Test
@@ -88,7 +96,7 @@ class AuditLogFilterTest {
     void filtersByOutcome() throws Exception {
         mockMvc.perform(get("/api/audit/logs?outcome=DENIED").cookie(adminCookie()))
                .andExpect(status().isOk())
-               .andExpect(jsonPath("$.totalElements").value(1))
+               .andExpect(jsonPath("$.totalElements").value(2))
                .andExpect(jsonPath("$.content[0].actorUsername").value("front.park"));
     }
 
