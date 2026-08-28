@@ -19,7 +19,7 @@ import java.time.LocalDateTime;
 /**
  * 감사 로그 조회. SecurityConfig 에서 SUPER_USER 전용으로 묶여 있다.
  *
- * 이 엔드포인트에는 @AuditPatientAccess 를 붙이지 않는다. 감사 로그 조회를 감사 로그에
+ * 이 엔드포인트에는 @Audited 를 붙이지 않는다. 감사 로그 조회를 감사 로그에
  * 남기면 조회할 때마다 행이 늘어 신호 대 잡음비가 나빠진다.
  */
 @RestController

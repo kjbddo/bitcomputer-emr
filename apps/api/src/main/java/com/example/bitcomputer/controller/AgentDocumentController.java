@@ -1,6 +1,6 @@
 package com.example.bitcomputer.controller;
 
-import com.example.bitcomputer.annotation.AuditPatientAccess;
+import com.example.bitcomputer.annotation.Audited;
 import com.example.bitcomputer.entity.Role;
 import com.example.bitcomputer.jwt.JwtTokenProvider;
 import com.example.bitcomputer.model.CertificateFormDTO;
@@ -96,7 +96,7 @@ public class AgentDocumentController {
      * AI 에이전트 진단서 기재 (병무용 / 일반)
      * POST /api/agent/document/generate
      */
-    @AuditPatientAccess(action = "CERTIFICATE_GENERATE")
+    @Audited(action = "CERTIFICATE_GENERATE")
     @PostMapping("/generate")
     public ResponseEntity<?> generateCertificate(@RequestBody GenerateCertificateRequestDTO request) {
         try {

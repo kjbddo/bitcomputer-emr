@@ -1,5 +1,6 @@
 package com.example.bitcomputer.controller;
 
+import com.example.bitcomputer.annotation.Audited;
 import com.example.bitcomputer.model.DeptCreateRequestDTO;
 import com.example.bitcomputer.model.DeptDTO;
 import com.example.bitcomputer.service.DeptService;
@@ -23,12 +24,16 @@ public class AdminDeptController {
         this.deptService = deptService;
     }
 
+    @Audited(action = "DEPT_CREATE")
     @PostMapping
     public ResponseEntity<DeptDTO> create(@RequestBody DeptCreateRequestDTO request) {
         DeptDTO created = deptService.create(request.getDept());
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
+    // targetPatientId 는 항상 null 로 남는다 - 경로 변수 이름이 "id"(부서 ID)라
+    // AuditInterceptor 가 찾는 "patientId"와 겹치지 않는다.
+    @Audited(action = "DEPT_RENAME")
     @PutMapping("/{id}")
     public ResponseEntity<DeptDTO> rename(@PathVariable int id,
                                           @RequestBody DeptCreateRequestDTO request) {

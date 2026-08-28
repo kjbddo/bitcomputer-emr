@@ -1,6 +1,6 @@
 package com.example.bitcomputer.config;
 
-import com.example.bitcomputer.annotation.AuditPatientAccess;
+import com.example.bitcomputer.annotation.Audited;
 import com.example.bitcomputer.service.AuditService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -31,7 +31,7 @@ public class AuditInterceptor implements HandlerInterceptor {
         if (!(handler instanceof HandlerMethod method)) {
             return true;
         }
-        AuditPatientAccess annotation = method.getMethodAnnotation(AuditPatientAccess.class);
+        Audited annotation = method.getMethodAnnotation(Audited.class);
         if (annotation == null) {
             return true;
         }
@@ -42,7 +42,13 @@ public class AuditInterceptor implements HandlerInterceptor {
         // 모아 요청 속성에 담아 두고, 실제 기록은 응답 상태를 알 수 있는
         // afterCompletion 에서 한다.
         String action = annotation.action();
-        Integer patientId = parsePathVariable(request, "patientId", "id");
+        // "patientId" 이름의 경로 변수만 본다("id" 는 더 이상 fallback 으로 보지
+        // 않는다). 관리자 뮤테이션(PUT /api/admin/users/{id}/role,
+        // PUT /api/admin/depts/{id})도 경로 변수 이름이 "id"라, 예전처럼 "id"를
+        // 환자 ID 로도 취급하면 직원 ID·부서 ID 가 targetPatientId 컬럼에 잘못
+        // 찍힌다. PatientController.getPatient 의 경로 변수를 "patientId"로 맞춰
+        // 두었으므로 여기서는 정확한 이름 하나만 찾는다.
+        Integer patientId = parsePathVariable(request, "patientId");
         Integer historyId = parsePathVariable(request, "historyId");
         String clientIp = auditService.clientIp(request);
         String detail = request.getMethod() + " " + request.getRequestURI();

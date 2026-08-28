@@ -1,7 +1,7 @@
     package com.example.bitcomputer.controller;
 
 import com.example.bitcomputer.Repository.EmployeeRepository;
-import com.example.bitcomputer.annotation.AuditPatientAccess;
+import com.example.bitcomputer.annotation.Audited;
 import com.example.bitcomputer.entity.Employee;
 import com.example.bitcomputer.entity.Role;
 import com.example.bitcomputer.model.PatientDTO;
@@ -38,7 +38,7 @@ public class PatientController {
         this.employeeRepository = employeeRepository;
     }
 
-    @AuditPatientAccess(action = "PATIENT_CREATE")
+    @Audited(action = "PATIENT_CREATE")
     @PostMapping("/get_patient_id")
     public ResponseEntity<Map<String, Integer>> createPatient(@RequestBody PatientDTO request) {
         PatientDTO created = patientService.createPatient(request);
@@ -46,10 +46,14 @@ public class PatientController {
         return ResponseEntity.status(HttpStatus.CREATED).body(responseBody);
     }
 
-    @AuditPatientAccess(action = "PATIENT_VIEW")
-    @GetMapping("/{id}")
-    public ResponseEntity<PatientDTO> getPatient(@PathVariable int id) {
-        PatientDTO patient = patientService.searchPatientById(id);
+    // 경로 변수 이름을 "patientId"로 명시한다 - AuditInterceptor 가 targetPatientId 를
+    // 뽑을 때 이 이름만 본다(관리자 뮤테이션의 "{id}"와 겹치지 않도록 I1 에서 정리).
+    // URL 자체(/api/patients/42)는 바뀌지 않는다 - 템플릿 변수 이름은 클라이언트에
+    // 노출되지 않는 내부 구현 디테일이다.
+    @Audited(action = "PATIENT_VIEW")
+    @GetMapping("/{patientId}")
+    public ResponseEntity<PatientDTO> getPatient(@PathVariable int patientId) {
+        PatientDTO patient = patientService.searchPatientById(patientId);
         return ResponseEntity.ok(patient);
     }
 
