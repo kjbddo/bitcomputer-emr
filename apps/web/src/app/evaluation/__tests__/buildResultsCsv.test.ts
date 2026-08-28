@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildResultsCsv } from "../page";
+import { buildResultsCsv } from "../buildResultsCsv";
 
 // 헤더와 행이 두 개의 손으로 관리하는 목록이라, 한쪽에만 컬럼을 넣거나 빼면
 // 그 뒤 컬럼이 전부 한 칸씩 밀린 채 나간다. 파일은 여전히 정상으로 보인다.
