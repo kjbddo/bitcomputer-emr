@@ -22,10 +22,10 @@ describe("Header", () => {
     vi.mocked(getMe).mockReset();
   });
 
-  it("서비스명을 BitComputer EMR 로 표시한다", () => {
+  it("서비스명을 Global EMR 로 표시한다", () => {
     vi.mocked(getMe).mockResolvedValue({ id: 1, name: "김의사" } as never);
     renderHeader();
-    expect(screen.getByRole("heading", { name: "BitComputer EMR" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Global EMR" })).toBeInTheDocument();
   });
 
   it("로그인한 사용자 이름을 표시한다", async () => {
@@ -38,7 +38,7 @@ describe("Header", () => {
     vi.mocked(getMe).mockRejectedValue(new Error("401"));
     renderHeader();
     await waitFor(() =>
-      expect(screen.getByRole("heading", { name: "BitComputer EMR" })).toBeInTheDocument()
+      expect(screen.getByRole("heading", { name: "Global EMR" })).toBeInTheDocument()
     );
     expect(screen.queryByText("김동국")).toBeNull();
   });

@@ -34,7 +34,7 @@ export default function Header({ activeMenu }: HeaderProps) {
   return (
     <header className={styles.header}>
       <div className={styles.leftSection}>
-        <h1 className={styles.title}>BitComputer EMR</h1>
+        <h1 className={styles.title}>Global EMR</h1>
       </div>
 
       <div className={styles.rightSection}>
