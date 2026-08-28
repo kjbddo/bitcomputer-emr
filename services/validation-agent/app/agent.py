@@ -109,6 +109,7 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
             pubmed_evidence,
             pubmed_queries,
             source,
+            decision_sources,
         )
         if state.get("disease_check") or state.get("prescription_check"):
             final_result = _rule_based_finalize(state)
@@ -117,15 +118,20 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
     final_overall = str(final_result.get("overallStatus") or "NEEDS_REVIEW").upper()
     if final_overall == "PASS" and not pubmed_evidence:
         reason = final_result.get("reason") or final_result.get("summary") or ""
-        pubmed_evidence.extend(_load_pubmed_evidence(
+        evidence, query_source = _load_pubmed_evidence(
             reasoning_trace,
             "검증 통과 결과에 참고할 의학 문헌 후보를 PubMed에서 검색한다.",
             state,
             str(reason),
             pubmed_queries,
-            # 결정 루프 밖에서 항상 실행되는 호출이라 결정 출처가 없다 — 휴리스틱으로 표기한다.
-            source="fallback",
-        ))
+            # 결정 루프 밖에서 항상 실행되는 후처리라 "결정"의 출처가 없다 — 늘 도는
+            # 규칙이라는 뜻으로 "rule" 로 표기한다(흠 없는 LLM 응답에도 "fallback" 이
+            # 찍혀 신호를 무의미하게 만드는 문제였다, 리뷰 finding 2).
+            source="rule",
+        )
+        pubmed_evidence.extend(evidence)
+        if query_source == "llm":
+            decision_sources.append(query_source)
 
     if not state.get("candidate_prescriptions"):
         reason = final_result.get("reason") or final_result.get("summary") or ""
@@ -140,20 +146,24 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
                 "symptoms": f"{state.get('symptoms') or ''}\n검증 사유: {reason}\nPubMed query: {query_context}",
             },
             prescription_finder,
-            # 결정 루프 밖에서 항상 실행되는 호출이라 결정 출처가 없다 — 휴리스틱으로 표기한다.
-            source="fallback",
+            # 결정 루프 밖에서 항상 실행되는 후처리라 "rule" 로 표기한다(리뷰 finding 2).
+            source="rule",
         )
         candidates_from_finder = finder_result.get("candidatePrescriptions") or []
         if candidates_from_finder:
             state["candidate_prescriptions"] = _normalize_prescription_candidates(candidates_from_finder)
 
-    pubmed_evidence_summary = _summarize_pubmed_evidence(state, pubmed_evidence, final_overall)
+    pubmed_evidence_summary, summary_source = _summarize_pubmed_evidence(state, pubmed_evidence, final_overall)
+    if summary_source == "llm":
+        decision_sources.append(summary_source)
     if pubmed_evidence_summary:
         checks = final_result.get("checks") if isinstance(final_result.get("checks"), list) else []
+        # 규칙 기반 문자열 조합 요약을 모델이 쓴 것처럼 보이게 하지 않는다(리뷰 finding 1).
+        summary_label = "PubMed 근거 요약" if summary_source == "llm" else "PubMed 근거 요약(규칙 기반)"
         checks.append({
             "type": "PUBMED_EVIDENCE",
             "status": "REFERENCE",
-            "message": f"PubMed 근거 요약: {pubmed_evidence_summary}",
+            "message": f"{summary_label}: {pubmed_evidence_summary}",
             "evidence": [
                 _format_pubmed_article(article, include_abstract=True)
                 for article in pubmed_evidence[:3]
@@ -218,7 +228,11 @@ def _invoke_tool(
         "action": action,
         "actionInput": payload,
         "observation": observation,
-        # 이 스텝이 LLM 추론에서 나왔는지 휴리스틱에서 나왔는지(spec §6.3).
+        # 이 스텝이 어디서 나왔는지: "llm" | "stub" | "rule" | "fallback"(spec §6.3).
+        # "rule" 은 결정 루프의 지원 없이 항상 실행되는 규칙 기반 후처리 스텝
+        # (예: PASS 후 PubMed 보강, 후보 없을 때의 Prescription Finder 재조회) 전용이다
+        # — 이 스텝들은 애초에 LLM 이 관여할 여지가 없으므로, 흠 없는 LLM 응답에도
+        # "fallback" 이 찍혀 신호가 무의미해지는 것을 막는다(리뷰 finding 2).
         "source": source,
     })
     return observation if isinstance(observation, dict) else {"status": "UNKNOWN", "raw": observation}
@@ -406,6 +420,7 @@ def _execute_decided_tool(
     pubmed_evidence: List[Dict[str, Any]],
     pubmed_queries: List[str],
     source: str,
+    decision_sources: List[str],
 ) -> None:
     action = str(decision.get("action") or "")
     thought = str(decision.get("thought") or f"{action} 실행")
@@ -472,14 +487,17 @@ def _execute_decided_tool(
             pubmed_evidence.extend(_dedupe_pubmed_articles(pubmed_result.get("articles") or []))
         else:
             reason = _summary_for_current_state(state)
-            pubmed_evidence.extend(_load_pubmed_evidence(
+            evidence, query_source = _load_pubmed_evidence(
                 reasoning_trace,
                 thought,
                 state,
                 reason,
                 pubmed_queries,
                 source=source,
-            ))
+            )
+            pubmed_evidence.extend(evidence)
+            if query_source == "llm":
+                decision_sources.append(query_source)
         return
 
     if action == "Prescription Finder":
@@ -515,10 +533,22 @@ def _load_pubmed_evidence(
     reason: str,
     pubmed_queries: List[str],
     source: str = "fallback",
-) -> List[Dict[str, Any]]:
+) -> tuple[List[Dict[str, Any]], str]:
+    """PubMed 근거를 조회하고, `(articles, query_source)` 를 돌려준다.
+
+    `source` 인자는 이 호출을 촉발한 결정/컨텍스트의 출처다(예: 항상 실행되는
+    후처리라면 `"rule"`). 하지만 실제로 검색에 쓰인 질의문이 LLM 번역에서
+    나오지 않고 하드코딩된 사전 빌더에서 나왔다면(`query_source == "fallback"`),
+    트레이스는 그 사실을 우선한다 — `source == "llm"` 인데 질의문은 규칙 기반인
+    경우까지 "llm" 이라 주장하지 않도록 다운그레이드한다(리뷰 finding 1). 반대로
+    `source` 가 이미 `"rule"`/`"stub"`/`"fallback"` 이면(=결정 자체가 LLM이 아니었으면)
+    그 표기를 그대로 둔다 — 질의문이 LLM에서 나왔다고 해서 "llm" 로 격상하지는 않는다.
+    """
     articles: List[Dict[str, Any]] = []
     max_query_attempts = int(os.environ.get("VALIDATION_PUBMED_MAX_QUERY_ATTEMPTS", "4"))
-    for query in _build_pubmed_queries(state, reason)[:max_query_attempts]:
+    queries, query_source = _build_pubmed_queries(state, reason)
+    trace_source = "fallback" if (source == "llm" and query_source == "fallback") else source
+    for query in queries[:max_query_attempts]:
         if not query or query in pubmed_queries:
             continue
         pubmed_queries.append(query)
@@ -528,28 +558,40 @@ def _load_pubmed_evidence(
             thought,
             {"query": query, "max_results": 3},
             pubmed_loader,
-            source=source,
+            source=trace_source,
         )
         articles.extend(pubmed_result.get("articles") or [])
         if articles:
             break
-    return _dedupe_pubmed_articles(articles)
+    return _dedupe_pubmed_articles(articles), query_source
 
 
-def _build_pubmed_queries(state: ValidationState, reason: str) -> List[str]:
-    queries: List[str] = []
-    queries.extend(_generate_pubmed_queries_with_llm(state, reason))
+def _build_pubmed_queries(state: ValidationState, reason: str) -> tuple[List[str], str]:
+    """검색어 후보 목록과 함께, 그 후보들이 어디서 왔는지("llm"/"fallback")를 돌려준다.
+
+    LLM 번역 검색어 생성이 실패하면 하드코딩된 `KOREAN_PUBMED_TERMS` 사전 기반
+    빌더로만 채워진다 — 이 경우 두 번째 반환값은 `"fallback"` 이어야 한다.
+    """
+    llm_queries, query_source = _generate_pubmed_queries_with_llm(state, reason)
+    queries: List[str] = list(llm_queries)
     queries.append(_build_pubmed_query(state, reason))
     queries.append(_build_pubmed_reference_query(state))
     queries.append(_build_pubmed_disease_query(state))
     queries.append(_build_pubmed_prescription_query(state))
-    return _dedupe_queries(queries)
+    return _dedupe_queries(queries), query_source
 
 
-def _generate_pubmed_queries_with_llm(state: ValidationState, reason: str) -> List[str]:
+def _generate_pubmed_queries_with_llm(state: ValidationState, reason: str) -> tuple[List[str], str]:
+    """PubMed 검색어를 LLM으로 생성한다.
+
+    두 번째 반환값은 이 함수 자신의 실행 결과 출처다(`"llm"` 성공 / `"fallback"` 실패).
+    이전에는 예외를 삼키고 빈 리스트만 돌려주어, 실패했다는 사실이 호출부 어디에도
+    남지 않았다 — `_build_pubmed_queries` 가 이어서 하드코딩된 `KOREAN_PUBMED_TERMS`
+    기반 빌더로 넘어가도, 그 사실이 트레이스에 드러나지 않는 결함이 있었다(리뷰 finding 1).
+    """
     llm = _create_llm()
     if not llm:
-        return []
+        return [], "fallback"
 
     payload = _compact_state(state)
     prompt = f"""다음 진료 검증 컨텍스트를 PubMed ESearch에 적합한 영어 검색어로 정규화하라.
@@ -576,15 +618,18 @@ def _generate_pubmed_queries_with_llm(state: ValidationState, reason: str) -> Li
         ])
         parsed = _parse_json_object(str(response.content))
     except Exception:
-        return []
+        return [], "fallback"
 
     if not parsed or not isinstance(parsed.get("queries"), list):
-        return []
-    return [
+        return [], "fallback"
+    queries = [
         _clean_pubmed_query(query)
         for query in parsed["queries"]
         if isinstance(query, str) and _clean_pubmed_query(query)
     ]
+    if not queries:
+        return [], "fallback"
+    return queries, "llm"
 
 
 def _build_pubmed_query(state: ValidationState, reason: str) -> str:
@@ -692,9 +737,15 @@ def _summarize_pubmed_evidence(
     state: ValidationState,
     pubmed_evidence: List[Dict[str, Any]],
     overall: str,
-) -> str:
+) -> tuple[str, str]:
+    """PubMed 근거 요약과 함께 `(summary, source)` 를 돌려준다.
+
+    `source` 는 `"llm"`(모델이 실제로 요약) 또는 `"fallback"`(`_fallback_pubmed_summary`
+    의 문자열 조합)이다. 이전에는 이 함수가 어느 경로를 탔는지 호출부가 알 방법이
+    없어, 규칙 기반 요약이 `checks[]` 에 모델이 쓴 것처럼 노출됐다(리뷰 finding 1).
+    """
     if not pubmed_evidence:
-        return ""
+        return "", "fallback"
 
     llm = _create_llm()
     if llm:
@@ -733,11 +784,11 @@ def _summarize_pubmed_evidence(
             ])
             summary = " ".join(str(response.content).split())
             if summary:
-                return summary[:900]
+                return summary[:900], "llm"
         except Exception:
             pass
 
-    return _fallback_pubmed_summary(pubmed_evidence)
+    return _fallback_pubmed_summary(pubmed_evidence), "fallback"
 
 
 def _fallback_pubmed_summary(pubmed_evidence: List[Dict[str, Any]]) -> str:

@@ -331,8 +331,8 @@ curl "http://localhost:8080/api/validation-jobs/{jobId}"
 | `RABBITMQ_PASSWORD` | `guest` | RabbitMQ 비밀번호 |
 | `VALIDATION_RABBITMQ_REQUEST_QUEUE` | `validation.prescription.request` | 추천/검증 요청 queue |
 | `VALIDATION_RABBITMQ_RESULT_QUEUE` | `validation.prescription.result` | 추천/검증 결과 queue |
-| `OPENAI_API_KEY` | 없음 | ValidationAgent LLM 호출용 OpenAI API 키 |
-| `OPENAI_MODEL` | `gpt-5-nano` | ValidationAgent tool decider/PubMed 요약용 모델. 속도와 비용을 우선한 기본값 |
+| `LLM_GATEWAY_BASE_URL` | `http://llm-gateway:8003/v1` | ValidationAgent 가 게이트웨이 경유로 LLM 을 호출하는 base URL. 자격증명은 게이트웨이가 가짐 |
+| `LLM_MODEL` | `openai.gpt-5.6-luna` | ValidationAgent tool decider/PubMed 요약용 모델 |
 
 검증 에이전트는 DB를 직접 수정하지 않는다. 상병/처방 자동 변경도 하지 않고, 의료진 검토용 결과만 `validation_result`에 저장한다.
 

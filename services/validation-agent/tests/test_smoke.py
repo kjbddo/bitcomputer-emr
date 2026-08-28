@@ -1,6 +1,6 @@
 """서비스가 뜨고 헬스 응답이 계약대로인지, stub LLM 경로가 동작하는지 확인한다.
 
-app.main 은 LLM_PROVIDER != "stub" 이면 import 시점에 OPENAI_API_KEY 를 요구하고,
+app.main 은 LLM_PROVIDER != "stub" 이면 import 시점에 LLM_GATEWAY_BASE_URL 을 요구하고,
 startup 이벤트에서 RabbitMQ 워커를 백그라운드로 띄운다. smoke test 는 외부 연결
 없이 앱 기동만 확인하므로 import 전에 stub 모드로 고정하고 RabbitMQ 는 끈다.
 """
