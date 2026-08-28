@@ -268,4 +268,41 @@ describe("검증 이유 목록의 스텝별 출처 표시", () => {
     ).toBeInTheDocument();
     expect(within(dialog).queryByText(/PubMed 요약 \(/)).toBeNull();
   });
+
+  // source 가 없거나 계약 밖이면 모델 추론과 구분되지 않는다. 이 브랜치의 다른
+  // 모든 경계와 같은 방향으로, "llm" 정확 일치만 무표시여야 한다.
+  it("source 가 없는 스텝은 모델 추론으로 보이지 않는다", async () => {
+    mockJobWithTrace("job-trace-4", [
+      {
+        action: "질병 검증",
+        observation: { status: "MATCH", evidence: ["근거 D"] },
+      },
+    ]);
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      await within(dialog).findByText("질병 검증 (규칙 기반): MATCH - 근거 D")
+    ).toBeInTheDocument();
+  });
+
+  it("source 가 계약 밖 값이면 모델 추론으로 보이지 않는다", async () => {
+    mockJobWithTrace("job-trace-5", [
+      {
+        action: "처방 검증",
+        observation: { status: "OK", evidence: ["근거 E"] },
+        source: "RULE",
+      },
+    ]);
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      await within(dialog).findByText("처방 검증 (규칙 기반): OK - 근거 E")
+    ).toBeInTheDocument();
+  });
 });

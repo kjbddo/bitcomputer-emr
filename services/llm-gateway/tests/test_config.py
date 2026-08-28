@@ -46,3 +46,16 @@ def test_load_settings_reads_environment(monkeypatch):
     settings = load_settings()
     assert settings.model == "custom-model"
     assert settings.max_retries == 5
+
+
+# 이 기본값은 전체 타임아웃 사다리의 기준점이다. 45초 x 3회 시도 + 백오프
+# 1.5초 = 136.5초 로, 가장 빡빡한 호출자(180초)보다 짧아야 재시도 2·3회차를
+# 호출자가 관측할 수 있다. 여기를 올리면 사다리가 뒤집힌다.
+def test_default_timeout_keeps_retry_ladder_under_caller_budget(monkeypatch):
+    monkeypatch.delenv("LLM_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("LLM_MAX_RETRIES", raising=False)
+    settings = load_settings()
+
+    assert settings.timeout_seconds == 45.0
+    total = settings.timeout_seconds * (1 + settings.max_retries) + 0.5 + 1.0
+    assert total < 180.0, f"게이트웨이 총 예산 {total}s 가 호출자 180s 를 넘는다"

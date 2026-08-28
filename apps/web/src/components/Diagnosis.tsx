@@ -24,9 +24,12 @@ import { llmStatusNotice } from "@/utils/llmStatus";
 // 한다(spec §6.3 완료 조건 6). llmStatus.ts 의 표시 어휘를 그대로 쓴다.
 function sourceMark(source: unknown): string {
   const value = asText(source);
-  if (value === "rule" || value === "fallback") return " (규칙 기반)";
+  // "llm" 정확 일치만 무표시다. 값이 없거나 계약 밖이면 표시를 붙인다 —
+  // 이 브랜치의 다른 모든 경계와 같은 방향(fail-closed)이다. 반대로 두면
+  // source 를 빠뜨린 스텝이 모델 추론과 구분되지 않는다.
+  if (value === "llm") return "";
   if (value === "stub") return " (스텁)";
-  return "";
+  return " (규칙 기반)";
 }
 
 type DiagnosisProps = {
