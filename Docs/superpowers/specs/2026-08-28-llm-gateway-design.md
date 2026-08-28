@@ -239,7 +239,9 @@ LLM 을 쓰는 응답에 `llmStatus` 필드를 추가한다.
 - [ ] luna 가 `temperature` 를 거부하는가, 아니면 무시하는가
 - [ ] `response_format: {"type": "json_object"}` 이 mantle 에서 동작하는가 (`prescription_api` 가 의존한다)
 - [ ] mantle 의 tool calling 이 LangChain `ChatOpenAI` 경유로 동작하는가 (`validation-agent` 의 ReAct 가 의존한다)
-- [ ] Bedrock TPM 기본 쿼터가 이 워크로드에 충분한가 (출력 토큰이 10배로 차감된다)
+- [x] **Bedrock TPM 기본 쿼터의 10배 출력 번다운 — 문서로 확인됨(2026-08-28).** luna 모델 카드: "On the `bedrock-runtime` endpoint, limits are managed as tokens per minute (TPM) with a 10x burndown rate, where 1 output token consumes 10 tokens." mantle 쪽 쿼터는 별도 문서(quotas-mantle)이므로 실호출로 재확인한다.
+- [ ] 단가가 컨텍스트 길이에 따라 두 단계다(Short 272K / Long 1M). 계측은 단일 단가만 쓴다 — 272K 를 넘는 프롬프트가 생기면 비용이 절반으로 과소 계상된다. 실제 워크로드가 그 경계에 얼마나 가까운지 측정하고, 필요하면 metering 을 두 단계로 나눈다.
+- [ ] Bedrock TPM 기본 쿼터가 이 워크로드에 충분한가 (mantle 쿼터는 대기열 기반이라 runtime 과 다르다)
 - [ ] 게이트웨이의 시도당 타임아웃 45초가 luna 의 실제 p95 대비 충분한가 — 낮게 잡았다면 정상 지연이 하드 실패로 바뀐다. 시도 1이 생성 도중 끊기고 부분 출력이 과금된 채 버려지며, 3회 반복 후 호출자는 136.5초 뒤 502 를 받는다. 이 값은 전체 타임아웃 사다리의 기준점이다(services/llm-gateway/app/config.py).
 
 ---

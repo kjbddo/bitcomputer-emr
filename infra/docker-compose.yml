@@ -171,8 +171,8 @@ services:
       # 주석에 적힌 순서(게이트웨이 총 예산 < 호출자 타임아웃)를 어기지 않아야 한다.
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-45}
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
-      LLM_INPUT_PRICE_PER_1M: ${LLM_INPUT_PRICE_PER_1M:-0.20}
-      LLM_OUTPUT_PRICE_PER_1M: ${LLM_OUTPUT_PRICE_PER_1M:-1.20}
+      LLM_INPUT_PRICE_PER_1M: ${LLM_INPUT_PRICE_PER_1M:-0.22}
+      LLM_OUTPUT_PRICE_PER_1M: ${LLM_OUTPUT_PRICE_PER_1M:-1.32}
     ports:
       - "8003:8003"
     healthcheck:

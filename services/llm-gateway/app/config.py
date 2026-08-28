@@ -42,6 +42,6 @@ def load_settings() -> Settings:
         timeout_seconds=float(os.environ.get("LLM_TIMEOUT_SECONDS", "45")),
         max_retries=int(os.environ.get("LLM_MAX_RETRIES", "2")),
         # 단가는 변동하므로 하드코딩하지 않는다. spec §7.
-        input_price_per_1m=float(os.environ.get("LLM_INPUT_PRICE_PER_1M", "0.20")),
-        output_price_per_1m=float(os.environ.get("LLM_OUTPUT_PRICE_PER_1M", "1.20")),
+        input_price_per_1m=float(os.environ.get("LLM_INPUT_PRICE_PER_1M", "0.22")),
+        output_price_per_1m=float(os.environ.get("LLM_OUTPUT_PRICE_PER_1M", "1.32")),
     )
