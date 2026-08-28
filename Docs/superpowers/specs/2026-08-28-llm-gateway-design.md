@@ -236,6 +236,26 @@ LLM 을 쓰는 응답에 `llmStatus` 필드를 추가한다.
 
 가정으로 두면 구현 중에 터진다. 실제 Bedrock mantle 을 한 번 호출해 확인하고 **결과를 이 문서에 덧붙인다.**
 
+- [x] **계정이 이 모델을 실제로 호출할 수 있는가 — 2026-08-28 실호출 결과 아니오.**
+  이 항목은 원래 목록에 없었다. 가장 먼저 깨진 것이 목록에 없던 가정이었다.
+
+  게이트웨이를 통해 `openai.gpt-5.6-luna` 를 치면 상류가 401 을 준다:
+
+  ```json
+  {"error":{"code":"access_denied","type":"permission_denied_error",
+   "message":"openai.gpt-5.6-luna is not available for this account. ...",
+   "param":null}}
+  ```
+
+  키·엔드포인트·라우트는 정상이다. 다른 모델 ID 를 치면 `validation_error`
+  (`isn't supported on this route`) 나 `not_found_error` 가 나오는데, luna 만
+  `access_denied` 다 — 즉 이 라우트에 모델은 존재하고 계정에 엔타이틀먼트가 없다.
+
+  해소 방법: Bedrock 콘솔 us-west-2 의 Model access 에서 활성화. 자가 승인이
+  안 되면 메시지가 AWS Sales 를 가리킨다. 그때는 계정이 가진 모델로 바꾼다
+  (`aws bedrock list-foundation-models --region us-west-2`).
+
+  **이 항목이 미해소인 동안 아래 나머지 항목은 측정 자체가 불가능하다.**
 - [ ] luna 가 `temperature` 를 거부하는가, 아니면 무시하는가
 - [ ] `response_format: {"type": "json_object"}` 이 mantle 에서 동작하는가 (`prescription_api` 가 의존한다)
 - [ ] mantle 의 tool calling 이 LangChain `ChatOpenAI` 경유로 동작하는가 (`validation-agent` 의 ReAct 가 의존한다)
