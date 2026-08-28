@@ -14,7 +14,7 @@ import { createDept, getDepts } from "@/services/admin";
 
 describe("부서 관리 화면", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    // 호출 기록 초기화는 vitest.config.ts 의 clearMocks 가 전역으로 처리한다.
     vi.mocked(getDepts).mockResolvedValue([
       { id: 1, dept: "UNASSIGNED", employeeCount: 16 },
       { id: 2, dept: "내과", employeeCount: 0 },
