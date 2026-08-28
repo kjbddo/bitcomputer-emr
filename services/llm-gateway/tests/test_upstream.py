@@ -124,3 +124,46 @@ async def test_api_key_not_in_error_detail():
                 sleep=_noop_sleep,
             )
     assert "super-secret-key" not in exc.value.detail
+
+
+async def test_non_json_2xx_body_becomes_upstream_error():
+    """계약상 실패는 전부 UpstreamError 여야 한다.
+
+    JSONDecodeError 가 그대로 올라가면 UpstreamError 만 잡는 호출자가 놓친다.
+    """
+    def handler(_request):
+        return httpx.Response(200, text="not json at all")
+
+    async with _client(handler) as client:
+        with pytest.raises(UpstreamError) as exc:
+            await call_upstream(
+                client, url=URL, api_key="k", payload=PAYLOAD, max_retries=2, sleep=_noop_sleep
+            )
+    assert exc.value.status == 200
+    assert exc.value.attempts == 1, "본문이 깨진 것은 재시도로 낫지 않는다"
+
+
+async def test_non_json_2xx_error_does_not_leak_key():
+    def handler(_request):
+        return httpx.Response(200, text="not json")
+
+    async with _client(handler) as client:
+        with pytest.raises(UpstreamError) as exc:
+            await call_upstream(
+                client,
+                url=URL,
+                api_key="super-secret-key",
+                payload=PAYLOAD,
+                max_retries=0,
+                sleep=_noop_sleep,
+            )
+    assert "super-secret-key" not in exc.value.detail
+
+
+def test_backoff_progression():
+    """0.5 / 1.0 / 2.0. 공식이 바뀌면 어떤 테스트도 안 잡던 구간이었다."""
+    from app.upstream import _backoff_seconds
+
+    assert _backoff_seconds(1) == 0.5
+    assert _backoff_seconds(2) == 1.0
+    assert _backoff_seconds(3) == 2.0

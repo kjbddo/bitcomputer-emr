@@ -63,7 +63,21 @@ async def call_upstream(
             last_detail = f"connection error: {type(exc).__name__}"
         else:
             if response.status_code < 400:
-                return response.json(), attempts
+                try:
+                    return response.json(), attempts
+                except ValueError as exc:
+                    # 2xx 인데 본문이 JSON 이 아니다. 재시도해도 같을 가능성이 높고,
+                    # 무엇보다 여기서 그냥 터뜨리면 JSONDecodeError 가 타입 없이
+                    # 호출자에게 올라가 UpstreamError 만 잡는 쪽이 놓친다.
+                    # 계약("실패는 UpstreamError")을 지키기 위해 감싼다.
+                    raise UpstreamError(
+                        status=response.status_code,
+                        detail=(
+                            f"upstream returned {response.status_code} "
+                            f"with non-JSON body: {type(exc).__name__}"
+                        ),
+                        attempts=attempts,
+                    ) from exc
             last_status = response.status_code
             last_detail = f"upstream returned {response.status_code}: {response.text[:300]}"
             if response.status_code not in RETRYABLE_STATUS:
