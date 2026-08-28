@@ -12,6 +12,7 @@
 
 python-arango>=8.0.0
 python-dotenv>=1.0.0
+# langchain-google-genai 는 certificate_api 이관(Task 8) 후 제거한다
 langchain-google-genai>=2.0.0
 langchain-community>=0.3.0
 # Spring Boot 연동용 FastAPI 서비스 (prescription_api.py)

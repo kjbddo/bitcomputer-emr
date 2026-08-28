@@ -129,9 +129,8 @@ services:
     container_name: bit-prescription-api
     command: ["python", "-m", "uvicorn", "prescription_api:app", "--host", "0.0.0.0", "--port", "8001"]
     environment:
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      LLM_GATEWAY_BASE_URL: http://llm-gateway:8003/v1
+      LLM_MODEL: ${LLM_MODEL:-openai.gpt-5.6-luna}
       ARANGO_HOST: arangodb
       ARANGO_PORT: 8529
       ARANGO_USER: root
@@ -145,6 +144,8 @@ services:
         condition: service_healthy
       arango-init:
         condition: service_completed_successfully
+      llm-gateway:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=5)\""]
       interval: 15s

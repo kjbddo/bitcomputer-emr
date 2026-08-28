@@ -40,9 +40,6 @@ try:
 except ImportError:
     load_dotenv = None
 
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
-
 from llm_provider import resolve_provider, stub_prescription_response
 
 from prescription_agent import (
@@ -77,8 +74,7 @@ def _load_dotenv_if_present() -> None:
 
 _load_dotenv_if_present()
 
-DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-DEFAULT_TEMPERATURE = float(os.environ.get("GEMINI_TEMPERATURE", "0.0"))
+DEFAULT_MODEL = os.environ.get("LLM_MODEL", "openai.gpt-5.6-luna")
 
 
 class PrescriptionRecommendRequest(BaseModel):
@@ -134,6 +130,8 @@ class PrescriptionRecommendResponse(BaseModel):
     cohort_rx_count: int = 0
     toolTrace: List[Dict[str, Any]] = Field(default_factory=list)
     engineStatus: str = "real"
+    # LLM 을 실제로 썼는지. engineStatus 와 달리 실행 경로에서 도출한다(spec §6.2).
+    llmStatus: str = "real"
 
 
 class PrescriptionFeedbackItem(BaseModel):
@@ -161,13 +159,13 @@ from env_check import require_env
 
 _required = ["ARANGO_PASSWORD"]
 if os.environ.get("LLM_PROVIDER", "real") != "stub":
-    _required.append("GOOGLE_API_KEY")
+    _required.append("LLM_GATEWAY_BASE_URL")
 require_env(_required)
 
 app = FastAPI(
     title="BitComputer Prescription Agent",
     version="0.1.0",
-    description="ArangoDB 그래프 + Gemini 기반 처방 추천 에이전트 (Spring Boot 연동용).",
+    description="ArangoDB 그래프 + LLM 게이트웨이 기반 처방 추천 에이전트 (Spring Boot 연동용).",
 )
 
 _ARANGO_HISTORY_VTX = "recommendation_histories"
@@ -196,9 +194,7 @@ def favicon() -> Response:
 def health() -> Dict[str, Any]:
     return {
         "status": "ok",
-        "google_api_key_set": bool(os.environ.get("GOOGLE_API_KEY")),
-        # 환경변수가 있어도 Google 에서 거절(API_KEY_INVALID)할 수 있음 — 유효성은 /health 로 판단 불가
-        "google_api_key_note": "non_empty env only; validity is checked on first /recommend (Gemini)",
+        "llm_gateway_configured": bool(os.environ.get("LLM_GATEWAY_BASE_URL")),
         "default_model": DEFAULT_MODEL,
         "arangodb_expected": (
             f"{os.environ.get('ARANGO_HOST', '127.0.0.1')}:"
@@ -279,57 +275,45 @@ def _get_arango_db():
     return connect_arango(cfg)
 
 
-def _is_openai_model(model_id: str) -> bool:
-    normalized = model_id.strip().lower()
-    return normalized.startswith("openai:") or normalized.startswith("gpt-")
+def _invoke_gateway_json(system_prompt: str, user_prompt: str) -> str:
+    """게이트웨이를 통해 JSON 응답을 받는다.
 
-
-def _openai_model_id(model_id: str) -> str:
-    return model_id.split(":", 1)[1] if model_id.lower().startswith("openai:") else model_id
-
-
-def _invoke_openai_json(
-    model_id: str,
-    temperature: float,
-    system_prompt: str,
-    user_prompt: str,
-) -> str:
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
+    자격증명은 게이트웨이가 갖는다(spec §3.1). temperature 는 보내지 않는다 —
+    luna 계약이며 게이트웨이가 어차피 제거한다(spec §5).
+    """
+    base_url = os.environ.get("LLM_GATEWAY_BASE_URL")
+    if not base_url:
         raise HTTPException(
-            status_code=500,
-            detail="OPENAI_API_KEY 가 설정되지 않았습니다. 서버 환경변수 또는 .env 를 확인하세요.",
+            status_code=503,
+            detail="LLM_GATEWAY_BASE_URL 이 설정되지 않았습니다.",
         )
-
     payload = {
-        "model": _openai_model_id(model_id),
-        "temperature": temperature,
+        "model": os.environ.get("LLM_MODEL", "openai.gpt-5.6-luna"),
         "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
     }
-    timeout = float(os.environ.get("OPENAI_LLM_TIMEOUT", "180"))
+    timeout = float(os.environ.get("LLM_TIMEOUT_SECONDS", "180"))
     try:
         with httpx.Client(timeout=timeout) as client:
             response = client.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
+                f"{base_url.rstrip('/')}/chat/completions",
+                headers={"X-LLM-Caller": "prescription-api"},
                 json=payload,
             )
             response.raise_for_status()
             return str(response.json()["choices"][0]["message"]["content"]).strip()
     except httpx.HTTPStatusError as exc:
-        body = exc.response.text[:500] if exc.response is not None else ""
-        logger.exception("OpenAI 호출 실패: status=%s body=%s", exc.response.status_code, body)
+        logger.exception("게이트웨이 호출 실패: status=%s", exc.response.status_code)
         raise HTTPException(
             status_code=502,
-            detail=f"OpenAI 호출 실패: status={exc.response.status_code}",
+            detail=f"LLM 게이트웨이 호출 실패: status={exc.response.status_code}",
         ) from exc
     except Exception as exc:
-        logger.exception("OpenAI 호출 실패")
-        raise HTTPException(status_code=502, detail=f"OpenAI 호출 실패: {exc}") from exc
+        logger.exception("게이트웨이 호출 실패")
+        raise HTTPException(status_code=502, detail=f"LLM 게이트웨이 호출 실패: {exc}") from exc
 
 
 def _ensure_feedback_graph_collections(db: Any) -> None:
@@ -350,15 +334,6 @@ def recommend(
     x_prescription_eval_trace: Optional[str] = Header(default=None),
 ) -> PrescriptionRecommendResponse:
     requested_model = req.model or DEFAULT_MODEL
-    if (
-        resolve_provider() != "stub"
-        and not _is_openai_model(requested_model)
-        and not os.environ.get("GOOGLE_API_KEY")
-    ):
-        raise HTTPException(
-            status_code=500,
-            detail="GOOGLE_API_KEY 가 설정되지 않았습니다. 서버 환경변수 또는 .env 를 확인하세요.",
-        )
 
     effective_top_rx: Any = req.top_rx
     used_arango = False
@@ -580,56 +555,15 @@ def recommend(
     )
 
     model_id = requested_model
-    temperature = (
-        req.temperature if req.temperature is not None else DEFAULT_TEMPERATURE
-    )
 
-    try:
-        if resolve_provider() == "stub":
-            raw = stub_prescription_response(effective_top_rx)
-            trace_tool("llm_generate", True, status="success", model="stub", temperature=0.0)
-        else:
-            if _is_openai_model(model_id):
-                raw = _invoke_openai_json(model_id, temperature, SYSTEM_PRESCRIPTION, user_msg)
-            else:
-                llm = ChatGoogleGenerativeAI(model=model_id, temperature=temperature)
-                resp = llm.invoke(
-                    [
-                        ("system", SYSTEM_PRESCRIPTION),
-                        ("human", user_msg),
-                    ]
-                )
-                raw = (resp.content or "").strip() if hasattr(resp, "content") else str(resp).strip()
-            trace_tool(
-                "llm_generate",
-                True,
-                status="success",
-                model=model_id,
-                temperature=temperature,
-            )
-    except ChatGoogleGenerativeAIError as exc:
-        logger.exception("Gemini 호출 실패")
-        trace_tool(
-            "llm_generate",
-            True,
-            status="failed",
-            model=model_id,
-            temperature=temperature,
-            error=str(exc),
-        )
-        msg = str(exc)
-        if "PERMISSION_DENIED" in msg or "403" in msg:
-            # 키 유출(leaked) 신고로 차단되는 케이스가 실제로 자주 발생한다.
-            # 사용자에게 "키 재발급/교체"가 필요하다는 힌트를 주기 위해 상태코드를 구분한다.
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "Gemini 권한 오류(PERMISSION_DENIED)로 호출이 차단되었습니다. "
-                    "대부분 API 키가 만료/비활성화되었거나 '유출(leaked)로 신고'되어 폐기된 경우입니다. "
-                    "새 GOOGLE_API_KEY 로 교체한 뒤 다시 시도하세요."
-                ),
-            ) from exc
-        raise HTTPException(status_code=502, detail=f"Gemini 호출 실패: {exc}") from exc
+    if resolve_provider() == "stub":
+        raw = stub_prescription_response(effective_top_rx)
+        llm_status = "stub"
+        trace_tool("llm_generate", True, status="success", model="stub", temperature=0.0)
+    else:
+        raw = _invoke_gateway_json(SYSTEM_PRESCRIPTION, user_msg)
+        llm_status = "real"
+        trace_tool("llm_generate", True, status="success", model=model_id)
 
     try:
         data = parse_prescriptions_llm_response(raw)
@@ -671,6 +605,7 @@ def recommend(
         cohort_rx_count=cohort_count,
         toolTrace=tool_trace if eval_trace_enabled else [],
         engineStatus=resolve_provider(),
+        llmStatus=llm_status,
     )
 
 
