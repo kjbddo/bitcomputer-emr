@@ -456,6 +456,9 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
         return purpose == null ? "" : purpose.trim();
     }
 
+    /** {@link #resolveCertificateLlmStatus} 가 상류 값을 그대로 통과시켜도 되는 계약값(GC-2). */
+    private static final Set<String> KNOWN_LLM_STATUS_VALUES = Set.of("real", "stub", "fallback");
+
     /**
      * 진단서 소견의 출처를 실행 경로에서 판정한다(GC-3).
      *
@@ -465,6 +468,12 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
     static String resolveCertificateLlmStatus(String upstreamStatus, boolean agentTextUsed) {
         if (!agentTextUsed) return "fallback";
         if (upstreamStatus == null || upstreamStatus.isBlank()) return "fallback";
+        if (!KNOWN_LLM_STATUS_VALUES.contains(upstreamStatus)) {
+            // 오늘의 웹 소비자는 "real" 과 정확히 일치하는지만 보므로 계약 밖 값도
+            // fail-closed 로 안전하게 처리되지만, 조용히 넘기면 상류 계약 위반이
+            // 아무 흔적 없이 지나간다(GC-2).
+            log.warn("certificate_api 가 계약 밖 llmStatus 값을 보고했습니다: {}", upstreamStatus);
+        }
         return upstreamStatus;
     }
 
