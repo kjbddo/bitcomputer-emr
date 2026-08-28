@@ -391,33 +391,43 @@ def test_audit_log_filters_narrow_results(super_user: httpx.Client, patient_id: 
 
 def test_audit_log_outcome_filter_finds_denials(super_user: httpx.Client, receptionist: httpx.Client):
     """거부된 시도가 outcome 필터로 찾아진다."""
+    # detail 은 "메서드 + URI" 뿐인데 같은 파일의 형제 테스트 둘이 같은 actor 로
+    # 같은 URI 를 POST 한다. 그래서 actor/outcome/detail 을 아무리 좁혀도 그들이
+    # 남긴 행으로 만족돼 "방금 이 요청이 감사됐다"는 증명되지 않는다.
+    # 유일하게 이 요청에 귀속되는 증거는 호출 전후의 증가분이다.
+    query = {
+        "outcome": "DENIED",
+        "actorUsername": "e2e_receptionist",
+        "action": "ACCESS_DENIED",
+        "size": 1,
+    }
+
+    before = super_user.get("/api/audit/logs", params=query)
+    assert before.status_code == 200
+    before_total = before.json()["totalElements"]
+
     response = receptionist.post(
         "/api/agent/prescription/recommend",
         headers=csrf_headers(receptionist),
         json={"history_diagnose_id": 1},
     )
-    # M12: 이 요청이 실제로 거부됐는지 자체를 확인하지 않고 있었다 - RECEPTIONIST 는
-    # /api/agent/** 에서 거부돼야 한다(SecurityConfig, DOCTOR/SUPER_USER 전용).
+    # RECEPTIONIST 는 /api/agent/** 에서 거부돼야 한다(SecurityConfig, DOCTOR/SUPER_USER 전용).
     assert response.status_code == 403
 
-    # 공유 테이블이라 outcome 만으로 거르면 아무 오래된 행이나 걸린다.
-    # 방금 거부시킨 actor 로 좁혀야 이 시도가 기록됐음을 말할 수 있다.
-    denied = super_user.get(
-        "/api/audit/logs",
-        params={"outcome": "DENIED", "actorUsername": "e2e_receptionist", "size": 50},
-    )
-    assert denied.status_code == 200
+    after = super_user.get("/api/audit/logs", params={**query, "size": 50})
+    assert after.status_code == 200
+    body = after.json()
 
-    rows = denied.json()["content"]
-    assert rows, "DENIED 필터 결과가 비어 있다"
+    assert body["totalElements"] == before_total + 1, (
+        "이 거부 요청이 감사 로그에 새 행을 만들지 않았다 "
+        f"(before={before_total}, after={body['totalElements']})"
+    )
+
+    rows = body["content"]
     assert all(r["outcome"] == "DENIED" for r in rows)
     assert all(r["actorUsername"] == "e2e_receptionist" for r in rows)
-    # M12: 위 세 단언은 같은 actor 가 형제 테스트에서 남긴 다른 거부 행만으로도
-    # 통과한다 - 그것만으로는 "방금 이 요청이 감사됐다"를 증명하지 못한다.
-    # detail 까지 봐야 이 POST 가 실제로 감사 로그에 남았음이 증명된다.
-    assert any(
-        r["detail"] == "POST /api/agent/prescription/recommend" for r in rows
-    ), "이 POST 거부가 감사 로그에 남지 않았다"
+    # 정렬이 occurredAt DESC 로 고정돼 있으므로 방금 생긴 행이 맨 앞이다.
+    assert rows[0]["detail"] == "POST /api/agent/prescription/recommend"
 
 
 def test_old_super_path_is_gone(super_user: httpx.Client):

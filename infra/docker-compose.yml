@@ -218,6 +218,9 @@ services:
       context: ../apps/api
     container_name: bit-spring-boot
     environment:
+      # 감사 로그는 LocalDateTime(UTC-naive)으로 저장되고 변환은 클라이언트가 한다.
+      # 여기를 Asia/Seoul 로 바꾸면 화면의 시각이 조용히 +9h 로 뒤집힌다.
+      TZ: UTC
       SPRING_PROFILES_ACTIVE: docker
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
