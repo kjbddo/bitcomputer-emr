@@ -210,6 +210,19 @@ def test_health_default_model_matches_wire_model_from_same_env(monkeypatch):
     assert body["default_model"] == "distinct-model-for-test-xyz"
 
 
+def test_default_llm_model_fallback_when_env_absent(monkeypatch):
+    """M5(X9 변이): ``_default_llm_model()`` 의 폴백 기본값을
+    "gemini-2.0-flash" 등으로 바꿔도 모든 model 테스트가 LLM_MODEL 을
+    명시적으로 설정해서 무커버리지였다. infra/docker-compose.yml 은
+    ``${LLM_MODEL:-openai.gpt-5.6-luna}`` 로 기본값을 제공하지만, 실제로
+    적용되는 건 Python 쪽 기본값이다 — LLM_GATEWAY_BASE_URL 만 주입하고
+    LLM_MODEL 은 주입하지 않는 EmbeddedPrescriptionAgentStarter 경로에서
+    이 기본값이 그대로 쓰인다."""
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+
+    assert ca._default_llm_model() == "openai.gpt-5.6-luna"
+
+
 def test_gateway_uses_llm_timeout_seconds_env(monkeypatch):
     """M5: timeout 이 하드코딩되지 않고 LLM_TIMEOUT_SECONDS 를 반영해야 한다."""
     captured_kwargs: dict = {}
@@ -234,14 +247,31 @@ def test_gateway_uses_llm_timeout_seconds_env(monkeypatch):
 def test_gateway_invalid_timeout_env_raises_clean_error_not_500(monkeypatch):
     """certificate_api.py:143 — LLM_TIMEOUT_SECONDS 가 숫자가 아니면 try 밖에서
     ValueError 가 그대로 터져 트레이스백이 노출된 500 이 나갔다. 여기서는
-    깔끔한 HTTPException 으로 바뀌어야 한다."""
+    깔끔한 HTTPException(503) 으로 바뀌어야 한다.
+
+    M1(T2 변이): 잘못된 LLM_TIMEOUT_SECONDS 를 조용히 180.0 으로 되돌리는 변이가
+    `in (502, 503)` 이라는 느슨한 disjunction 때문에 살아남았다 — 파싱이 더 이상
+    실패하지 않으면 MockTransport 없이 실제 httpx.Client 가 llm-gateway:8003 에
+    접속을 시도하고, DNS/커넥션 실패가 ``except Exception`` 에서 502 로 잡혀
+    disjunction 을 통과했다(4.55s vs 기준 ~1.5s 가 그 커넥트 타임아웃이었다).
+    여기서는 == 503 으로 좁히고, 소켓에 닿을 수 없도록 MockTransport 를 설치해
+    파싱이 실패하지 않는 한 이 테스트가 절대 통과할 수 없게 한다."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(
+            "LLM_TIMEOUT_SECONDS 파싱이 실패하면 httpx.Client 자체가 생성되지 "
+            "않아야 한다 — 이 handler 가 호출됐다는 건 파싱 실패가 503 으로 "
+            "떨어지지 않고 실제 요청 경로까지 흘러갔다는 뜻이다."
+        )
+
+    _install_transport(monkeypatch, handler)
     monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://llm-gateway:8003/v1")
     monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "not-a-number")
 
     with pytest.raises(ca.HTTPException) as exc_info:
         ca._invoke_gateway_text("s", "u", "openai.gpt-5.6-luna")
 
-    assert exc_info.value.status_code in (502, 503)
+    assert exc_info.value.status_code == 503
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +299,12 @@ def test_gateway_200_malformed_body_raises_502_not_fabricated(monkeypatch, body,
 
     HTTP 200 이지만 본문 형식이 깨져 있으면, 절대 "None"/빈 문자열/딕셔너리를
     str() 로 뭉갠 값을 진짜 진단서 소견으로 반환하면 안 된다 — 502 로
-    떨어져야 한다."""
+    떨어져야 한다.
+
+    M3(G7 변이): ``raise ValueError("빈 본문")`` 처럼 ``content!r`` 사유를 빼도
+    status_code == 502 만 보는 assert 는 통과했다. 사유가 사라지면 운영자는
+    상류가 null/""/모양이 바뀐 것 중 무엇을 돌려줬는지 구분할 수 없다 — 행마다
+    detail 안에 실제 사유가 남아있는지 고정한다."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=body)
@@ -281,6 +316,19 @@ def test_gateway_200_malformed_body_raises_502_not_fabricated(monkeypatch, body,
         ca._invoke_gateway_text("s", "u", "openai.gpt-5.6-luna")
 
     assert exc_info.value.status_code == 502, description
+
+    detail = exc_info.value.detail
+    if description == "missing-choices-key":
+        assert "choices" in detail, description
+    elif description == "empty-choices-list":
+        assert "index out of range" in detail, description
+    elif description == "missing-content-key":
+        assert "content" in detail, description
+    elif description == "missing-message-key":
+        assert "message" in detail, description
+    else:
+        content = body["choices"][0]["message"]["content"]
+        assert repr(content) in detail, description
 
 
 def test_generate_certificate_real_mode_content_null_does_not_produce_fake_certificate(monkeypatch):
@@ -319,6 +367,51 @@ def test_generate_certificate_real_mode_empty_content_does_not_produce_fake_cert
         ca.generate_certificate(_request())
 
     assert exc_info.value.status_code == 502
+
+
+def test_gateway_200_zero_width_space_only_content_raises_502_not_fabricated(monkeypatch):
+    """M6: content 가 U+200B(zero-width space) 하나뿐이면 str.strip() 을
+    그대로 통과해 medicalCertificate="​" / llmStatus="real" 인 "진짜"
+    진단서로 새어나간다 — Spring 쪽 blank 필터도 이걸 non-blank 로 본다.
+    blank 판정 전에 zero-width 문자를 지워서 이 케이스를 502 로 닫는다."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": "​"}}]}
+        )
+
+    _install_transport(monkeypatch, handler)
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://llm-gateway:8003/v1")
+
+    with pytest.raises(ca.HTTPException) as exc_info:
+        ca._invoke_gateway_text("s", "u", "openai.gpt-5.6-luna")
+
+    assert exc_info.value.status_code == 502
+
+
+def test_gateway_200_blank_content_guard_detail_is_truncated(monkeypatch):
+    """M2: content 가 대용량(예: 200KB dict)이면 형식 위반 ValueError 의
+    ``content={content!r}`` 이 그대로 502 detail·로그에 실려 200,000자를
+    넘는 응답을 만든다. 형제 분기인 HTTPStatusError 의 body[:500] 과 같은
+    정신으로, 여기서도 잘려야 한다 — 500자 훨씬 이전, 200자 근방에서
+    잘렸는지 마커로 확인한다."""
+    marker = "MARKER_AFTER_200_CHARS_END"
+    large_content = {"x": "A" * 200 + marker}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": large_content}}]}
+        )
+
+    _install_transport(monkeypatch, handler)
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://llm-gateway:8003/v1")
+
+    with pytest.raises(ca.HTTPException) as exc_info:
+        ca._invoke_gateway_text("s", "u", "openai.gpt-5.6-luna")
+
+    assert exc_info.value.status_code == 502
+    assert marker not in exc_info.value.detail
+    assert len(exc_info.value.detail) < 400
 
 
 # ---------------------------------------------------------------------------
@@ -529,6 +622,34 @@ def test_gateway_connect_timeout_raises_502_with_reason_preserved(monkeypatch):
 
     assert exc_info.value.status_code == 502
     assert "timed out" in exc_info.value.detail
+
+
+def test_gateway_connect_error_logs_at_error_level_with_traceback(monkeypatch, caplog):
+    """M4(X5 변이): ``except Exception`` 분기의 ``logger.exception`` 을
+    ``logger.debug`` 로 낮추는 변이가 무커버리지였다 — 형제 분기
+    (HTTPStatusError)는 test_gateway_502_logs_upstream_body 가 로그를
+    고정하지만, 이 분기는 아무 테스트도 로그 레벨을 보지 않았다. 타임아웃/
+    커넥션 실패마다 트레이스백이 조용히 사라지는 건 GC-2 위반이다.
+    caplog 를 ERROR 로 필터링해두면, logger.debug 로 낮아지는 순간 레코드가
+    아예 안 잡혀 이 테스트가 붉어진다."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    _install_transport(monkeypatch, handler)
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://llm-gateway:8003/v1")
+
+    with caplog.at_level(logging.ERROR, logger="certificate_api"):
+        with pytest.raises(ca.HTTPException):
+            ca._invoke_gateway_text("s", "u", "openai.gpt-5.6-luna")
+
+    records = [r for r in caplog.records if r.name == "certificate_api"]
+    assert any(r.levelno == logging.ERROR for r in records), (
+        "게이트웨이 호출 실패가 ERROR 레벨로 로깅되지 않았다"
+    )
+    assert any(r.exc_info for r in records), (
+        "logger.exception 이 트레이스백(exc_info)을 남겨야 한다"
+    )
 
 
 def test_generate_certificate_real_mode_propagates_gateway_failure_instead_of_fabricating(monkeypatch):

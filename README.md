@@ -26,7 +26,7 @@ docker compose --env-file .env.docker up -d frontend
 | Spring Boot | `bit-spring-boot` | 8080 | WAS / API |
 | Flask 영상판독 | `bit-flask-radiology` | 5000 | 기존 영상판독 엔진 |
 | 진단서 의사소견 | `bit-certificate-api` | 5001 | LLM 게이트웨이 경유 진단서 문장 생성 |
-| 처방 추천 | `bit-prescription-api` | 8001 | ArangoDB + Gemini 처방 추천 |
+| 처방 추천 | `bit-prescription-api` | 8001 | ArangoDB + LLM 게이트웨이 경유 처방 추천 |
 | 진료 데이터 검증 | `bit-validation-agent` | 8002 | LangGraph 기반 처방 추천/검증 ReAct worker |
 | XrayGraphRAG | `bit-xraygraph` | 8000 | X-ray 유사 사례 검색 / 상병 추론 |
 | MySQL | `bit-mysql` | 3307 | Spring 업무 DB |
@@ -241,8 +241,10 @@ Spring/처방 추천 서비스가 사용할 DB는 `.env.docker`와 `docker-compo
 필요한 것:
 
 - MySQL에 환자, 진료, 상병, 처방 데이터가 있어야 한다.
-- `.env.docker`에 `LLM_GATEWAY_BASE_URL`(과 필요하면 `LLM_MODEL`)을 넣어야 한다. certificate-api는
-  Gemini를 직접 호출하지 않고 `services/llm-gateway`를 경유한다.
+- certificate-api의 `LLM_GATEWAY_BASE_URL`은 `infra/docker-compose.yml`에 `http://llm-gateway:8003/v1`로
+  고정되어 있어 env 파일로 바꿀 수 없다. env로 조정 가능한 값은 `LLM_MODEL`뿐이다 — 필요하면
+  `infra/.env`에 넣는다. certificate-api는 Gemini를 직접 호출하지 않고 `services/llm-gateway`를
+  경유한다.
 
 확인:
 

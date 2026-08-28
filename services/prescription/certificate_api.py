@@ -59,6 +59,21 @@ def _load_dotenv_if_present() -> None:
 _load_dotenv_if_present()
 
 
+_ZERO_WIDTH_CHARS = "\u200b\u200c\u200d\ufeff"
+
+
+def _strip_zero_width(text: str) -> str:
+    """블랭크 판정 전에 폭이 0인 문자를 제거한다.
+
+    M6: U+200B(zero-width space) 하나만 있는 content 는 str.strip() 을 통과해
+    llmStatus="real" 인 "진짜" 진단서로 새어나간다. blank 판정에만 쓰고
+    반환값 자체는 건드리지 않는다 — 본문 중간에 낀 zero-width 문자까지
+    지우는 건 이 수정의 범위 밖이다."""
+    for ch in _ZERO_WIDTH_CHARS:
+        text = text.replace(ch, "")
+    return text
+
+
 def _default_llm_model() -> str:
     """LLM_MODEL 환경변수를 매 호출 시점에 읽는다.
 
@@ -173,13 +188,19 @@ def _invoke_gateway_text(system_prompt: str, user_prompt: str, model: str) -> st
             )
             response.raise_for_status()
             content = response.json()["choices"][0]["message"]["content"]
-            if not isinstance(content, str) or not content.strip():
+            # M6: U+200B 등 폭이 0인 문자만 있는 문자열은 str.strip() 을 그대로
+            # 통과한다 — blank 판정 전에 zero-width 문자를 먼저 지운다. 반환값
+            # 자체(content.strip())는 건드리지 않는다.
+            if not isinstance(content, str) or not _strip_zero_width(content).strip():
                 # CRITICAL C1: 200 이지만 형식이 깨진 본문(content: null/""/비문자열)을
                 # str() 로 뭉개서 반환하면 "None" 같은 지어낸 문자열이 llmStatus="real" 인
                 # 진짜 진단서 소견으로 통과한다(GC-2). 여기서 명시적으로 거부해
                 # 아래 ``except Exception`` 분기(502, 사유 보존)로 떨어뜨린다.
+                # M2: content 가 대용량(예: 200KB dict)이면 repr(content) 를 그대로
+                # 실을 경우 502 detail·로그가 무한정 커진다 — 형제 분기인
+                # HTTPStatusError 의 body[:500] 과 같은 정신으로 잘라낸다.
                 raise ValueError(
-                    f"게이트웨이가 빈 본문을 돌려주었습니다: content={content!r}"
+                    f"게이트웨이가 빈 본문을 돌려주었습니다: content={repr(content)[:200]}"
                 )
             return content.strip()
     except httpx.HTTPStatusError as exc:
