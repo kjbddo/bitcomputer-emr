@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from typing import Any, Dict, List, Optional, TypedDict
@@ -18,6 +19,8 @@ from .tools import (
     prescription_validator,
     xray_result_loader,
 )
+
+logger = logging.getLogger("validation_agent.agent")
 
 
 KOREAN_PUBMED_TERMS = {
@@ -303,6 +306,15 @@ def _create_llm() -> Optional[ChatOpenAI]:
     """게이트웨이를 통해 LLM 에 붙는다.
 
     자격증명은 게이트웨이가 갖는다. 이 서비스는 base_url 만 안다(spec §3.1).
+
+    timeout/max_retries 를 명시하지 않으면 langchain-openai 가 내부 openai SDK
+    에 timeout=None(무한대) 을 넘긴다 — SDK 기본값 600s 를 오히려 무력화한다.
+    이 서비스는 RabbitMQ 컨슈머 스레드 하나가 prefetch_count=1 로 도는 구조라
+    (rabbit_worker.py), 이 호출이 걸리면 ack/nack 없이 영원히 막혀 뒤에 오는
+    모든 환자 작업이 무기한 대기한다(최종 리뷰 CRITICAL). max_retries=0 도
+    timeout 만큼 중요하다 — 재시도는 게이트웨이가 소유한다(spec §6.1). SDK가
+    자체적으로 재시도하면 게이트웨이의 backoff 안에 SDK의 backoff 가 중첩돼
+    상류 429 상황에서 호출 수가 곱으로 불어난다.
     """
     base_url = os.environ.get("LLM_GATEWAY_BASE_URL")
     if not base_url:
@@ -313,6 +325,8 @@ def _create_llm() -> Optional[ChatOpenAI]:
         base_url=base_url,
         api_key="unused-gateway-handles-auth",
         default_headers={"X-LLM-Caller": "validation-agent"},
+        timeout=float(os.environ.get("VALIDATION_LLM_TIMEOUT_SECONDS", "180")),
+        max_retries=0,
     )
 
 
@@ -413,7 +427,12 @@ def _llm_tool_decision(
             HumanMessage(content=prompt),
         ])
         parsed = _parse_json_object(str(response.content))
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # 예외 메시지는 로그하지 않는다 — LLM_GATEWAY_BASE_URL 에 잘못 심긴
+        # 자격증명이 있다면 트레이스백/메시지에 요청 URL이 실릴 수 있다(GC-7).
+        # 타입만으로도 운영자가 원인 계열(연결 실패/타임아웃/파싱 실패 등)을
+        # 좁히기에 충분하다.
+        logger.warning("게이트웨이 도구 결정 호출 실패, 폴백으로 전환: %s", type(exc).__name__)
         return None
     if not parsed:
         return None
@@ -704,7 +723,10 @@ def _generate_pubmed_queries_with_llm(state: ValidationState, reason: str) -> tu
             HumanMessage(content=prompt),
         ])
         parsed = _parse_json_object(str(response.content))
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # 타입만 로그한다 — 메시지/트레이스백은 URL 에 새어든 자격증명을
+        # 실을 수 있다(GC-7).
+        logger.warning("게이트웨이 PubMed 쿼리 생성 실패, 폴백으로 전환: %s", type(exc).__name__)
         return [], "fallback"
 
     if not parsed or not isinstance(parsed.get("queries"), list):
@@ -872,8 +894,10 @@ def _summarize_pubmed_evidence(
             summary = " ".join(str(response.content).split())
             if summary:
                 return summary[:900], "llm"
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            # 타입만 로그한다 — 메시지/트레이스백은 URL 에 새어든 자격증명을
+            # 실을 수 있다(GC-7).
+            logger.warning("게이트웨이 PubMed 요약 실패, 규칙 기반으로 전환: %s", type(exc).__name__)
 
     return _fallback_pubmed_summary(pubmed_evidence), "fallback"
 
@@ -1110,7 +1134,10 @@ def _llm_finalize(state: ValidationState) -> Optional[Dict[str, Any]]:
         if parsed:
             parsed["candidatePrescriptions"] = state.get("candidate_prescriptions", [])
             return _normalize_final_result(parsed)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # 타입만 로그한다 — 메시지/트레이스백은 URL 에 새어든 자격증명을
+        # 실을 수 있다(GC-7).
+        logger.warning("게이트웨이 최종화 호출 실패, 규칙 기반으로 전환: %s", type(exc).__name__)
         return None
     return None
 
