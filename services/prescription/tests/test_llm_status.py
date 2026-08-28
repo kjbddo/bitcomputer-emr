@@ -66,8 +66,8 @@ def test_real_provider_reports_llm_status_real(monkeypatch):
 
     calls = []
 
-    def _fake_invoke_gateway_json(system_prompt, user_prompt):
-        calls.append((system_prompt, user_prompt))
+    def _fake_invoke_gateway_json(system_prompt, user_prompt, model):
+        calls.append((system_prompt, user_prompt, model))
         return (
             '{"prescriptions": ['
             '{"rank": 1, "name": "아목시실린캡슐", "prescription_code": "A001", '

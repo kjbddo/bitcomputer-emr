@@ -24,7 +24,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException
@@ -67,8 +67,9 @@ def _load_dotenv_if_present() -> None:
         return
     env_file = SCRIPT_DIR / ".env"
     if env_file.is_file():
-        # 개발 환경에서 이미 export 된 GOOGLE_API_KEY(구키)가 남아 있으면 .env 값이 무시되는 혼선이 잦다.
-        # .env 를 "로컬 단일 진실"로 취급하기 위해 override=True 로 로드한다.
+        # 개발 환경에서 이미 export 된 예전 값(예: LLM_GATEWAY_BASE_URL)이 남아 있으면
+        # .env 값이 무시되는 혼선이 잦다. .env 를 "로컬 단일 진실"로 취급하기 위해
+        # override=True 로 로드한다.
         load_dotenv(env_file, override=True)
 
 
@@ -131,7 +132,9 @@ class PrescriptionRecommendResponse(BaseModel):
     toolTrace: List[Dict[str, Any]] = Field(default_factory=list)
     engineStatus: str = "real"
     # LLM 을 실제로 썼는지. engineStatus 와 달리 실행 경로에서 도출한다(spec §6.2).
-    llmStatus: str = "real"
+    # 기본값을 두지 않는다 — 생성 시 값을 빠뜨리면 "모델이 실제로 판단했다"는
+    # 거짓 신호를 조용히 내보내게 된다(MINOR 5).
+    llmStatus: Literal["real", "stub"]
 
 
 class PrescriptionFeedbackItem(BaseModel):
@@ -275,11 +278,13 @@ def _get_arango_db():
     return connect_arango(cfg)
 
 
-def _invoke_gateway_json(system_prompt: str, user_prompt: str) -> str:
+def _invoke_gateway_json(system_prompt: str, user_prompt: str, model: str) -> str:
     """게이트웨이를 통해 JSON 응답을 받는다.
 
     자격증명은 게이트웨이가 갖는다(spec §3.1). temperature 는 보내지 않는다 —
-    luna 계약이며 게이트웨이가 어차피 제거한다(spec §5).
+    luna 계약이며 게이트웨이가 어차피 제거한다(spec §5). ``model`` 은 호출자가
+    실제로 payload 에 실릴 값을 명시적으로 넘긴다 — 여기서 다시 환경변수를
+    읽으면 호출자의 trace 가 기록한 모델과 실제로 보낸 모델이 어긋날 수 있다.
     """
     base_url = os.environ.get("LLM_GATEWAY_BASE_URL")
     if not base_url:
@@ -288,7 +293,7 @@ def _invoke_gateway_json(system_prompt: str, user_prompt: str) -> str:
             detail="LLM_GATEWAY_BASE_URL 이 설정되지 않았습니다.",
         )
     payload = {
-        "model": os.environ.get("LLM_MODEL", "openai.gpt-5.6-luna"),
+        "model": model,
         "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -306,11 +311,30 @@ def _invoke_gateway_json(system_prompt: str, user_prompt: str) -> str:
             response.raise_for_status()
             return str(response.json()["choices"][0]["message"]["content"]).strip()
     except httpx.HTTPStatusError as exc:
-        logger.exception("게이트웨이 호출 실패: status=%s", exc.response.status_code)
-        raise HTTPException(
-            status_code=502,
-            detail=f"LLM 게이트웨이 호출 실패: status={exc.response.status_code}",
-        ) from exc
+        # exc.response.text 는 게이트웨이가 GC-7 에 맞춰 이미 상류 응답을 걷어낸
+        # 구조화된 본문(예: {"error":{"type":"upstream_error","upstreamStatus":N,
+        # "attempts":N}})이므로 로그·detail 에 그대로 실어도 안전하다. 요청 헤더나
+        # Authorization 값은 여기서 절대 로그하지 않는다.
+        body = exc.response.text[:500]
+        logger.exception(
+            "게이트웨이 호출 실패: status=%s body=%s", exc.response.status_code, body
+        )
+        detail = f"LLM 게이트웨이 호출 실패: status={exc.response.status_code}"
+        try:
+            error_body = exc.response.json()
+        except ValueError:
+            error_body = None
+        upstream_info = error_body.get("error") if isinstance(error_body, dict) else None
+        if isinstance(upstream_info, dict) and (
+            "upstreamStatus" in upstream_info or "attempts" in upstream_info
+        ):
+            detail += (
+                f" upstreamStatus={upstream_info.get('upstreamStatus')}"
+                f" attempts={upstream_info.get('attempts')}"
+            )
+        else:
+            detail += f" body={body}"
+        raise HTTPException(status_code=502, detail=detail) from exc
     except Exception as exc:
         logger.exception("게이트웨이 호출 실패")
         raise HTTPException(status_code=502, detail=f"LLM 게이트웨이 호출 실패: {exc}") from exc
@@ -333,8 +357,6 @@ def recommend(
     req: PrescriptionRecommendRequest,
     x_prescription_eval_trace: Optional[str] = Header(default=None),
 ) -> PrescriptionRecommendResponse:
-    requested_model = req.model or DEFAULT_MODEL
-
     effective_top_rx: Any = req.top_rx
     used_arango = False
     arango_count = 0
@@ -554,16 +576,36 @@ def recommend(
         },
     )
 
-    model_id = requested_model
+    # 게이트웨이에 실제로 실릴 모델. req.model 은 게이트웨이 payload 에 실리지
+    # 않는다(luna 계약 — 서비스가 하나의 고정 모델만 사용). GC-2: req.model /
+    # req.temperature 가 채워져 있는데도 조용히 버려지면 안 되므로 흔적을 남긴다.
+    wire_model = os.environ.get("LLM_MODEL", "openai.gpt-5.6-luna")
+    ignored_kwargs: Dict[str, Any] = {}
+    if req.model and req.model != wire_model:
+        logger.warning(
+            "req.model=%r 은(는) 무시됩니다 — 게이트웨이에는 항상 LLM_MODEL=%r 로 전송됩니다.",
+            req.model,
+            wire_model,
+        )
+        ignored_kwargs["ignoredRequestModel"] = req.model
+    if req.temperature is not None:
+        logger.warning(
+            "req.temperature=%r 은(는) 무시됩니다 — 게이트웨이는 temperature 를 받지 않습니다(luna 계약).",
+            req.temperature,
+        )
+        ignored_kwargs["ignoredTemperature"] = req.temperature
 
-    if resolve_provider() == "stub":
+    provider = resolve_provider()
+    if provider == "stub":
         raw = stub_prescription_response(effective_top_rx)
         llm_status = "stub"
-        trace_tool("llm_generate", True, status="success", model="stub", temperature=0.0)
+        trace_tool(
+            "llm_generate", True, status="success", model="stub", temperature=0.0, **ignored_kwargs
+        )
     else:
-        raw = _invoke_gateway_json(SYSTEM_PRESCRIPTION, user_msg)
+        raw = _invoke_gateway_json(SYSTEM_PRESCRIPTION, user_msg, wire_model)
         llm_status = "real"
-        trace_tool("llm_generate", True, status="success", model=model_id)
+        trace_tool("llm_generate", True, status="success", model=wire_model, **ignored_kwargs)
 
     try:
         data = parse_prescriptions_llm_response(raw)
@@ -604,7 +646,12 @@ def recommend(
         used_cohort_rx=used_cohort,
         cohort_rx_count=cohort_count,
         toolTrace=tool_trace if eval_trace_enabled else [],
-        engineStatus=resolve_provider(),
+        # MINOR 6: 같은 요청 안에서 resolve_provider() 를 두 번 읽지 않는다 — 스레드풀에서
+        # LLM_PROVIDER(프로세스 전역)가 요청 도중 바뀌면 engineStatus 와 llmStatus 가
+        # 서로 다른 시점의 값을 가리켜 응답이 자기모순에 빠질 수 있다. 위에서 이미 읽은
+        # provider 를 그대로 재사용한다 — GC-5: engineStatus 의 관측 가능한 동작(값)은
+        # 바뀌지 않는다, resolve_provider() 를 몇 번 호출하는지만 바뀐다.
+        engineStatus=provider,
         llmStatus=llm_status,
     )
 

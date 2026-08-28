@@ -52,8 +52,14 @@ public class EmbeddedPrescriptionAgentStarter implements ApplicationRunner, Disp
     @Value("${ai.prescription-agent.embed.startup-timeout-ms:90000}")
     private long embedStartupTimeoutMs;
 
+    // Task 8 완료(certificate_api 도 게이트웨이 경유로 이관) 후에는 이 블록과 GOOGLE_API_KEY
+    // 주입 자체를 제거할 수 있다. 지금은 services/certificate 가 여전히 GOOGLE_API_KEY 를
+    // 직접 쓰므로 남겨둔다.
     @Value("${gemini.api.key:}")
     private String geminiApiKey;
+
+    @Value("${llm.gateway.base-url:http://localhost:8003/v1}")
+    private String llmGatewayBaseUrl;
 
     private volatile Process ownedProcess;
 
@@ -98,6 +104,14 @@ public class EmbeddedPrescriptionAgentStarter implements ApplicationRunner, Disp
         pb.directory(workDir.toFile());
         pb.inheritIO();
 
+        // prescription_api.py 는 이제 Gemini 를 직접 호출하지 않고 LLM_GATEWAY_BASE_URL 을
+        // 통해 게이트웨이를 거친다(Task 7). env_check.require_env 가 이 값을 강제하므로,
+        // 주입하지 않으면 자식 프로세스가 기동 즉시 exitCode=1 로 죽는다.
+        pb.environment().put("LLM_GATEWAY_BASE_URL", llmGatewayBaseUrl);
+
+        // 아래 GOOGLE_API_KEY 주입 블록은 Task 8(services/certificate 이관) 완료 후 제거
+        // 대상이다 — 지금은 같은 uvicorn 프로세스가 certificate_api 도 함께 서빙할 수 있어
+        // 여전히 필요하다.
         String googleKey = resolveGoogleApiKey();
         if (googleKey != null && !googleKey.isBlank()) {
             pb.environment().put("GOOGLE_API_KEY", googleKey);
