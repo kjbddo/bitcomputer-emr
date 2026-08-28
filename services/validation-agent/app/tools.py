@@ -188,12 +188,16 @@ def prescription_finder(
             "status": "FAILED",
             "evidence": [f"처방 RAG 호출 실패: {exc}"],
             "candidatePrescriptions": [],
+            "recommendationLlmStatus": "fallback",
         }
 
     return {
         "status": "LOADED",
         "evidence": ["기존 처방 RAG에서 참고 처방 후보를 조회했습니다."],
         "candidatePrescriptions": body.get("prescriptions") or [],
+        # 처방 RAG 자신이 모델을 썼는지. 이 스텝의 페이로드 출처이지, 검증 결정의
+        # 출처가 아니다 — 최상위 llmStatus 에 섞으면 안 된다(Task 6 회귀).
+        "recommendationLlmStatus": body.get("llmStatus"),
     }
 
 

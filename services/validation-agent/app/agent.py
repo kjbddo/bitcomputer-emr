@@ -150,16 +150,14 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
     if not state.get("candidate_prescriptions"):
         reason = final_result.get("reason") or final_result.get("summary") or ""
         query_context = ", ".join(pubmed_queries[-2:]) or _build_pubmed_query(state, str(reason))
-        finder_result = _invoke_tool(
+        finder_result = _invoke_prescription_finder(
             reasoning_trace,
-            "Prescription Finder",
             "검증 상태와 무관하게 AI 처방 추천 결과를 생성하기 위해 처방 후보를 조회한다.",
             {
                 "patient_id": str((state.get("patient_summary") or {}).get("patientId") or request.patientId or ""),
                 "diseases": state.get("saved_diseases", []),
                 "symptoms": f"{state.get('symptoms') or ''}\n검증 사유: {reason}\nPubMed query: {query_context}",
             },
-            prescription_finder,
             # 결정 루프 밖에서 항상 실행되는 후처리라 "rule" 로 표기한다(리뷰 finding 2).
             source="rule",
         )
@@ -249,6 +247,54 @@ def _invoke_tool(
         # — 이 스텝들은 애초에 LLM 이 관여할 여지가 없으므로, 흠 없는 LLM 응답에도
         # "fallback" 이 찍혀 신호가 무의미해지는 것을 막는다(리뷰 finding 2).
         "source": source,
+    })
+    return observation if isinstance(observation, dict) else {"status": "UNKNOWN", "raw": observation}
+
+
+def _downgrade_by_payload_source(source: str, payload_status: Optional[str]) -> str:
+    """스텝의 페이로드 출처가 모델이 아니면 강등한다. 승격은 절대 하지 않는다.
+
+    결정이 LLM 이었어도 그 스텝이 실제로 쓴 데이터가 스텁/폴백에서 왔다면
+    트레이스는 그 사실을 우선한다. 반대로, 결정이 LLM 이 아니었는데 페이로드가
+    모델에서 왔다고 source 를 "llm" 으로 올리지는 않는다 — source 는 이 스텝이
+    어디서 결정됐는지도 함께 담기 때문이다.
+    """
+    if source != "llm":
+        return source
+    if payload_status == "real":
+        return source
+    return "fallback"
+
+
+def _invoke_prescription_finder(
+    reasoning_trace: List[Dict[str, Any]],
+    thought: str,
+    payload: Dict[str, Any],
+    source: str,
+) -> Dict[str, Any]:
+    """Prescription Finder 전용 호출 래퍼.
+
+    이 스텝의 트레이스 `source` 는 스텝을 촉발한 결정의 출처(`source`)에서
+    시작하되, 처방 RAG 자신이 보고한 `recommendationLlmStatus` 로 다운그레이드한다
+    (GC-3, task 11 §Step 22) — 결정이 LLM 이었어도 실제로 쓴 페이로드가
+    스텁/폴백에서 왔다면 트레이스는 그 사실을 우선한다. **`decision_sources` 에는
+    절대 반영하지 않는다** — 최상위 llmStatus 를 오염시키면 Task 6 의 결함이
+    재발한다(브리프 §주의).
+    """
+    try:
+        observation = prescription_finder.invoke(payload)
+    except Exception as exc:  # noqa: BLE001
+        observation = {"status": "FAILED", "evidence": [str(exc)]}
+    payload_status = (
+        observation.get("recommendationLlmStatus") if isinstance(observation, dict) else None
+    )
+    trace_source = _downgrade_by_payload_source(source, payload_status)
+    reasoning_trace.append({
+        "thought": thought,
+        "action": "Prescription Finder",
+        "actionInput": payload,
+        "observation": observation,
+        "source": trace_source,
     })
     return observation if isinstance(observation, dict) else {"status": "UNKNOWN", "raw": observation}
 
@@ -524,12 +570,10 @@ def _execute_decided_tool(
             "diseases": state.get("saved_diseases", []),
             "symptoms": f"{state.get('symptoms') or ''}\n검증 사유: {reason}\nPubMed query: {query_context}",
         }
-        finder_result = _invoke_tool(
+        finder_result = _invoke_prescription_finder(
             reasoning_trace,
-            action,
             thought,
             payload,
-            prescription_finder,
             source=source,
         )
         candidates = finder_result.get("candidatePrescriptions") or []

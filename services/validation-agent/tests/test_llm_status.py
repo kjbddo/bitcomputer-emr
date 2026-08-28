@@ -1,6 +1,6 @@
 import os
 
-from app import agent
+from app import agent, tools
 from app.agent import run_validation_agent
 from app.models import ValidationAgentRequest
 
@@ -363,6 +363,183 @@ def test_finalize_decision_leaves_trace_entry(monkeypatch):
     assert finalize_entries, "FINALIZE 결정도 트레이스에 남아야 한다(GC-2) — 아니면 llmStatus=real 이 근거 없는 주장이 된다"
     assert finalize_entries[0]["source"] == "llm"
     assert finalize_entries[0]["observation"] == {"status": "FINALIZED"}
+
+
+class _FakeHttpResponse:
+    def __init__(self, json_body):
+        self._json_body = json_body
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._json_body
+
+
+class _FakeHttpxClient:
+    """`httpx.Client` 컨텍스트 매니저 대역. `tools.prescription_finder` 가 실제
+    네트워크 호출 없이 정해진 JSON 응답을 받도록 한다."""
+
+    def __init__(self, json_body):
+        self._json_body = json_body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def post(self, *args, **kwargs):
+        return _FakeHttpResponse(self._json_body)
+
+
+def test_tools_prescription_finder_forwards_upstream_llm_status(monkeypatch):
+    """`agent.py` 쪽 테스트는 `agent.prescription_finder` 전체를 대역으로
+    바꿔치기해서 검증하므로 `tools.py` 자신의 딕셔너리 구성 로직은 우회된다.
+    `prescription_api` 가 실제로 응답에 실은 `llmStatus` 가 `tools.py` 의
+    `recommendationLlmStatus` 로 정확히 전달되는지는 여기서 직접 확인해야 한다.
+    """
+    monkeypatch.setattr(
+        tools.httpx,
+        "Client",
+        lambda *args, **kwargs: _FakeHttpxClient({"prescriptions": [], "llmStatus": "stub"}),
+    )
+
+    result = tools.prescription_finder.invoke({
+        "patient_id": "1",
+        "diseases": [],
+        "symptoms": "",
+    })
+
+    assert result["recommendationLlmStatus"] == "stub"
+
+
+def test_tools_prescription_finder_failure_reports_fallback_llm_status(monkeypatch):
+    """처방 RAG 호출 자체가 실패하면 모델은 이 스텝에 관여하지 않았다 —
+    상류가 뭐라고 했을지와 무관하게 fallback 이어야 한다."""
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("연결 실패")
+
+    monkeypatch.setattr(tools.httpx, "Client", _raise)
+
+    result = tools.prescription_finder.invoke({
+        "patient_id": "1",
+        "diseases": [],
+        "symptoms": "",
+    })
+
+    assert result["recommendationLlmStatus"] == "fallback"
+
+
+class _FakePrescriptionFinder:
+    """`agent.prescription_finder` 를 통째로 대체하는 대역.
+
+    `prescription_finder` 도 `_FakePubmedLoader` 와 마찬가지로 pydantic 기반
+    `StructuredTool` 이라 인스턴스의 `invoke` 속성을 직접 monkeypatch 할 수
+    없다. 대신 `agent` 모듈이 바라보는 이름 자체를 이 대역으로 바꿔치기한다.
+    """
+
+    def __init__(self, llm_status):
+        self.llm_status = llm_status
+
+    def invoke(self, payload=None):
+        return {
+            "status": "LOADED",
+            "evidence": ["기존 처방 RAG에서 참고 처방 후보를 조회했습니다."],
+            "candidatePrescriptions": [
+                {
+                    "id": 1,
+                    "rank": 1,
+                    "prescription_code": "C1",
+                    "prescription_name": "약1",
+                    "reason": "",
+                    "confidence_score": 0.9,
+                }
+            ],
+            # 처방 RAG 자신이 모델을 썼는지 — Prescription Finder 트레이스 항목의
+            # source 판정에만 쓰인다(task 11 §Step 21-22).
+            "recommendationLlmStatus": self.llm_status,
+        }
+
+
+def _install_prescription_finder(monkeypatch, llm_status):
+    monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder(llm_status))
+
+
+def _install_llm_decisions(monkeypatch):
+    """결정 루프의 모든 반복이 LLM 결정이고, Prescription Finder 를 반드시
+    거치도록 시퀀스를 구성하는 대역. 처방 RAG 자신의 출처(stub/fallback)가
+    최상위 llmStatus 를 오염시키지 않는지 확인하려면, 결정 자체는 전부 LLM 이
+    내렸다는 전제가 필요하다(그래야 llmStatus="real" 이 다른 이유로 나온 게
+    아니라는 것이 분명해진다).
+    """
+    monkeypatch.setenv("LLM_PROVIDER", "real")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
+    monkeypatch.setattr(agent, "_create_llm", lambda: None)
+    monkeypatch.setattr(
+        agent,
+        "_llm_tool_decision",
+        _sequenced_llm_decision([
+            {"thought": "x-ray 로드", "action": "X-ray Result Loader", "actionInput": {}},
+            {"thought": "상병 검증", "action": "Disease Validator", "actionInput": {}},
+            {"thought": "처방 검증", "action": "Prescription Validator", "actionInput": {}},
+            {"thought": "처방 후보 조회", "action": "Prescription Finder", "actionInput": {}},
+            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
+        ]),
+    )
+
+
+def test_prescription_finder_trace_marks_stub_recommendation(monkeypatch):
+    """처방 RAG 가 스텁 응답을 돌려주면 그 스텝의 source 는 llm 이 될 수 없다.
+
+    결정 자체는 LLM 이 했더라도, 이 스텝의 페이로드는 스텁에서 나왔다.
+    source 의 선언된 의미가 "이 스텝의 페이로드가 어디서 왔나"이므로 여기가 맞다.
+    """
+    _install_llm_decisions(monkeypatch)
+    _install_prescription_finder(monkeypatch, llm_status="stub")
+
+    response = run_validation_agent(_request())
+
+    finder = [e for e in response.reasoningTrace if e["action"] == "Prescription Finder"]
+    assert finder, "Prescription Finder 스텝이 트레이스에 있어야 한다"
+    assert all(e["source"] != "llm" for e in finder)
+
+
+def test_prescription_finder_stub_does_not_flip_top_level_status(monkeypatch):
+    """스텝 출처가 최상위 llmStatus 를 오염시키면 안 된다(Task 6 회귀 방지).
+
+    보조 호출의 결과를 결정 소스에 섞었다가, 결정이 전부 스텁인데 llmStatus 가
+    "real" 로 나오는 결함을 만든 적이 있다. 방향을 반대로도 확인한다 —
+    처방 RAG 가 스텁이라고 해서 LLM 이 내린 결정이 지워지지도 않아야 한다.
+    """
+    _install_llm_decisions(monkeypatch)
+    _install_prescription_finder(monkeypatch, llm_status="stub")
+
+    response = run_validation_agent(_request())
+
+    assert response.llmStatus == "real"
+
+
+def test_prescription_finder_real_payload_does_not_promote_stub_decisions(monkeypatch):
+    """Task 6 결함을 정확한 형태로 재현한다: 결정이 전부 스텁인데 처방 RAG
+    보조 호출 하나가 "real" 을 보고했다는 이유로 최상위 llmStatus 가 real 로
+    뒤바뀌면 안 된다.
+
+    바로 위 테스트(llm 결정 + stub 페이로드)는 `_resolve_llm_status` 가 "llm 이
+    하나라도 있으면 real" 을 최우선으로 보기 때문에, 이미 llm 결정이 있는
+    상태에서는 무엇을 더 섞어 넣어도 결과가 바뀌지 않는다 — decision_sources
+    오염이 실제로 결과를 뒤집을 수 있는 유일한 방향은 이쪽(전부 스텁인 상태에
+    real/llm 값이 섞여 들어오는 경우)이다. LLM_PROVIDER=stub 이면 결정 시퀀스가
+    Prescription Finder 를 직접 고르지 않으므로, 이 호출은 루프 밖 후처리
+    경로(§Step 22 의 "결정 루프 밖에서 항상 실행되는 후처리")를 통해서만 실행된다.
+    """
+    monkeypatch.setenv("LLM_PROVIDER", "stub")
+    _install_prescription_finder(monkeypatch, llm_status="real")
+
+    response = run_validation_agent(_request())
+
+    assert response.llmStatus == "stub"
 
 
 def test_hallucinated_action_produces_trace_entry(monkeypatch):
