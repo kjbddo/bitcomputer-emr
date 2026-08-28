@@ -10,6 +10,7 @@ import styles from "./page.module.css";
 export default function AdminUsersPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [updatingRoles, setUpdatingRoles] = useState<Set<number>>(new Set());
@@ -49,7 +50,10 @@ export default function AdminUsersPage() {
 
   async function loadUsers() {
     setLoading(true);
-    setError(null);
+    // M4: 목록 로딩 실패는 loadError 로 - 아래 error/successMessage 배너는
+    // 직원 추가·역할 변경 같은 뮤테이션 결과 전용이다(depts/audit 화면과
+    // 동일한 구분).
+    setLoadError(null);
     try {
       const data = await getAllUsers();
       // 응답이 배열인 경우와 객체인 경우 모두 처리
@@ -57,7 +61,7 @@ export default function AdminUsersPage() {
       setUsers(userList);
     } catch (err) {
       const message = err instanceof Error ? err.message : "유저 목록을 불러오는데 실패했습니다";
-      setError(message);
+      setLoadError(message);
       setUsers([]); // 에러 발생 시 빈 배열로 초기화
     } finally {
       setLoading(false);
@@ -133,6 +137,14 @@ export default function AdminUsersPage() {
       [Role.RECEPTIONIST]: "접수원",
     };
     return roleMap[role] || role;
+  }
+
+  // M14: deptId 는 화면이 이미 불러온 depts 로 이름을 알 수 있다. 일치하는
+  // 부서가 없으면(아직 로딩 중이거나 삭제된 경우) id 로 폴백한다.
+  function getDeptLabel(deptId: number | string): string {
+    const id = Number(deptId);
+    const match = depts.find((d) => d.id === id);
+    return match ? match.dept : String(deptId);
   }
 
   return (
@@ -254,6 +266,16 @@ export default function AdminUsersPage() {
         <Panel title="유저 목록">
           {loading ? (
             <EmptyState title="로딩 중..." />
+          ) : loadError ? (
+            <EmptyState
+              title="유저 목록을 불러오지 못했습니다"
+              description={loadError}
+              action={
+                <Button variant="secondary" size="sm" onClick={loadUsers}>
+                  다시 시도
+                </Button>
+              }
+            />
           ) : !users || users.length === 0 ? (
             <EmptyState title="등록된 유저가 없습니다" />
           ) : (
@@ -289,7 +311,7 @@ export default function AdminUsersPage() {
                     </td>
                     <td>
                       {user.deptId ? (
-                        <Badge tone="neutral">{user.deptId}</Badge>
+                        <Badge tone="neutral">{getDeptLabel(user.deptId)}</Badge>
                       ) : (
                         <span className={styles.deptEmpty}>-</span>
                       )}
