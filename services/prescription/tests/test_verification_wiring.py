@@ -95,3 +95,22 @@ def test_recommend_wires_effective_top_rx_not_request(monkeypatch):
     assert seen["candidates"] == fetched_rows
     assert seen["candidates"] != req.top_rx
     assert resp.verification["status"] == "skipped"
+
+
+# 예외 경로의 반환 형태를 아무도 안 봤다. checks 를 None 으로 바꿔도 전체가
+# 초록이었다. 이 dict 는 그대로 JSON 응답에 실려 웹이 배열로 읽으므로,
+# 형태가 틀어지면 화면 쪽에서 터진다.
+def test_exception_fallback_shape_is_json_ready(monkeypatch):
+    import json
+
+    def boom(**kwargs):
+        raise RuntimeError("검증기 폭발")
+
+    monkeypatch.setattr(prescription_api, "verify_prescriptions", boom)
+    result = prescription_api._safe_verify(candidates=[], items=[])
+
+    assert result["status"] == "skipped"
+    assert isinstance(result["checks"], list)
+    assert result["checks"] == []
+    assert isinstance(result["skippedReason"], str)
+    json.dumps(result)
