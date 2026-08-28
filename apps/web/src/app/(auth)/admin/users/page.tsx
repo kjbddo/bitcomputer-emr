@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { createUser, getAllUsers, setRole } from "@/services/admin";
+import { createUser, getAllUsers, getDepts, setRole } from "@/services/admin";
 import { User, Role } from "@/types/user";
+import { Dept } from "@/types/dept";
 import { Badge, Button, EmptyState, Field, Panel, Table } from "@/components/ui";
 import styles from "./page.module.css";
 
@@ -16,13 +17,35 @@ export default function AdminUsersPage() {
     name: "",
     username: "",
     password: "",
-    deptId: "1",
+    deptId: "",
     role: Role.DOCTOR,
   });
+  const [depts, setDepts] = useState<Dept[]>([]);
+  const [deptsLoading, setDeptsLoading] = useState(true);
+  const [deptsError, setDeptsError] = useState<string | null>(null);
 
   useEffect(() => {
     loadUsers();
+    loadDepts();
   }, []);
+
+  async function loadDepts() {
+    setDeptsLoading(true);
+    setDeptsError(null);
+    try {
+      const list = await getDepts();
+      setDepts(list);
+      // 방금 불러온 목록의 첫 부서를 기본 선택값으로 둔다 - 존재하지 않는
+      // 부서 번호("1")를 그대로 남겨 서버가 500 을 내던 경로를 없앤다.
+      setNewUser((prev) => ({ ...prev, deptId: list[0] ? String(list[0].id) : "" }));
+    } catch (err) {
+      setDepts([]);
+      const message = err instanceof Error ? err.message : "부서 목록을 불러오지 못했습니다";
+      setDeptsError(message);
+    } finally {
+      setDeptsLoading(false);
+    }
+  }
 
   async function loadUsers() {
     setLoading(true);
@@ -74,7 +97,7 @@ export default function AdminUsersPage() {
       return;
     }
     if (!Number.isFinite(deptId) || deptId <= 0) {
-      setError("부서 ID는 1 이상의 숫자여야 합니다.");
+      setError("부서를 선택해주세요.");
       return;
     }
 
@@ -91,7 +114,7 @@ export default function AdminUsersPage() {
         name: "",
         username: "",
         password: "",
-        deptId: "1",
+        deptId: depts[0] ? String(depts[0].id) : "",
         role: Role.DOCTOR,
       });
       await loadUsers();
@@ -172,15 +195,26 @@ export default function AdminUsersPage() {
                 required
               />
             </Field>
-            <Field label="부서 ID" htmlFor="admin-new-user-dept">
-              <input
+            <Field label="부서" htmlFor="admin-new-user-dept">
+              <select
                 id="admin-new-user-dept"
-                type="number"
-                min={1}
                 value={newUser.deptId}
                 onChange={(e) => setNewUser((prev) => ({ ...prev, deptId: e.target.value }))}
+                disabled={deptsLoading || depts.length === 0}
+                aria-describedby={deptsError ? "admin-new-user-dept-load-error" : undefined}
                 required
-              />
+              >
+                {depts.length === 0 && (
+                  <option value="">
+                    {deptsLoading ? "부서 불러오는 중…" : "선택 가능한 부서가 없습니다"}
+                  </option>
+                )}
+                {depts.map((d) => (
+                  <option key={d.id} value={String(d.id)}>
+                    {d.dept}
+                  </option>
+                ))}
+              </select>
             </Field>
             <Field label="역할" htmlFor="admin-new-user-role">
               <select
@@ -194,10 +228,27 @@ export default function AdminUsersPage() {
                 <option value={Role.SUPER_USER}>{getRoleLabel(Role.SUPER_USER)}</option>
               </select>
             </Field>
-            <Button type="submit" variant="primary" className={styles.createButton}>
+            <Button
+              type="submit"
+              variant="primary"
+              className={styles.createButton}
+              disabled={deptsLoading || depts.length === 0}
+            >
               직원 추가
             </Button>
           </form>
+          {deptsError && (
+            <div
+              id="admin-new-user-dept-load-error"
+              className={styles.deptLoadError}
+              role="alert"
+            >
+              <span>{deptsError} 부서를 선택할 수 없어 직원을 추가할 수 없습니다.</span>
+              <Button type="button" variant="ghost" size="sm" onClick={loadDepts}>
+                다시 시도
+              </Button>
+            </div>
+          )}
         </Panel>
 
         <Panel title="유저 목록">
