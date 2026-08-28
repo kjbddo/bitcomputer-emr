@@ -58,7 +58,9 @@ public class EmbeddedPrescriptionAgentStarter implements ApplicationRunner, Disp
     @Value("${gemini.api.key:}")
     private String geminiApiKey;
 
-    @Value("${llm.gateway.base-url:http://localhost:8003/v1}")
+    private static final String DEFAULT_LLM_GATEWAY_BASE_URL = "http://localhost:8003/v1";
+
+    @Value("${llm.gateway.base-url:" + DEFAULT_LLM_GATEWAY_BASE_URL + "}")
     private String llmGatewayBaseUrl;
 
     private volatile Process ownedProcess;
@@ -106,8 +108,14 @@ public class EmbeddedPrescriptionAgentStarter implements ApplicationRunner, Disp
 
         // prescription_api.py 는 이제 Gemini 를 직접 호출하지 않고 LLM_GATEWAY_BASE_URL 을
         // 통해 게이트웨이를 거친다(Task 7). env_check.require_env 가 이 값을 강제하므로,
-        // 주입하지 않으면 자식 프로세스가 기동 즉시 exitCode=1 로 죽는다.
-        pb.environment().put("LLM_GATEWAY_BASE_URL", llmGatewayBaseUrl);
+        // 주입하지 않으면 자식 프로세스가 기동 즉시 exitCode=1 로 죽는다. @Value 의 기본값은
+        // 프로퍼티 키가 아예 없을 때만 적용되고, `llm.gateway.base-url=` 처럼 빈 값으로
+        // 설정되면 그 빈 문자열이 그대로 주입된다 — Python 쪽 require_env 의 .strip() 검사가
+        // 실패해 자식 프로세스가 죽으므로, 여기서 빈 값을 걸러 기본값으로 되돌린다.
+        String effectiveLlmGatewayBaseUrl = llmGatewayBaseUrl == null || llmGatewayBaseUrl.isBlank()
+                ? DEFAULT_LLM_GATEWAY_BASE_URL
+                : llmGatewayBaseUrl;
+        pb.environment().put("LLM_GATEWAY_BASE_URL", effectiveLlmGatewayBaseUrl);
 
         // 아래 GOOGLE_API_KEY 주입 블록은 Task 8(services/certificate 이관) 완료 후 제거
         // 대상이다 — 지금은 같은 uvicorn 프로세스가 certificate_api 도 함께 서빙할 수 있어

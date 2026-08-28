@@ -29,6 +29,25 @@ def test_engine_status_still_present():
     assert "engineStatus" in fields
 
 
+def test_llm_status_field_is_required_with_no_default():
+    """MINOR 9: 이전 라운드에서 `= "real"` 기본값을 없앤 하드닝(MINOR 5) 자체가
+    무방비였다 — 기본값을 되돌려도(`= "real"`) 37개 전부 통과했다. 기본값이
+    있으면 생성 시 값을 빠뜨려도 "모델이 실제로 판단했다"는 거짓 신호를
+    조용히 내보낼 수 있다(GC-2)."""
+    field = PrescriptionRecommendResponse.model_fields["llmStatus"]
+    assert field.is_required(), "llmStatus 에 기본값이 있으면 안 된다 — 값을 빠뜨려도 조용히 통과해서는 안 된다"
+
+
+def test_llm_status_field_enum_is_pinned_to_real_or_stub():
+    """MINOR 9: `Literal["real", "stub"]` 를 `str` 로 되돌려도(엄격한 열거형을
+    풀어도) 37개 전부 통과했다. OpenAPI 스키마의 enum 자체를 고정해 이 변이를
+    잡는다."""
+    schema = PrescriptionRecommendResponse.model_json_schema()
+    llm_status_schema = schema["properties"]["llmStatus"]
+    assert llm_status_schema.get("enum") == ["real", "stub"]
+    assert schema["required"] and "llmStatus" in schema["required"]
+
+
 def _request(**overrides):
     defaults = dict(
         patient_id="p-llm-status-1",

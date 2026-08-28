@@ -273,17 +273,92 @@ def test_recommend_real_mode_propagates_gateway_failure_instead_of_fabricating(m
     assert exc_info.value.status_code == 502
 
 
+def test_gateway_connect_timeout_raises_502_with_reason_preserved(monkeypatch):
+    """IMPORTANT 5: ``except httpx.HTTPStatusError`` 만 테스트가 덮고 있어서,
+    타임아웃/커넥션 실패/(200이지만 형식이 깨진) 응답이 모두 떨어지는
+    ``except Exception`` 분기(그 시점 기준 315~317줄)는 무커버리지였다.
+
+    이 분기의 detail 이 ``f"...: {exc}"`` 형태를 유지하는지(사유가 사라지지
+    않는지) 확인한다 — ``{exc}`` 를 지우는 변이를 잡는다."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("timed out", request=request)
+
+    _install_transport(monkeypatch, handler)
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://llm-gateway:8003/v1")
+
+    with pytest.raises(pa.HTTPException) as exc_info:
+        pa._invoke_gateway_json("s", "u", "openai.gpt-5.6-luna")
+
+    assert exc_info.value.status_code == 502
+    assert "timed out" in exc_info.value.detail
+
+
+def test_recommend_real_mode_propagates_connect_timeout_instead_of_fabricating(monkeypatch):
+    """IMPORTANT 5 의 핵심: 게이트웨이 컨테이너 재기동 중 커넥션이 거부되는
+    상황이 재현 가능한 시나리오다(리뷰어 확인). ``except Exception`` 분기를
+    "지어낸 처방 3건 반환" 으로 바꾼 변이를 이 테스트가 잡아야 한다 — 이
+    경로가 무커버리지였을 때는 그 변이로도 37개 전부 통과했다."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    _install_transport(monkeypatch, handler)
+    monkeypatch.setenv("LLM_PROVIDER", "real")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://llm-gateway:8003/v1")
+
+    with pytest.raises(pa.HTTPException) as exc_info:
+        pa.recommend(_real_request(), x_prescription_eval_trace=None)
+
+    assert exc_info.value.status_code == 502
+    assert "refused" in exc_info.value.detail
+
+
+def test_gateway_502_non_json_body_falls_back_to_raw_text_in_detail(monkeypatch):
+    """IMPORTANT 5: 상류가 502 를 주면서 JSON 이 아닌 본문(HTML 에러 페이지 등)을
+    돌려주면, ``error_body`` 파싱이 실패해 ``detail += f" body={body}"`` 폴백으로
+    빠져야 한다. 이 폴백 라인을 지우는 변이를 잡는다."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(502, text="<html><body>Bad Gateway</body></html>")
+
+    _install_transport(monkeypatch, handler)
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://llm-gateway:8003/v1")
+
+    with pytest.raises(pa.HTTPException) as exc_info:
+        pa._invoke_gateway_json("s", "u", "openai.gpt-5.6-luna")
+
+    assert exc_info.value.status_code == 502
+    assert "body=" in exc_info.value.detail
+    assert "Bad Gateway" in exc_info.value.detail
+
+
 # ---------------------------------------------------------------------------
 # IMPORTANT 2 — req.model / req.temperature 가 무시될 때 흔적을 남긴다
 # ---------------------------------------------------------------------------
 
 
-def test_recommend_traces_ignored_request_model_and_temperature(monkeypatch):
+@pytest.mark.parametrize(
+    "llm_provider,expected_trace_model",
+    [
+        ("real", "openai.gpt-5.6-luna"),
+        ("stub", "stub"),
+    ],
+)
+def test_recommend_traces_ignored_request_model_and_temperature(
+    monkeypatch, llm_provider, expected_trace_model
+):
+    """MINOR 8: ignored_kwargs 는 stub/real 어느 분기로 가든 req.model/req.temperature
+    로부터 동일하게 계산된다(583~596줄, 분기 진입 이전). CI/evals 는
+    LLM_PROVIDER=stub 로 돌기 때문에, stub 분기의 **ignored_kwargs 가 빠지는 회귀는
+    real 분기만 테스트해서는 못 잡는다 — 실제로 stub 분기에서만 지워도 37개
+    전부 통과했다(리뷰 확인됨). real 분기에서 지우면 1개 실패(대조군)."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return _success_response(_FAKE_PRESCRIPTIONS)
 
     _install_transport(monkeypatch, handler)
-    monkeypatch.setenv("LLM_PROVIDER", "real")
+    monkeypatch.setenv("LLM_PROVIDER", llm_provider)
     monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://llm-gateway:8003/v1")
     monkeypatch.setenv("LLM_MODEL", "openai.gpt-5.6-luna")
 
@@ -292,7 +367,7 @@ def test_recommend_traces_ignored_request_model_and_temperature(monkeypatch):
     resp = pa.recommend(req, x_prescription_eval_trace="true")
 
     llm_generate = next(t for t in resp.toolTrace if t["tool"] == "llm_generate")
-    assert llm_generate["model"] == "openai.gpt-5.6-luna", "trace 의 model 은 실제로 보낸 모델이어야 한다"
+    assert llm_generate["model"] == expected_trace_model, "trace 의 model 은 실제로 실행된 분기를 반영해야 한다"
     assert llm_generate.get("ignoredRequestModel") == "gemini-2.5-flash"
     assert llm_generate.get("ignoredTemperature") == 0.9
 
