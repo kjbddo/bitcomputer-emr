@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import Diagnosis, { llmStatusNotice } from "../Diagnosis";
+import Diagnosis from "../Diagnosis";
+import { llmStatusNotice } from "@/utils/llmStatus";
 import { MedicalSelectionProvider } from "@store/medicalSelection";
 import {
   getValidationJob,

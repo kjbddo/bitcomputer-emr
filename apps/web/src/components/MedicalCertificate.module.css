@@ -22,6 +22,10 @@
   line-height: var(--line-height-base);
 }
 
+.aiPreviewNotice {
+  margin-bottom: var(--space-3);
+}
+
 .aiPreviewTextarea {
   min-height: 220px;
 }

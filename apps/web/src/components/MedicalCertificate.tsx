@@ -8,10 +8,11 @@ import {
   HttpError,
   saveDocumentCertificate,
 } from "@/services";
-import { Button, Modal, Panel } from "@/components/ui";
+import { Badge, Button, Modal, Panel } from "@/components/ui";
 import styles from "./MedicalCertificate.module.css";
 import { CertificateItem, CertificateType } from "./CertificateList";
 import type { CertificatePatientInfo } from "./CertificatePatientSearch";
+import { llmStatusNotice } from "@/utils/llmStatus";
 
 type FieldValues = Record<string, string>;
 
@@ -205,7 +206,7 @@ export default function MedicalCertificate({
   const [saving, setSaving] = useState(false);
   const [aiGenerating, setAiGenerating] = useState(false);
   const [noticeModal, setNoticeModal] = useState<string | null>(null);
-  const [aiPreviewModal, setAiPreviewModal] = useState<{ text: string } | null>(null);
+  const [aiPreviewModal, setAiPreviewModal] = useState<{ text: string; llmStatus?: string | null } | null>(null);
   const [resolvedAiRound, setResolvedAiRound] = useState<AiModalResolution | null>(null);
   const certificatePageRef = useRef<HTMLDivElement>(null);
 
@@ -350,7 +351,7 @@ export default function MedicalCertificate({
       });
       const text = res.medicalCertificate ?? res.medical_certificate ?? "";
       setResolvedAiRound(null);
-      setAiPreviewModal({ text });
+      setAiPreviewModal({ text, llmStatus: res.llmStatus });
     } catch (error: unknown) {
       console.error("AI 문서 생성 실패", error);
       if (error instanceof HttpError) {
@@ -552,13 +553,23 @@ export default function MedicalCertificate({
         }
       >
         {aiPreviewModal && (
-          <textarea
-            className={styles.aiPreviewTextarea}
-            readOnly
-            value={aiPreviewModal.text}
-            rows={12}
-            aria-label="AI 생성 소견 미리보기"
-          />
+          <>
+            {(() => {
+              const notice = llmStatusNotice(aiPreviewModal.llmStatus);
+              return notice ? (
+                <div className={styles.aiPreviewNotice}>
+                  <Badge tone={notice.tone}>{notice.label}</Badge>
+                </div>
+              ) : null;
+            })()}
+            <textarea
+              className={styles.aiPreviewTextarea}
+              readOnly
+              value={aiPreviewModal.text}
+              rows={12}
+              aria-label="AI 생성 소견 미리보기"
+            />
+          </>
         )}
       </Modal>
 

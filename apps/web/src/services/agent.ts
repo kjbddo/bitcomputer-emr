@@ -48,6 +48,8 @@ export interface DocumentGenerateResponse {
   medicalCertificate: string;
   /** 스네이크 케이스 응답 호환 */
   medical_certificate?: string;
+  /** 소견이 실제로 모델에서 나왔는지. 값 공간을 좁히지 않는다 — Java 가 검증하지 않는다. */
+  llmStatus?: string | null;
 }
 
 const DOCUMENT_API_TIMEOUT_MS = 90000;
