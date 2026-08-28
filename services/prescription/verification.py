@@ -7,6 +7,8 @@ spec: Docs/superpowers/specs/2026-08-29-runtime-verification-design.md §6.1
 """
 from __future__ import annotations
 
+import unicodedata
+
 from typing import Any, Dict, List, Optional, Sequence
 
 from verification_contract import CheckResult, VerificationResult, aggregate_status
@@ -48,6 +50,15 @@ def _index_candidates(candidates: Sequence[Any]) -> Dict[str, Dict[str, str]]:
             continue
         index.setdefault(code, {"name": _row_name(row), "dosage": _row_dosage(row)})
     return index
+
+
+def _normalize_dosage(value: str) -> str:
+    """용량 비교용 정규화: 유니코드 NFC + 공백 축약.
+
+    NFC 를 먼저 한다. 한글 NFD(자모 분해형)는 NFC 와 화면상 같지만
+    코드포인트가 달라, 정규화 없이 비교하면 같은 용량이 불일치로 잡힌다.
+    """
+    return " ".join(unicodedata.normalize("NFC", value).split())
 
 
 def _text(value: Any) -> str:
@@ -162,8 +173,13 @@ def verify_prescriptions(*, candidates: Sequence[Any], items: Sequence[Any]) -> 
                     # 재서식하는지 아직 측정된 바 없으므로, 느슨하게 시작해
                     # 우회를 허용하기보다 엄격하게 시작해 데이터로 완화하는
                     # 쪽을 택한 결과다.
-                    normalized_source = " ".join(source_dosage.split())
-                    normalized_dosage = " ".join(dosage.split())
+                    # 유니코드 정규화도 함께 한다. 한글은 NFC(완성형)와
+                    # NFD(자모 분해형)가 화면상 같은 글자인데 코드포인트가
+                    # 다르다. Arango 적재 경로나 입력기에 따라 어느 쪽으로도
+                    # 들어올 수 있어, 이것 없이는 글자 그대로 같은 용량이
+                    # flagged 로 뜬다 — 없는 불일치를 만들어내는 오탐이다.
+                    normalized_source = _normalize_dosage(source_dosage)
+                    normalized_dosage = _normalize_dosage(dosage)
                     checks.append(CheckResult(
                         id="dosage_verbatim", target=target,
                         outcome="ok" if normalized_source == normalized_dosage else "flagged",

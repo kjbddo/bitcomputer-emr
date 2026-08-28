@@ -273,3 +273,34 @@ def test_non_numeric_rank_is_flagged_not_crashed():
     result = verify_prescriptions(candidates=CANDIDATES, items=items)
 
     assert _outcomes(result, "schema_top3") == ["flagged"]
+
+
+# NFC(완성형)와 NFD(자모 분해형)는 화면상 같은 한글인데 코드포인트가 다르다.
+# Arango 적재 경로나 입력기에 따라 어느 쪽으로도 들어올 수 있다. 정규화가
+# 없으면 글자 그대로 같은 용량이 flagged 로 뜬다 — 없는 불일치를 만들어내는
+# 오탐이고, 그런 표시가 쌓이면 의사가 표시 자체를 무시하게 된다.
+def test_dosage_nfd_source_matches_nfc_output():
+    import unicodedata
+
+    nfc = "1일 3회"
+    nfd = unicodedata.normalize("NFD", nfc)
+    assert nfc != nfd, "테스트 전제: 두 형태의 코드포인트가 실제로 달라야 한다"
+
+    candidates = [{"prescription_code": "A01", "prescription_name": "약가", "dosage": nfd}]
+    items = [_item(1, "A01", "약가", dosage=nfc)]
+    result = verify_prescriptions(candidates=candidates, items=items)
+
+    assert _outcomes(result, "dosage_verbatim") == ["ok"]
+
+
+def test_dosage_nfc_source_matches_nfd_output():
+    import unicodedata
+
+    nfc = "1일 3회"
+    nfd = unicodedata.normalize("NFD", nfc)
+
+    candidates = [{"prescription_code": "A01", "prescription_name": "약가", "dosage": nfc}]
+    items = [_item(1, "A01", "약가", dosage=nfd)]
+    result = verify_prescriptions(candidates=candidates, items=items)
+
+    assert _outcomes(result, "dosage_verbatim") == ["ok"]
