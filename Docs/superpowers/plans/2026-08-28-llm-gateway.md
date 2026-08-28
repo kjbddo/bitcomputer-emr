@@ -80,6 +80,7 @@ Bedrock API 키를 로그·테스트 출력·커밋 어디에도 남기지 않�
 | 7 | prescription 이관 (Gemini 제거) | |
 | 8 | certificate 이관 (Gemini 제거) | |
 | 9 | 실측 4항목 + spec 갱신 | 가정 제거 |
+| 10 | `llmStatus` 를 Java DTO·web 까지 전달 | 결함 수정이 실제로 의사에게 도달 |
 
 ---
 
@@ -1715,6 +1716,241 @@ AWS 콘솔의 Service Quotas 에서 Bedrock 의 해당 모델 TPM 기본값을 �
 ```bash
 git add services/llm-gateway/scripts Docs/superpowers/specs/2026-08-28-llm-gateway-design.md
 git commit -m "test(llm-gateway): luna 파라미터 계약 실측과 spec 결과 기록"
+```
+
+---
+
+### Task 10: llmStatus 를 UI 까지 전달
+
+Task 6 의 `llmStatus` 는 백엔드 계약에만 존재하고 의사에게 도달하지 못한다. 리뷰어가
+확인한 경로: 동기 경로에서 `ValidationEventProcessor.process` 가 응답을
+`ValidationAgentResponse` DTO 로 역직렬화하는데, 이 DTO 는 `@JsonIgnoreProperties(ignoreUnknown = true)`
+이면서 `llmStatus`·`reasoningTrace` 를 모른다. 그 뒤 `toJson(response)` 로 재직렬화해
+`resultJson` 에 저장하므로 **두 필드가 저장 전에 사라진다.** 비동기(RabbitMQ) 경로는
+`ValidationJobResultConsumer` 가 raw `Map` 을 쓰므로 살아남는다 — 즉 같은 검증이 어느
+경로로 갔느냐에 따라 저장 내용이 다르다.
+
+`apps/web` 은 `llmStatus` 를 아예 읽지 않는다. B0 의 목표(휴리스틱 출력을 모델 출력인 양
+보여주는 것을 멈춘다)는 이 태스크 전까지 실제로는 달성되지 않는다.
+
+**Files:**
+- Modify: `apps/api/src/main/java/com/example/bitcomputer/model/ValidationAgentResponse.java`
+- Modify: `apps/web/src/services/history.ts`
+- Modify: `apps/web/src/components/Diagnosis.tsx`
+- Test: `apps/api/src/test/java/com/example/bitcomputer/model/ValidationAgentResponseTest.java` (신규)
+- Test: `apps/web/src/components/__tests__/Diagnosis.test.tsx` (기존이면 추가, 없으면 신규)
+
+**Interfaces:**
+- Consumes: Task 6 의 `ValidationAgentResponse.llmStatus: "real"|"stub"|"fallback"` 과
+  `reasoningTrace[].source: "llm"|"stub"|"rule"|"fallback"`
+- Produces: 두 필드가 동기·비동기 두 경로 모두에서 `ValidationResult.resultJson` 에 보존된다
+- Produces: 검증 모달이 `llmStatus !== "real"` 일 때 모델 미사용을 명시한다
+
+- [ ] **Step 1: 실패하는 Java 테스트 작성**
+
+`apps/api/src/test/java/com/example/bitcomputer/model/ValidationAgentResponseTest.java`:
+
+```java
+package com.example.bitcomputer.model;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class ValidationAgentResponseTest {
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    /**
+     * ValidationEventProcessor 는 응답을 이 DTO 로 역직렬화한 뒤 다시 직렬화해
+     * resultJson 에 저장한다. DTO 가 모르는 필드는 그 왕복에서 사라진다.
+     * 그래서 이 테스트는 "필드가 있다"가 아니라 "왕복이 보존한다"를 단언한다.
+     */
+    @Test
+    void roundTripPreservesLlmStatusAndReasoningTrace() throws Exception {
+        String upstream = "{"
+                + "\"overallStatus\": \"PASS\","
+                + "\"summary\": \"이상 없음\","
+                + "\"reason\": \"규칙 통과\","
+                + "\"llmStatus\": \"fallback\","
+                + "\"reasoningTrace\": [{\"action\": \"Disease Validator\", \"source\": \"fallback\"}],"
+                + "\"recommendedPrescriptions\": [{\"name\": \"약\"}],"
+                + "\"validation\": {\"k\": \"v\"}"
+                + "}";
+
+        ValidationAgentResponse parsed = objectMapper.readValue(upstream, ValidationAgentResponse.class);
+        String roundTripped = objectMapper.writeValueAsString(parsed);
+
+        assertThat(parsed.getLlmStatus()).isEqualTo("fallback");
+        assertThat(roundTripped).contains("\"llmStatus\":\"fallback\"");
+        assertThat(roundTripped).contains("\"source\":\"fallback\"");
+        assertThat(roundTripped).contains("recommendedPrescriptions");
+        assertThat(roundTripped).contains("\"reason\"");
+        assertThat(roundTripped).contains("\"validation\"");
+    }
+
+    /**
+     * 상류가 필드를 안 줬을 때 "모델이 돌았다"로 기울면 안 된다.
+     * 파이썬 쪽 기본값과 같은 방향(fail-closed)으로 맞춘다.
+     */
+    @Test
+    void missingLlmStatusDoesNotClaimRealModel() throws Exception {
+        ValidationAgentResponse parsed = objectMapper.readValue(
+                "{\"overallStatus\":\"PASS\",\"summary\":\"s\"}", ValidationAgentResponse.class);
+
+        assertThat(parsed.getLlmStatus()).isNotEqualTo("real");
+    }
+}
+```
+
+- [ ] **Step 2: 테스트가 실패하는지 확인**
+
+Run: `cd apps/api && ./gradlew test --tests "*ValidationAgentResponseTest*"`
+Expected: FAIL — `getLlmStatus()` 가 존재하지 않아 컴파일 에러.
+
+- [ ] **Step 3: DTO 에 누락 필드 추가**
+
+`ValidationAgentResponse.java` 의 필드 블록을 다음으로 교체한다. `llmStatus` 외에도
+`reason`·`recommendedPrescriptions`·`validation`·`reasoningTrace` 가 같은 이유로 잘리고
+있었으므로 함께 복구한다(그래야 동기·비동기 경로의 저장 내용이 같아진다):
+
+```java
+    private String overallStatus;
+    private String summary;
+    private String reason;
+    private List<Map<String, Object>> recommendedPrescriptions;
+    private Map<String, Object> validation;
+    private List<Map<String, Object>> reasoningTrace;
+    private List<Map<String, Object>> checks;
+    private List<Map<String, Object>> suspectedIssues;
+    private List<String> suggestedReviewItems;
+    private List<Map<String, Object>> candidatePrescriptions;
+
+    // 상류가 이 필드를 안 주면 "모델 미사용" 쪽으로만 틀린다.
+    // 파이썬 모델도 같은 기본값이다(services/validation-agent/app/models.py).
+    @Builder.Default
+    private String llmStatus = "fallback";
+
+    @JsonProperty("shouldNotifyDoctor")
+    private Boolean shouldNotifyDoctor;
+
+    @JsonProperty("shouldBlockAutoPrescription")
+    private Boolean shouldBlockAutoPrescription;
+```
+
+- [ ] **Step 4: 테스트 통과 확인**
+
+Run: `cd apps/api && ./gradlew test --tests "*ValidationAgentResponseTest*"`
+Expected: PASS
+
+- [ ] **Step 5: 커밋**
+
+```bash
+git add apps/api/src/main/java/com/example/bitcomputer/model/ValidationAgentResponse.java apps/api/src/test/java/com/example/bitcomputer/model/ValidationAgentResponseTest.java
+git commit -m "fix(api): 동기 검증 경로가 llmStatus 와 reasoningTrace 를 버리던 문제 수정"
+```
+
+- [ ] **Step 6: 웹 타입에 llmStatus 추가**
+
+`apps/web/src/services/history.ts` 의 `ValidationJobResponse["result"]` 에 한 줄 추가한다.
+`reasoningTrace` 는 이미 있다:
+
+```ts
+    llmStatus?: "real" | "stub" | "fallback";
+```
+
+- [ ] **Step 7: 실패하는 웹 테스트 작성**
+
+`apps/web/src/components/__tests__/Diagnosis.test.tsx` 에 다음을 추가한다(파일이 없으면
+같은 디렉터리의 다른 테스트 파일의 import 관례를 그대로 따라 새로 만든다):
+
+```tsx
+import { describe, expect, it } from "vitest";
+import { llmStatusNotice } from "../Diagnosis";
+
+describe("llmStatusNotice", () => {
+  it("모델이 실제로 돌았으면 아무것도 표시하지 않는다", () => {
+    expect(llmStatusNotice("real")).toBeNull();
+  });
+
+  it("폴백이면 모델 미사용을 명시한다", () => {
+    const notice = llmStatusNotice("fallback");
+    expect(notice).not.toBeNull();
+    expect(notice!.label).toContain("모델 미사용");
+    expect(notice!.tone).toBe("warning");
+  });
+
+  it("스텁이면 폴백과 구분되는 문구를 쓴다", () => {
+    const stub = llmStatusNotice("stub");
+    const fallback = llmStatusNotice("fallback");
+    expect(stub).not.toBeNull();
+    expect(stub!.label).not.toBe(fallback!.label);
+  });
+
+  // 필드가 없는 응답을 "모델이 돌았다"로 해석하면 이 태스크의 목적이 무너진다.
+  it("필드가 없으면 모델이 돌았다고 가정하지 않는다", () => {
+    expect(llmStatusNotice(undefined)).not.toBeNull();
+  });
+});
+```
+
+- [ ] **Step 8: 테스트가 실패하는지 확인**
+
+Run: `cd apps/web && yarn vitest run src/components/__tests__/Diagnosis.test.tsx`
+Expected: FAIL — `llmStatusNotice` 를 export 하지 않는다.
+
+- [ ] **Step 9: llmStatusNotice 구현**
+
+`apps/web/src/components/Diagnosis.tsx` 에서 `overallStatusTone` 바로 아래에 추가하고
+export 한다:
+
+```tsx
+// llmStatus 는 이번 요청이 실제로 어느 경로로 갔는지다(설정이 아니다).
+// "real" 이 아닌 모든 경우 — 값이 없는 경우 포함 — 를 드러낸다. 필드가 빠진 응답을
+// 조용히 "모델이 돌았다"로 읽으면 이 표시가 존재할 이유가 사라진다.
+export function llmStatusNotice(
+  llmStatus: string | undefined
+): { label: string; tone: "warning" | "neutral" } | null {
+  if (llmStatus === "real") return null;
+  if (llmStatus === "stub") {
+    return { label: "스텁 응답 (모델 미사용)", tone: "neutral" };
+  }
+  return { label: "규칙 기반 결과 — 모델 미사용", tone: "warning" };
+}
+```
+
+- [ ] **Step 10: 모달에 표시**
+
+`Diagnosis.tsx` 의 검증 모달에서 `modalCardHead` 블록을 다음으로 교체한다:
+
+```tsx
+            <div className={styles.modalCardHead}>
+              <Badge tone={overallStatusTone(validationModal.result?.overallStatus)}>
+                {validationModal.result?.overallStatus ?? validationModal.status}
+              </Badge>
+              {(() => {
+                const notice = llmStatusNotice(validationModal.result?.llmStatus);
+                return notice ? <Badge tone={notice.tone}>{notice.label}</Badge> : null;
+              })()}
+            </div>
+```
+
+- [ ] **Step 11: 테스트 통과 확인**
+
+Run: `cd apps/web && yarn vitest run src/components/__tests__/Diagnosis.test.tsx`
+Expected: PASS
+
+- [ ] **Step 12: 전체 웹 테스트 확인**
+
+Run: `cd apps/web && yarn vitest run`
+Expected: 기존 통과 수 + 4
+
+- [ ] **Step 13: 커밋**
+
+```bash
+git add apps/web/src/services/history.ts apps/web/src/components/Diagnosis.tsx apps/web/src/components/__tests__/Diagnosis.test.tsx
+git commit -m "feat(web): 검증 결과에 모델 미사용 여부 표시"
 ```
 
 ---
