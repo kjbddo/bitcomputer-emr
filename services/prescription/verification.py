@@ -1,0 +1,155 @@
+"""처방 추천 출력을 조회 결과와 대조한다.
+
+순수 함수만 둔다(GC-1). 출력을 변형하지 않는다(GC-3).
+근거가 없으면 통과가 아니라 미확인이다(GC-2).
+
+spec: Docs/superpowers/specs/2026-08-29-runtime-verification-design.md §6.1
+"""
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional, Sequence
+
+from verification_contract import CheckResult, VerificationResult, aggregate_status
+
+
+def _row_code(row: Any) -> str:
+    """후보 행의 처방코드. 두 키 형태가 실제로 공존한다."""
+    if not isinstance(row, dict):
+        return ""
+    value = row.get("prescription_code")
+    if value is None:
+        value = row.get("처방코드")
+    return str(value).strip() if value is not None else ""
+
+
+def _row_name(row: Any) -> str:
+    if not isinstance(row, dict):
+        return ""
+    value = row.get("prescription_name")
+    if value is None:
+        value = row.get("처방명")
+    return str(value).strip() if value is not None else ""
+
+
+def _row_dosage(row: Any) -> str:
+    if not isinstance(row, dict):
+        return ""
+    value = row.get("dosage")
+    if value is None:
+        value = row.get("용법")
+    return str(value).strip() if value is not None else ""
+
+
+def _index_candidates(candidates: Sequence[Any]) -> Dict[str, Dict[str, str]]:
+    index: Dict[str, Dict[str, str]] = {}
+    for row in candidates:
+        code = _row_code(row)
+        if not code:
+            continue
+        index.setdefault(code, {"name": _row_name(row), "dosage": _row_dosage(row)})
+    return index
+
+
+def _text(value: Any) -> str:
+    return str(value).strip() if value is not None else ""
+
+
+def verify_prescriptions(*, candidates: Sequence[Any], items: Sequence[Any]) -> VerificationResult:
+    index = _index_candidates(candidates)
+    has_candidates = bool(index)
+    checks: List[CheckResult] = []
+
+    # 구조 검사 — 조회 데이터 없이도 판정된다.
+    ranks = sorted(int(getattr(i, "rank", 0) or 0) for i in items)
+    codes = [_text(getattr(i, "prescription_code", "")) for i in items]
+    schema_ok = ranks == [1, 2, 3] and len(set(codes)) == len(codes)
+    checks.append(
+        CheckResult(
+            id="schema_top3",
+            target="response",
+            outcome="ok" if schema_ok else "flagged",
+            evidence=f"rank={ranks} 코드중복={len(codes) - len(set(codes))}건",
+        )
+    )
+
+    for item in items:
+        rank = _text(getattr(item, "rank", ""))
+        target = f"prescription[{rank}]"
+        code = _text(getattr(item, "prescription_code", ""))
+        name = _text(getattr(item, "name", ""))
+        dosage = _text(getattr(item, "dosage", ""))
+        confidence = getattr(item, "confidence_score", None)
+
+        if not has_candidates:
+            checks.append(CheckResult(
+                id="code_in_candidates", target=target, outcome="skipped",
+                evidence="조회된 후보가 없어 대조할 수 없음"))
+            checks.append(CheckResult(
+                id="name_matches_code", target=target, outcome="skipped",
+                evidence="조회된 후보가 없어 대조할 수 없음"))
+            checks.append(CheckResult(
+                id="dosage_verbatim", target=target, outcome="skipped",
+                evidence="조회된 후보가 없어 대조할 수 없음"))
+        else:
+            matched = index.get(code)
+            checks.append(CheckResult(
+                id="code_in_candidates", target=target,
+                outcome="ok" if matched else "flagged",
+                evidence=f"코드 {code!r} 가 후보 {len(index)}건 중 " +
+                         ("있음" if matched else "없음")))
+
+            if matched is None:
+                checks.append(CheckResult(
+                    id="name_matches_code", target=target, outcome="skipped",
+                    evidence="코드가 후보에 없어 이름을 대조할 수 없음"))
+                checks.append(CheckResult(
+                    id="dosage_verbatim", target=target, outcome="skipped",
+                    evidence="코드가 후보에 없어 용량을 대조할 수 없음"))
+            else:
+                expected_name = matched["name"]
+                if not expected_name:
+                    checks.append(CheckResult(
+                        id="name_matches_code", target=target, outcome="skipped",
+                        evidence="후보 행에 처방명이 없어 대조할 수 없음"))
+                else:
+                    checks.append(CheckResult(
+                        id="name_matches_code", target=target,
+                        outcome="ok" if expected_name == name else "flagged",
+                        evidence=f"후보 {expected_name!r} vs 출력 {name!r}"))
+
+                source_dosage = matched["dosage"]
+                if not source_dosage:
+                    # §2.2 의 조용한 누락을 고치는 지점.
+                    checks.append(CheckResult(
+                        id="dosage_verbatim", target=target, outcome="skipped",
+                        evidence="후보 행에 용량 정보가 없어 대조할 수 없음"))
+                elif not dosage:
+                    checks.append(CheckResult(
+                        id="dosage_verbatim", target=target, outcome="skipped",
+                        evidence="출력에 용량이 없어 대조할 수 없음"))
+                else:
+                    checks.append(CheckResult(
+                        id="dosage_verbatim", target=target,
+                        outcome="ok" if dosage in source_dosage else "flagged",
+                        evidence=f"후보 {source_dosage!r} vs 출력 {dosage!r}"))
+
+        if confidence is None:
+            checks.append(CheckResult(
+                id="confidence_in_range", target=target, outcome="skipped",
+                evidence="confidence_score 없음"))
+        else:
+            in_range = 0.0 <= float(confidence) <= 1.0
+            checks.append(CheckResult(
+                id="confidence_in_range", target=target,
+                outcome="ok" if in_range else "flagged",
+                evidence=f"confidence_score={confidence}"))
+
+    skipped_reason: Optional[str] = None
+    if not has_candidates:
+        skipped_reason = "조회된 처방 후보가 없어 근거 대조를 수행하지 못했습니다."
+
+    return VerificationResult(
+        status=aggregate_status(checks),
+        checks=checks,
+        skippedReason=skipped_reason,
+    )
