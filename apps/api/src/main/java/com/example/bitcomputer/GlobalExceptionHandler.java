@@ -6,9 +6,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
@@ -57,6 +59,28 @@ public class GlobalExceptionHandler {
     public ResponseEntity<String> handleDataIntegrityViolation(DataIntegrityViolationException ex) {
         log.error("데이터 무결성 제약 위반", ex);
         return ResponseEntity.status(HttpStatus.CONFLICT).body(GENERIC_ERROR_MESSAGE);
+    }
+
+    // M9: 요청 본문이 JSON 파싱조차 안 되는 경우(비어 있음, 문법 오류 등)
+    // HttpMessageNotReadableException 이 던져진다. 이것도 RuntimeException 의
+    // 하위 타입이라 이 핸들러가 없으면 handleRuntimeException 이 잡아 500 으로
+    // 응답한다 - 클라이언트 입력 문제인데 서버 오류로 보인다. ex.getMessage() 는
+    // Jackson 파서의 내부 위치 정보까지 담고 있어 그대로 노출하지 않는다.
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<String> handleHttpMessageNotReadable(HttpMessageNotReadableException ex) {
+        log.warn("요청 본문을 읽을 수 없음", ex);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("요청 본문을 읽을 수 없습니다.");
+    }
+
+    // M9: 경로 변수가 기대한 타입(예: 숫자)이 아닐 때(PUT /api/admin/depts/abc 등)
+    // MethodArgumentTypeMismatchException 이 던져진다. 마찬가지로
+    // RuntimeException 하위 타입이라 이 핸들러가 없으면 500 으로 응답한다.
+    // ex.getMessage() 는 대상 타입/클래스 이름 등 내부 정보를 담을 수 있어
+    // 일반 메시지만 내려준다.
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<String> handleMethodArgumentTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        log.warn("요청 파라미터 타입 불일치", ex);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("요청 파라미터 형식이 올바르지 않습니다.");
     }
 
     @ExceptionHandler(AccessDeniedException.class)

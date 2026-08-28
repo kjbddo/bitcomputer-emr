@@ -172,4 +172,24 @@ class DeptControllerTest {
         // "{id}" 경로 변수는 부서 ID 이지 환자 ID 가 아니다 - null 로 남아야 한다(I1).
         assertNull(logs.get(0).getTargetPatientId());
     }
+
+    // ── M9: 잘못된 요청 본문/경로 변수는 500 이 아니라 400 이어야 한다 ──────
+
+    @Test
+    void malformedJsonBodyOnCreateReturns400() throws Exception {
+        mockMvc.perform(post("/api/admin/depts")
+                       .cookie(cookieFor(Role.SUPER_USER)).with(csrf())
+                       .contentType("application/json")
+                       .content("{이건 json 이 아님"))
+               .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void nonNumericIdOnRenameReturns400() throws Exception {
+        mockMvc.perform(put("/api/admin/depts/not-a-number")
+                       .cookie(cookieFor(Role.SUPER_USER)).with(csrf())
+                       .contentType("application/json")
+                       .content("{\"dept\":\"아무과\"}"))
+               .andExpect(status().isBadRequest());
+    }
 }
