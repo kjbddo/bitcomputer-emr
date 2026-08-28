@@ -24,9 +24,17 @@ export function attachInterceptors(instance: AxiosInstance): void {
                 )
                 .join("; ")
             : "";
+      // I3: GlobalExceptionHandler 의 모든 핸들러가 ResponseEntity<String> 을
+      // 반환해, 에러 응답 본문이 text/plain 문자열이다("이미 존재하는
+      // 부서명입니다: 내과" 등). data 가 object 가 아니면 이 문자열이
+      // 그대로 온다 - 위의 object 전용 처리만으로는 항상 body 가 null 이
+      // 되어 서버가 고른 구체적인 한글 메시지가 버려지고 axios 의 영어
+      // 일반 메시지("Request failed with status code 409")로 대체됐다.
+      const stringBody = typeof data === "string" ? data.trim() : "";
       const message =
         detailStr ||
         (body?.message != null ? String(body.message) : "") ||
+        stringBody ||
         error.message ||
         "HTTP Error";
 
