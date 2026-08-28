@@ -23,7 +23,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -58,7 +58,16 @@ def _load_dotenv_if_present() -> None:
 
 _load_dotenv_if_present()
 
-DEFAULT_MODEL = os.environ.get("LLM_MODEL", "openai.gpt-5.6-luna")
+
+def _default_llm_model() -> str:
+    """LLM_MODEL 환경변수를 매 호출 시점에 읽는다.
+
+    N12: 이전에는 import 시점 상수(DEFAULT_MODEL)와 호출 시점 재조회가
+    각각 따로 os.environ.get() 을 불렀다. import 시점 값은 프로세스가 뜬
+    이후 환경변수가 바뀌어도 갱신되지 않으므로, /health 가 보고하는
+    default_model 이 실제로 게이트웨이에 실리는 model 과 어긋날 수
+    있었다. 단일 함수로 합쳐 두 지점이 항상 같은 값을 보게 한다."""
+    return os.environ.get("LLM_MODEL", "openai.gpt-5.6-luna")
 
 
 # ── Request / Response 스키마 ─────────────────────────────────────────────────
@@ -97,8 +106,11 @@ class CertificateGenerateRequest(BaseModel):
 
 class CertificateGenerateResponse(BaseModel):
     medicalCertificate: str
-    # LLM 을 실제로 썼는지. 실행 경로에서 도출한다(spec §6.2).
-    llmStatus: str = "real"
+    # LLM 을 실제로 썼는지. engineStatus 와 달리 실행 경로에서 도출한다(spec §6.2).
+    # 기본값을 두지 않는다 — 생성 시 값을 빠뜨리면 "모델이 실제로 판단했다"는
+    # 거짓 신호를 조용히 내보내게 된다. prescription_api.PrescriptionRecommendResponse.llmStatus
+    # 와 동일한 강도로 맞춘다.
+    llmStatus: Literal["real", "stub"]
 
 
 # ── FastAPI 앱 ─────────────────────────────────────────────────────────────────
@@ -115,7 +127,7 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "llm_gateway_configured": bool(os.environ.get("LLM_GATEWAY_BASE_URL")),
-        "default_model": DEFAULT_MODEL,
+        "default_model": _default_llm_model(),
     }
 
 
@@ -140,7 +152,18 @@ def _invoke_gateway_text(system_prompt: str, user_prompt: str, model: str) -> st
             {"role": "user", "content": user_prompt},
         ],
     }
-    timeout = float(os.environ.get("LLM_TIMEOUT_SECONDS", "180"))
+    timeout_raw = os.environ.get("LLM_TIMEOUT_SECONDS", "180")
+    try:
+        timeout = float(timeout_raw)
+    except ValueError as exc:
+        # certificate_api.py:143(구) — try 밖에서 ValueError 가 그대로 터지면
+        # 트레이스백이 노출된 500 이 나간다. 잘못된 설정값도 "실패 계약"
+        # 안에서 다뤄져야 한다(GC-2).
+        logger.exception("LLM_TIMEOUT_SECONDS 파싱 실패: %r", timeout_raw)
+        raise HTTPException(
+            status_code=503,
+            detail=f"LLM_TIMEOUT_SECONDS 설정이 올바르지 않습니다: {timeout_raw!r}",
+        ) from exc
     try:
         with httpx.Client(timeout=timeout) as client:
             response = client.post(
@@ -149,7 +172,16 @@ def _invoke_gateway_text(system_prompt: str, user_prompt: str, model: str) -> st
                 json=payload,
             )
             response.raise_for_status()
-            return str(response.json()["choices"][0]["message"]["content"]).strip()
+            content = response.json()["choices"][0]["message"]["content"]
+            if not isinstance(content, str) or not content.strip():
+                # CRITICAL C1: 200 이지만 형식이 깨진 본문(content: null/""/비문자열)을
+                # str() 로 뭉개서 반환하면 "None" 같은 지어낸 문자열이 llmStatus="real" 인
+                # 진짜 진단서 소견으로 통과한다(GC-2). 여기서 명시적으로 거부해
+                # 아래 ``except Exception`` 분기(502, 사유 보존)로 떨어뜨린다.
+                raise ValueError(
+                    f"게이트웨이가 빈 본문을 돌려주었습니다: content={content!r}"
+                )
+            return content.strip()
     except httpx.HTTPStatusError as exc:
         # exc.response.text 는 게이트웨이가 GC-7 에 맞춰 이미 상류 응답을 걷어낸
         # 구조화된 본문(예: {"error":{"type":"upstream_error","upstreamStatus":N,
@@ -204,7 +236,7 @@ def generate_certificate(req: CertificateGenerateRequest) -> CertificateGenerate
         certificate = stub_certificate_response(req)
         llm_status = "stub"
     else:
-        wire_model = os.environ.get("LLM_MODEL", "openai.gpt-5.6-luna")
+        wire_model = _default_llm_model()
         certificate = _invoke_gateway_text(SYSTEM_CERTIFICATE, user_msg, wire_model)
         llm_status = "real"
 

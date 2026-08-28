@@ -117,10 +117,8 @@ flowchart LR
 | `ARANGO_PASSWORD` | ArangoDB, Spring, Python AI | ArangoDB root 비밀번호 |
 | `ARANGO_DATABASE` | Spring, Prescription API | 처방 그래프 DB |
 | `XRAY_ARANGO_DATABASE` | XrayGraphRAG | X-ray 그래프 DB |
-| `GOOGLE_API_KEY` | Certificate API, Prescription API | Gemini 호출 |
-| `GEMINI_MODEL` | Certificate API, Prescription API | Gemini 모델 |
-| `LLM_GATEWAY_BASE_URL` | ValidationAgent | 게이트웨이 경유 LLM base URL, 기본 `http://llm-gateway:8003/v1` |
-| `LLM_MODEL` | ValidationAgent | tool decider/요약용 모델, 기본 `openai.gpt-5.6-luna` |
+| `LLM_GATEWAY_BASE_URL` | Certificate API, Prescription API, ValidationAgent | 게이트웨이 경유 LLM base URL, 기본 `http://llm-gateway:8003/v1` |
+| `LLM_MODEL` | Certificate API, Prescription API, ValidationAgent | 게이트웨이에 실릴 모델, 기본 `openai.gpt-5.6-luna` |
 | `NEXT_PUBLIC_API_BASE_URL` | Front-End | Spring API base URL |
 | `XRAY_API_DEFAULT_VIEW` | Spring | 기본 X-ray 촬영 방향 |
 

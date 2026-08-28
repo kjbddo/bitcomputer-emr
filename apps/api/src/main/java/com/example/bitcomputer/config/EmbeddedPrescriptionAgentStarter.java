@@ -52,12 +52,6 @@ public class EmbeddedPrescriptionAgentStarter implements ApplicationRunner, Disp
     @Value("${ai.prescription-agent.embed.startup-timeout-ms:90000}")
     private long embedStartupTimeoutMs;
 
-    // Task 8 완료(certificate_api 도 게이트웨이 경유로 이관) 후에는 이 블록과 GOOGLE_API_KEY
-    // 주입 자체를 제거할 수 있다. 지금은 services/certificate 가 여전히 GOOGLE_API_KEY 를
-    // 직접 쓰므로 남겨둔다.
-    @Value("${gemini.api.key:}")
-    private String geminiApiKey;
-
     private static final String DEFAULT_LLM_GATEWAY_BASE_URL = "http://localhost:8003/v1";
 
     @Value("${llm.gateway.base-url:" + DEFAULT_LLM_GATEWAY_BASE_URL + "}")
@@ -116,18 +110,6 @@ public class EmbeddedPrescriptionAgentStarter implements ApplicationRunner, Disp
                 ? DEFAULT_LLM_GATEWAY_BASE_URL
                 : llmGatewayBaseUrl;
         pb.environment().put("LLM_GATEWAY_BASE_URL", effectiveLlmGatewayBaseUrl);
-
-        // 아래 GOOGLE_API_KEY 주입 블록은 Task 8(services/certificate 이관) 완료 후 제거
-        // 대상이다 — 지금은 같은 uvicorn 프로세스가 certificate_api 도 함께 서빙할 수 있어
-        // 여전히 필요하다.
-        String googleKey = resolveGoogleApiKey();
-        if (googleKey != null && !googleKey.isBlank()) {
-            pb.environment().put("GOOGLE_API_KEY", googleKey);
-        } else {
-            log.warn(
-                    "GOOGLE_API_KEY 를 설정하지 못했습니다(gemini.api.key 및 환경변수 비어 있음). "
-                            + "처방 API 호출은 실패할 수 있습니다.");
-        }
 
         log.info("prescription_api 자식 프로세스 시작: {} (cwd={})", String.join(" ", command), workDir);
         ownedProcess = pb.start();
@@ -211,14 +193,6 @@ public class EmbeddedPrescriptionAgentStarter implements ApplicationRunner, Disp
 
     private static boolean isRunnablePython(Path p) {
         return Files.isRegularFile(p) && Files.isExecutable(p);
-    }
-
-    private String resolveGoogleApiKey() {
-        String env = System.getenv("GOOGLE_API_KEY");
-        if (env != null && !env.isBlank()) {
-            return env;
-        }
-        return geminiApiKey;
     }
 
     private Path resolveWorkingDirectory() {

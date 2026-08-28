@@ -25,7 +25,7 @@ docker compose --env-file .env.docker up -d frontend
 | Front-End | `bit-frontend` | 3000 | Next.js UI |
 | Spring Boot | `bit-spring-boot` | 8080 | WAS / API |
 | Flask 영상판독 | `bit-flask-radiology` | 5000 | 기존 영상판독 엔진 |
-| 진단서 의사소견 | `bit-certificate-api` | 5001 | Gemini 기반 진단서 문장 생성 |
+| 진단서 의사소견 | `bit-certificate-api` | 5001 | LLM 게이트웨이 경유 진단서 문장 생성 |
 | 처방 추천 | `bit-prescription-api` | 8001 | ArangoDB + Gemini 처방 추천 |
 | 진료 데이터 검증 | `bit-validation-agent` | 8002 | LangGraph 기반 처방 추천/검증 ReAct worker |
 | XrayGraphRAG | `bit-xraygraph` | 8000 | X-ray 유사 사례 검색 / 상병 추론 |
@@ -236,12 +236,13 @@ Spring/처방 추천 서비스가 사용할 DB는 `.env.docker`와 `docker-compo
 
 ## 6. 진단서 의사소견 데이터 준비
 
-진단서 의사소견은 ArangoDB가 아니라 MySQL + Gemini 기반이다.
+진단서 의사소견은 ArangoDB가 아니라 MySQL + LLM 게이트웨이(`services/llm-gateway`) 기반이다.
 
 필요한 것:
 
 - MySQL에 환자, 진료, 상병, 처방 데이터가 있어야 한다.
-- `.env.docker`에 `GOOGLE_API_KEY` 또는 `GEMINI_API_KEY`를 넣어야 한다.
+- `.env.docker`에 `LLM_GATEWAY_BASE_URL`(과 필요하면 `LLM_MODEL`)을 넣어야 한다. certificate-api는
+  Gemini를 직접 호출하지 않고 `services/llm-gateway`를 경유한다.
 
 확인:
 
@@ -249,7 +250,7 @@ Spring/처방 추천 서비스가 사용할 DB는 `.env.docker`와 `docker-compo
 curl http://localhost:5001/health
 ```
 
-`google_api_key_set`이 `true`여야 실제 Gemini 호출이 가능하다.
+`llm_gateway_configured`가 `true`여야 실제 게이트웨이 호출이 가능하다.
 
 ## 7. 처방 추천 / 진료 데이터 검증 에이전트
 

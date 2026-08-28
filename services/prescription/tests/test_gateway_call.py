@@ -95,6 +95,7 @@ def test_gateway_request_wire_contract(monkeypatch):
 
     assert captured["path"] == "/v1/chat/completions"
     assert captured["headers"].get("x-llm-caller") == "prescription-api"
+    assert "authorization" not in captured["headers"]  # N9 (GC-7): 게이트웨이가 자격증명을 갖는다
 
     payload = captured["json"]
     assert set(payload.keys()) == {"model", "response_format", "messages"}
