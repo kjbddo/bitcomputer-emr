@@ -193,7 +193,13 @@ export default function AuditPage() {
         </Panel>
 
         <Panel title="감사 로그 목록" padding="none">
-          {loading ? (
+          {/*
+            첫 로딩에만 빈 상태를 보여준다. 결과가 이미 있는데 표와 페이저를
+            통째로 언마운트하면 방금 누른 다음/이전 버튼이 사라져 포커스가
+            body 로 떨어진다 — 페이지를 넘길 때마다 키보드 사용자가 위치를 잃는다.
+            재조회 중에는 이전 결과를 남겨 두고 버튼만 비활성화한다.
+          */}
+          {loading && !result ? (
             <EmptyState title="불러오는 중..." />
           ) : error ? (
             <EmptyState

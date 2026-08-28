@@ -126,6 +126,23 @@ describe("감사 로그 화면", () => {
     expect(screen.getByRole("button", { name: "다음" })).toBeDisabled();
   });
 
+  // 재조회 중에 표와 페이저를 언마운트하면 방금 누른 버튼이 사라져 포커스가
+  // body 로 떨어진다. 페이지를 넘길 때마다 키보드 사용자가 위치를 잃는 문제였다.
+  it("재조회 중에도 페이저가 사라지지 않는다", async () => {
+    const multiPage = { ...page, totalPages: 3, totalElements: 30 };
+    vi.mocked(getAuditLogs).mockResolvedValueOnce(multiPage);
+    render(<AuditPage />);
+    await screen.findByRole("button", { name: "다음" });
+
+    // 두 번째 조회는 끝나지 않게 두어 "로딩 중" 상태를 붙잡는다.
+    vi.mocked(getAuditLogs).mockReturnValueOnce(new Promise(() => {}));
+    await userEvent.click(screen.getByRole("button", { name: "다음" }));
+
+    expect(screen.getByRole("button", { name: "다음" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "이전" })).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "감사 로그 목록" })).toBeInTheDocument();
+  });
+
   it("다음 페이지가 있으면 다음 버튼을 눌러 다음 페이지를 조회한다", async () => {
     vi.mocked(getAuditLogs).mockResolvedValue({ ...page, totalPages: 2, number: 0 });
     const user = userEvent.setup();
