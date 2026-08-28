@@ -109,7 +109,6 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
             pubmed_evidence,
             pubmed_queries,
             source,
-            decision_sources,
         )
         if state.get("disease_check") or state.get("prescription_check"):
             final_result = _rule_based_finalize(state)
@@ -118,7 +117,12 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
     final_overall = str(final_result.get("overallStatus") or "NEEDS_REVIEW").upper()
     if final_overall == "PASS" and not pubmed_evidence:
         reason = final_result.get("reason") or final_result.get("summary") or ""
-        evidence, query_source = _load_pubmed_evidence(
+        # 반환되는 두 번째 값(쿼리 생성 출처)은 트레이스 마킹(_load_pubmed_evidence
+        # 내부의 per-query 다운그레이드)에만 쓰인다. 이 호출 자체는 "결정"이 아니라
+        # 결정 루프 밖에서 항상 실행되는 보조 후처리이므로 decision_sources 에는
+        # 절대 반영하지 않는다 — 그 오염이 llmStatus 를 거짓으로 "real" 로 만드는
+        # 원인이었다(리뷰 finding 1, 이전 수정에서 도입된 회귀).
+        evidence, _query_source = _load_pubmed_evidence(
             reasoning_trace,
             "검증 통과 결과에 참고할 의학 문헌 후보를 PubMed에서 검색한다.",
             state,
@@ -130,8 +134,6 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
             source="rule",
         )
         pubmed_evidence.extend(evidence)
-        if query_source == "llm":
-            decision_sources.append(query_source)
 
     if not state.get("candidate_prescriptions"):
         reason = final_result.get("reason") or final_result.get("summary") or ""
@@ -153,9 +155,10 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
         if candidates_from_finder:
             state["candidate_prescriptions"] = _normalize_prescription_candidates(candidates_from_finder)
 
+    # summary_source 는 "PubMed 근거 요약(규칙 기반)" 라벨을 붙일지 판단하는 데만
+    # 쓴다. 이 호출도 결정 루프 밖의 보조 후처리라 decision_sources 에는 절대
+    # 반영하지 않는다(리뷰 finding 1).
     pubmed_evidence_summary, summary_source = _summarize_pubmed_evidence(state, pubmed_evidence, final_overall)
-    if summary_source == "llm":
-        decision_sources.append(summary_source)
     if pubmed_evidence_summary:
         checks = final_result.get("checks") if isinstance(final_result.get("checks"), list) else []
         # 규칙 기반 문자열 조합 요약을 모델이 쓴 것처럼 보이게 하지 않는다(리뷰 finding 1).
@@ -420,7 +423,6 @@ def _execute_decided_tool(
     pubmed_evidence: List[Dict[str, Any]],
     pubmed_queries: List[str],
     source: str,
-    decision_sources: List[str],
 ) -> None:
     action = str(decision.get("action") or "")
     thought = str(decision.get("thought") or f"{action} 실행")
@@ -487,7 +489,11 @@ def _execute_decided_tool(
             pubmed_evidence.extend(_dedupe_pubmed_articles(pubmed_result.get("articles") or []))
         else:
             reason = _summary_for_current_state(state)
-            evidence, query_source = _load_pubmed_evidence(
+            # 두 번째 반환값(쿼리 생성 출처)은 _load_pubmed_evidence 내부에서 이미
+            # per-query 트레이스 다운그레이드에 반영됐다. 여기서 decision_sources 에
+            # 다시 밀어넣지 않는다 — 이 스텝 자체는 "결정"이 아니라 그 결정이
+            # 실행된 보조 도구 호출일 뿐이다(리뷰 finding 1).
+            evidence, _query_source = _load_pubmed_evidence(
                 reasoning_trace,
                 thought,
                 state,
@@ -496,8 +502,6 @@ def _execute_decided_tool(
                 source=source,
             )
             pubmed_evidence.extend(evidence)
-            if query_source == "llm":
-                decision_sources.append(query_source)
         return
 
     if action == "Prescription Finder":
@@ -538,20 +542,29 @@ def _load_pubmed_evidence(
 
     `source` 인자는 이 호출을 촉발한 결정/컨텍스트의 출처다(예: 항상 실행되는
     후처리라면 `"rule"`). 하지만 실제로 검색에 쓰인 질의문이 LLM 번역에서
-    나오지 않고 하드코딩된 사전 빌더에서 나왔다면(`query_source == "fallback"`),
-    트레이스는 그 사실을 우선한다 — `source == "llm"` 인데 질의문은 규칙 기반인
-    경우까지 "llm" 이라 주장하지 않도록 다운그레이드한다(리뷰 finding 1). 반대로
-    `source` 가 이미 `"rule"`/`"stub"`/`"fallback"` 이면(=결정 자체가 LLM이 아니었으면)
-    그 표기를 그대로 둔다 — 질의문이 LLM에서 나왔다고 해서 "llm" 로 격상하지는 않는다.
+    나오지 않고 하드코딩된 사전 빌더에서 나왔다면, 트레이스는 그 사실을
+    우선한다 — `source == "llm"` 인데 이번에 실제로 쓰인 질의문은 규칙 기반인
+    경우까지 "llm" 이라 주장하지 않도록 다운그레이드한다(리뷰 finding 1).
+
+    이 판단은 후보 목록 전체가 아니라 **선택된 질의문 하나하나마다** 이뤄진다
+    (리뷰 finding 2). `_build_pubmed_queries` 는 LLM 생성 질의문을 먼저 반환하고
+    이어서 `KOREAN_PUBMED_TERMS` 사전 빌더 질의문을 반환하는데, 루프는 이미
+    `pubmed_queries` 에 있는(=이전 호출에서 이미 쓰인) 질의문을 건너뛴다. 그
+    결과 두 번째 `_load_pubmed_evidence` 호출에서는 LLM 질의문이 중복 제거로
+    빠지고 사전 빌더 질의문이 선택되는데, 예전 코드는 "이번 배치에 LLM 질의문이
+    하나라도 있었는가"만 봐서 다운그레이드를 건너뛰고 "llm" 을 그대로 찍었다.
+    반대로 `source` 가 이미 `"rule"`/`"stub"`/`"fallback"` 이면(=결정 자체가
+    LLM이 아니었으면) 그 표기를 그대로 둔다 — 질의문이 LLM에서 나왔다고 해서
+    "llm" 로 격상하지는 않는다.
     """
     articles: List[Dict[str, Any]] = []
     max_query_attempts = int(os.environ.get("VALIDATION_PUBMED_MAX_QUERY_ATTEMPTS", "4"))
-    queries, query_source = _build_pubmed_queries(state, reason)
-    trace_source = "fallback" if (source == "llm" and query_source == "fallback") else source
+    queries, llm_queries = _build_pubmed_queries(state, reason)
     for query in queries[:max_query_attempts]:
         if not query or query in pubmed_queries:
             continue
         pubmed_queries.append(query)
+        trace_source = source if query in llm_queries else ("fallback" if source == "llm" else source)
         pubmed_result = _invoke_tool(
             reasoning_trace,
             "Pubmed Loader",
@@ -563,22 +576,26 @@ def _load_pubmed_evidence(
         articles.extend(pubmed_result.get("articles") or [])
         if articles:
             break
-    return _dedupe_pubmed_articles(articles), query_source
+    return _dedupe_pubmed_articles(articles), ("llm" if llm_queries else "fallback")
 
 
-def _build_pubmed_queries(state: ValidationState, reason: str) -> tuple[List[str], str]:
-    """검색어 후보 목록과 함께, 그 후보들이 어디서 왔는지("llm"/"fallback")를 돌려준다.
+def _build_pubmed_queries(state: ValidationState, reason: str) -> tuple[List[str], List[str]]:
+    """검색어 후보 목록과 함께, 그중 어떤 것이 LLM 이 생성한 질의문인지를 돌려준다.
 
-    LLM 번역 검색어 생성이 실패하면 하드코딩된 `KOREAN_PUBMED_TERMS` 사전 기반
-    빌더로만 채워진다 — 이 경우 두 번째 반환값은 `"fallback"` 이어야 한다.
+    두 번째 반환값은 (예전처럼 "llm"/"fallback" 문자열 하나가 아니라) LLM 이
+    실제로 생성한 질의문 리스트다 — 호출부가 "이번에 선택된 질의문이 정말
+    이 리스트에 속하는지"를 개별적으로 물어볼 수 있어야 배치 단위 다운그레이드
+    누락(리뷰 finding 2)을 막을 수 있다. LLM 번역 검색어 생성이 실패하면 빈
+    리스트가 된다.
     """
-    llm_queries, query_source = _generate_pubmed_queries_with_llm(state, reason)
+    llm_queries, _query_source = _generate_pubmed_queries_with_llm(state, reason)
+    llm_queries = _dedupe_queries(llm_queries)
     queries: List[str] = list(llm_queries)
     queries.append(_build_pubmed_query(state, reason))
     queries.append(_build_pubmed_reference_query(state))
     queries.append(_build_pubmed_disease_query(state))
     queries.append(_build_pubmed_prescription_query(state))
-    return _dedupe_queries(queries), query_source
+    return _dedupe_queries(queries), llm_queries
 
 
 def _generate_pubmed_queries_with_llm(state: ValidationState, reason: str) -> tuple[List[str], str]:

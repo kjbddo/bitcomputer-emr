@@ -14,6 +14,73 @@ def _request() -> ValidationAgentRequest:
     )
 
 
+def _passing_request() -> ValidationAgentRequest:
+    """overallStatus 가 "PASS" 로 떨어지는 요청. 저장 상병과 저장 처방이 모두
+    있어야 prescription_validator 가 "APPROPRIATE" 를 돌려주고(그래야
+    "INSUFFICIENT_DATA" 체크가 안 생겨 NEEDS_REVIEW 로 빠지지 않는다), X-ray
+    추론이 없어야 disease_validator 가 "MATCH" 로 판정한다."""
+    return ValidationAgentRequest(
+        historyId=1,
+        symptoms="기침",
+        savedDiseases=[{"code": "J00", "name": "감기"}],
+        savedPrescriptions=[{"code": "P1", "name": "진해거담제"}],
+    )
+
+
+class _FakeLLM:
+    """`_create_llm()` 대신 쓰는 대역. 실제 게이트웨이 네트워크 호출 없이
+    보조 호출(PubMed 쿼리 생성/요약)이 실제로 LLM 경로를 타는 상황을
+    재현한다(리뷰 finding 5) — 기존 세 테스트는 모두 `_create_llm` 을 `None`
+    으로 고정해 두어서, "real" 경로인데도 보조 호출은 늘 폴백만 탔다."""
+
+    def __init__(self, summary_text="PubMed 초록에 따르면 기침 관련 대증치료가 보고되었다 (PMID: 111)."):
+        self.summary_text = summary_text
+
+    def invoke(self, messages):
+        prompt = str(messages[-1].content)
+        if "PubMed ESearch" in prompt:
+            content = '{"queries": ["cough treatment guideline"]}'
+        else:
+            content = self.summary_text
+
+        class _Response:
+            def __init__(self, content: str) -> None:
+                self.content = content
+
+        return _Response(content)
+
+
+def _fake_pubmed_articles(_payload=None):
+    """`pubmed_loader.invoke` 대역이 돌려줄 값. 실제 PubMed 네트워크 호출 없이
+    근거 1건을 결정론적으로 돌려준다."""
+    return {
+        "status": "LOADED",
+        "evidence": ["PubMed에서 1건의 근거 후보를 조회했습니다."],
+        "articles": [
+            {
+                "pmid": "111",
+                "title": "Cough treatment guideline",
+                "source": "Test Journal",
+                "pubdate": "2024",
+                "abstract": "Cough treatment abstract.",
+                "abstractSnippet": "Cough treatment abstract.",
+            }
+        ],
+    }
+
+
+class _FakePubmedLoader:
+    """`agent.pubmed_loader` 를 통째로 대체하는 대역.
+
+    `pubmed_loader` 는 pydantic 기반 `StructuredTool` 이라 인스턴스의 `invoke`
+    속성을 직접 monkeypatch 할 수 없다(필드가 아니라서 `ValueError` 가 난다).
+    대신 `agent` 모듈이 바라보는 이름 자체를 이 대역으로 바꿔치기한다.
+    """
+
+    def invoke(self, payload=None):
+        return _fake_pubmed_articles(payload)
+
+
 def test_stub_provider_reports_stub(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "stub")
     response = run_validation_agent(_request())
@@ -141,3 +208,132 @@ def test_llm_decisions_with_failed_auxiliary_calls_do_not_mark_pubmed_as_llm(mon
         "쿼리 생성이 실패해 하드코딩된 사전으로 대체됐다면, "
         "이 스텝을 촉발한 결정이 llm 이었더라도 llm 이라고 주장하면 안 된다"
     )
+
+
+def test_successful_llm_run_has_no_fallback_trace_entries(monkeypatch):
+    # 리뷰 finding 3: agent.py:130, 150 의 "rule" 마킹을 "fallback" 으로 되돌려도
+    # (뮤테이션 M5) 기존 스위트는 그대로 통과했다 — `test_fallback_trace_entries_are_marked`
+    # 는 "fallback" 과 "rule" 을 한 집합으로 받아들여 둘을 구분하지 못하고, 흠 없는
+    # 요청이 fallback 을 전혀 만들지 않는다는 것을 단언하는 테스트가 없었기 때문이다.
+    # 이 테스트는 결정 루프가 매 반복 LLM 로 성공하고(=llm), 루프 밖 후처리
+    # (PASS 후 PubMed 보강, 후보 없을 때의 Prescription Finder)가 "rule" 로
+    # 찍히는 두 지점을 모두 거치도록 시나리오를 구성한다.
+    monkeypatch.setenv("LLM_PROVIDER", "real")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
+    monkeypatch.setattr(agent, "_create_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(
+        agent,
+        "_llm_tool_decision",
+        _sequenced_llm_decision([
+            {"thought": "x-ray 로드", "action": "X-ray Result Loader", "actionInput": {}},
+            {"thought": "상병 검증", "action": "Disease Validator", "actionInput": {}},
+            {"thought": "처방 검증", "action": "Prescription Validator", "actionInput": {}},
+            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
+        ]),
+    )
+
+    response = run_validation_agent(_passing_request())
+
+    assert response.overallStatus == "PASS", "이 테스트는 PASS 후처리(agent.py:130)를 거쳐야 의미가 있다"
+    assert not state_has_fallback(response), "흠 없는 LLM 실행에서는 fallback 소스가 하나도 없어야 한다"
+    assert any(e["source"] == "rule" for e in response.reasoningTrace), (
+        "루프 밖 후처리(PubMed 보강/Prescription Finder)가 rule 로 찍혀 있어야 "
+        "M5 뮤테이션(rule -> fallback)이 이 테스트로 잡힌다"
+    )
+
+
+def state_has_fallback(response) -> bool:
+    return any(e["source"] == "fallback" for e in response.reasoningTrace)
+
+
+def test_pubmed_summary_label_marks_rule_based_when_llm_unavailable(monkeypatch):
+    # 리뷰 finding 4: agent.py:162 를 무조건 "PubMed 근거 요약" 으로 되돌려도
+    # (뮤테이션 M7) 기존 스위트는 그대로 통과했다 — checks[] 의 PUBMED_EVIDENCE
+    # 메시지에 "(규칙 기반)" 라벨이 실제로 붙는지 검증하는 테스트가 없었기 때문이다.
+    monkeypatch.setenv("LLM_PROVIDER", "real")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
+    monkeypatch.setattr(agent, "_create_llm", lambda: None)  # 요약은 반드시 폴백을 탄다
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(
+        agent,
+        "_llm_tool_decision",
+        _sequenced_llm_decision([
+            {
+                "thought": "문헌 근거 확보",
+                "action": "Pubmed Loader",
+                "actionInput": {"query": "cough treatment guideline"},
+            },
+            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
+        ]),
+    )
+
+    response = run_validation_agent(_passing_request())
+
+    pubmed_checks = [c for c in response.checks if c.get("type") == "PUBMED_EVIDENCE"]
+    assert pubmed_checks, "PubMed 근거 요약 체크가 있어야 이 테스트가 의미가 있다"
+    assert "(규칙 기반)" in pubmed_checks[0]["message"]
+
+
+def test_pubmed_summary_label_omits_rule_based_marker_when_llm_succeeds(monkeypatch):
+    # finding 4 의 반대 방향: 요약이 실제로 LLM 에서 나왔다면 "(규칙 기반)" 이
+    # 붙으면 안 된다. FakeLLM 으로 요약 호출이 실제로 "llm" 경로를 타게 한다
+    # (리뷰 finding 5 — 기존 테스트는 전부 _create_llm 을 None 으로 고정해
+    # 이 경로를 한 번도 실행하지 않았다).
+    monkeypatch.setenv("LLM_PROVIDER", "real")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
+    monkeypatch.setattr(agent, "_create_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(
+        agent,
+        "_llm_tool_decision",
+        _sequenced_llm_decision([
+            {
+                "thought": "문헌 근거 확보",
+                "action": "Pubmed Loader",
+                "actionInput": {"query": "cough treatment guideline"},
+            },
+            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
+        ]),
+    )
+
+    response = run_validation_agent(_passing_request())
+
+    pubmed_checks = [c for c in response.checks if c.get("type") == "PUBMED_EVIDENCE"]
+    assert pubmed_checks, "PubMed 근거 요약 체크가 있어야 이 테스트가 의미가 있다"
+    assert "(규칙 기반)" not in pubmed_checks[0]["message"]
+
+
+def test_second_pubmed_call_downgrades_to_fallback_when_llm_query_is_deduped(monkeypatch):
+    # 리뷰 finding 2: query_source 가 배치(호출) 단위였다. 첫 번째 질의 없는
+    # Pubmed Loader 호출에서 LLM 이 생성한 질의문이 검색에 쓰이면 트레이스는
+    # 정당하게 "llm" 이 된다. 하지만 같은 세션의 두 번째 질의 없는 호출에서는
+    # _build_pubmed_queries 가 매번 같은 LLM 질의문을 다시 생성하는데, 그
+    # 질의문은 이미 pubmed_queries 에 있어 건너뛰어지고 하드코딩된
+    # KOREAN_PUBMED_TERMS 사전 빌더 질의문("cough treatment")이 대신 쓰인다.
+    # 이 경우 트레이스는 "llm" 이 아니라 "fallback" 이어야 한다(per-query 다운그레이드).
+    monkeypatch.setenv("LLM_PROVIDER", "real")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
+    monkeypatch.setattr(agent, "_create_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(
+        agent,
+        "_llm_tool_decision",
+        _sequenced_llm_decision([
+            {"thought": "문헌 근거 확보1", "action": "Pubmed Loader", "actionInput": {}},
+            {"thought": "문헌 근거 확보2", "action": "Pubmed Loader", "actionInput": {}},
+            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
+        ]),
+    )
+
+    response = run_validation_agent(_passing_request())
+
+    pubmed_entries = [e for e in response.reasoningTrace if e["action"] == "Pubmed Loader"]
+    assert len(pubmed_entries) == 2, "질의 없는 Pubmed Loader 결정 두 번이 각각 트레이스에 남아야 한다"
+    assert pubmed_entries[0]["source"] == "llm"
+    assert pubmed_entries[0]["actionInput"]["query"] == "cough treatment guideline"
+    assert pubmed_entries[1]["source"] == "fallback", (
+        "두 번째 호출은 LLM 질의문이 중복 제거로 빠지고 사전 빌더 질의문이 쓰였으므로 "
+        "이 스텝을 촉발한 결정이 llm 이었더라도 fallback 으로 다운그레이드돼야 한다"
+    )
+    assert pubmed_entries[1]["actionInput"]["query"] == "cough treatment"
