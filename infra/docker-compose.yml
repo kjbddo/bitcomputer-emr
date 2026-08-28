@@ -151,6 +151,28 @@ services:
       timeout: 10s
       retries: 20
 
+  llm-gateway:
+    build:
+      context: ../services/llm-gateway
+    container_name: bit-llm-gateway
+    environment:
+      # 자격증명은 이 서비스에만 존재한다(spec §3.1).
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_UPSTREAM_BASE_URL: ${LLM_UPSTREAM_BASE_URL:-https://bedrock-mantle.us-west-2.api.aws/openai/v1}
+      LLM_MODEL: ${LLM_MODEL:-openai.gpt-5.6-luna}
+      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-low}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-120}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
+      LLM_INPUT_PRICE_PER_1M: ${LLM_INPUT_PRICE_PER_1M:-0.20}
+      LLM_OUTPUT_PRICE_PER_1M: ${LLM_OUTPUT_PRICE_PER_1M:-1.20}
+    ports:
+      - "8003:8003"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8003/health', timeout=5)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+
   validation-agent:
     build:
       context: ../services/validation-agent
