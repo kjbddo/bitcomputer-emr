@@ -18,6 +18,17 @@ import {
 import { HttpError } from "@/services/http/types";
 import { llmStatusNotice } from "@/utils/llmStatus";
 
+// reasoningTrace 스텝 각각의 출처. 최상위 llmStatus 배지는 작업 전체를
+// 하나로 뭉뚱그리므로, fallback 작업 안에 llm 스텝이 섞여 있거나 그 반대인
+// 경우를 가린다 — 사람이 트레이스만 보고 LLM 추론으로 오인할 수 없어야
+// 한다(spec §6.3 완료 조건 6). llmStatus.ts 의 표시 어휘를 그대로 쓴다.
+function sourceMark(source: unknown): string {
+  const value = asText(source);
+  if (value === "rule" || value === "fallback") return " (규칙 기반)";
+  if (value === "stub") return " (스텁)";
+  return "";
+}
+
 type DiagnosisProps = {
   clinicVisit: ClinicVisitContext | null;
   ensureHistory: () => Promise<number>;
@@ -107,7 +118,7 @@ function extractValidationReasons(job: ValidationJobResponse | null): string[] {
       observationText = [status, evidenceText].filter(Boolean).join(" - ");
     }
     if (action && observationText) {
-      reasons.push(`${action}: ${observationText}`);
+      reasons.push(`${action}${sourceMark(step.source)}: ${observationText}`);
     }
   });
 

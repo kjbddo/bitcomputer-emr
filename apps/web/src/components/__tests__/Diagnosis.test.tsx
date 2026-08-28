@@ -179,3 +179,93 @@ describe("검증 모달의 llmStatus 배선", () => {
     expect(panelBadge).toHaveAttribute("data-tone", "warning");
   });
 });
+
+// IMPORTANT 3(최종 리뷰): 최상위 llmStatus 배지는 작업 전체를 하나로 뭉뚱그린다.
+// fallback 작업이라도 reasoningTrace 의 개별 스텝은 llm 출처일 수 있고 그
+// 반대도 가능하다 — "검증 이유" 목록은 step.source 를 무시하고 action/
+// observation 만 이어붙였으므로, 하드코딩된 폴백 thought 문구가 모델 추론처럼
+// 읽힐 수 있었다(spec §6.3 완료 조건 6: "사람이 트레이스만 보고 LLM 추론으로
+// 오인할 수 없어야 한다"). 스텝별 출처 표시가 실제로 렌더되는지 렌더 경로로
+// 확인한다.
+describe("검증 이유 목록의 스텝별 출처 표시", () => {
+  const clinicVisit = { patientId: 1, deptId: 1 };
+
+  function renderDiagnosis() {
+    return render(
+      <MedicalSelectionProvider>
+        <Diagnosis clinicVisit={clinicVisit} ensureHistory={async () => 10} employeeId={1} />
+      </MedicalSelectionProvider>
+    );
+  }
+
+  function mockJobWithTrace(jobId: string, reasoningTrace: Array<Record<string, unknown>>) {
+    mockedRecommend.mockResolvedValue({ jobId, historyId: 10, status: "RUNNING" });
+    mockedGetJob.mockResolvedValue({
+      jobId,
+      historyId: 10,
+      status: "DONE",
+      result: {
+        overallStatus: "PASS",
+        summary: "이상 없음",
+        llmStatus: "real",
+        reasoningTrace,
+        recommendedPrescriptions: [],
+      },
+    } as unknown as ValidationJobResponse);
+  }
+
+  it("source 가 rule/fallback 인 스텝에는 (규칙 기반) 표시가 붙는다", async () => {
+    mockJobWithTrace("job-trace-1", [
+      {
+        action: "질병 검증",
+        observation: { status: "MATCH", evidence: ["근거 A"] },
+        source: "fallback",
+      },
+    ]);
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      await within(dialog).findByText("질병 검증 (규칙 기반): MATCH - 근거 A")
+    ).toBeInTheDocument();
+  });
+
+  it("source 가 stub 인 스텝에는 (스텁) 표시가 붙는다", async () => {
+    mockJobWithTrace("job-trace-2", [
+      {
+        action: "처방 검증",
+        observation: { status: "APPROPRIATE", evidence: ["근거 B"] },
+        source: "stub",
+      },
+    ]);
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      await within(dialog).findByText("처방 검증 (스텁): APPROPRIATE - 근거 B")
+    ).toBeInTheDocument();
+  });
+
+  it("source 가 llm 인 스텝에는 출처 표시가 붙지 않는다", async () => {
+    mockJobWithTrace("job-trace-3", [
+      {
+        action: "PubMed 요약",
+        observation: { status: "LOADED", evidence: ["근거 C"] },
+        source: "llm",
+      },
+    ]);
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      await within(dialog).findByText("PubMed 요약: LOADED - 근거 C")
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText(/PubMed 요약 \(/)).toBeNull();
+  });
+});
