@@ -109,3 +109,49 @@ def test_param_notes_reach_log_record(client, caplog):
         isinstance(payload, dict) and "dropped:temperature" in payload.get("paramNotes", [])
         for payload in payloads
     ), "temperature 드롭 기록이 계측 로그(paramNotes)에 실제로 실려야 한다"
+
+
+# 계측이 실제로 나가는지.
+#
+# 설정 전에는 루트 로거가 WARNING 이고 핸들러가 없어서, uvicorn 기본 설정에서도
+# logger.info() 로 내보내는 계측 레코드가 통째로 유실됐다. warning 은 lastResort 로
+# stderr 에 나가기 때문에 유실이 눈에 안 띄는 종류의 결함이었다.
+def test_root_logger_configured_to_emit_info():
+    """루트가 INFO 이고 핸들러가 있어야 계측이 컨테이너 로그로 나간다.
+
+    설정 전에는 루트가 WARNING 이고 핸들러가 0개였다 — uvicorn 기본 설정에서도.
+    capsys 로는 검증할 수 없다: 핸들러가 import 시점의 sys.stdout 을 붙들기 때문이고,
+    그건 컨테이너에서 옳은 동작이다. 그래서 속성 자체를 단언한다.
+    """
+    import logging
+
+    root = logging.getLogger()
+    assert root.level <= logging.INFO
+    assert root.handlers, "루트에 핸들러가 없으면 INFO 는 아무 데도 안 나간다"
+
+
+def test_metering_record_content_reaches_the_log(client, caplog):
+    import logging
+
+    def handler(_request):
+        return httpx.Response(
+            200, json={"ok": True, "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+        )
+
+    with caplog.at_level(logging.INFO, logger="llm-gateway"):
+        with client(handler) as c:
+            c.post(
+                "/v1/chat/completions",
+                json={"model": "m", "messages": []},
+                headers={"X-LLM-Caller": "validation-agent"},
+            )
+    logged = " ".join(rec.getMessage() for rec in caplog.records)
+    assert "estimatedCostUsd" in logged
+    assert "validation-agent" in logged
+
+
+def test_info_level_is_enabled_without_extra_setup():
+    """caplog.at_level 같은 보조 없이도 INFO 가 살아 있어야 한다."""
+    import logging
+
+    assert logging.getLogger("llm-gateway").isEnabledFor(logging.INFO)

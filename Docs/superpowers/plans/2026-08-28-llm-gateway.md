@@ -866,6 +866,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import sys
 import time
 from typing import Any, Dict
 
@@ -879,6 +881,24 @@ from app.params import normalize_params
 from app.upstream import UpstreamError, call_upstream
 
 logger = logging.getLogger("llm-gateway")
+
+
+def _configure_logging() -> None:
+    """계측 로그가 실제로 나가게 만든다.
+
+    설정하지 않으면 루트가 WARNING 이고 핸들러도 없다 — uvicorn 기본 설정에서도
+    그렇다. 그러면 logger.info() 로 내보내는 계측 레코드가 통째로 유실된다.
+    """
+    root = logging.getLogger()
+    root.setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
+    if not any(getattr(h, "_llm_gateway", False) for h in root.handlers):
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        handler._llm_gateway = True  # type: ignore[attr-defined]
+        root.addHandler(handler)
+
+
+_configure_logging()
 
 app = FastAPI(title="LLM Gateway", version="0.1.0")
 

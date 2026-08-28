@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import sys
 import time
 from typing import Any, Dict
 
@@ -21,6 +23,31 @@ from app.params import normalize_params
 from app.upstream import UpstreamError, call_upstream
 
 logger = logging.getLogger("llm-gateway")
+
+
+def _configure_logging() -> None:
+    """계측 로그가 실제로 나가게 만든다.
+
+    설정하지 않으면 루트 로거가 WARNING 이고 핸들러도 없다 — uvicorn 기본
+    설정에서도 그렇다. 그러면 logger.info() 로 내보내는 계측 레코드가 통째로
+    유실된다. logger.warning() 은 logging.lastResort 덕에 stderr 로 나가기
+    때문에 유실이 더 눈에 안 띈다.
+
+    컨테이너는 stdout 을 수집하므로 루트에 StreamHandler 를 붙인다.
+    메시지 자체가 이미 JSON 이라 포매터는 메시지만 통과시킨다.
+    uvicorn 의 자체 로거들은 propagate=False 라 중복 출력되지 않는다.
+    """
+    root = logging.getLogger()
+    level = os.environ.get("LOG_LEVEL", "INFO").upper()
+    root.setLevel(level)
+    if not any(getattr(h, "_llm_gateway", False) for h in root.handlers):
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        handler._llm_gateway = True  # type: ignore[attr-defined]
+        root.addHandler(handler)
+
+
+_configure_logging()
 
 app = FastAPI(title="LLM Gateway", version="0.1.0")
 
