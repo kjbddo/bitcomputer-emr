@@ -1,6 +1,6 @@
 package com.example.bitcomputer.controller;
 
-import com.example.bitcomputer.annotation.AuditPatientAccess;
+import com.example.bitcomputer.annotation.Audited;
 import com.example.bitcomputer.model.HistoryDTO;
 import com.example.bitcomputer.service.HistoryService;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -27,7 +27,7 @@ public class HistoryController {
         this.historyService = historyService;
     }
 
-    @AuditPatientAccess(action = "HISTORY_CREATE")
+    @Audited(action = "HISTORY_CREATE")
     @PostMapping("/write_history")
     public ResponseEntity<HistoryDTO> writeHistory(@RequestBody HistoryDTO request) {
         HistoryDTO saved = historyService.writeHistory(request);

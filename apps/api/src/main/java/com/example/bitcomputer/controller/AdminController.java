@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.example.bitcomputer.Repository.EmployeeRepository;
+import com.example.bitcomputer.annotation.Audited;
 import com.example.bitcomputer.entity.Employee;
 import com.example.bitcomputer.entity.Role;
 import com.example.bitcomputer.jwt.JwtTokenProvider;
@@ -25,14 +26,14 @@ import com.example.bitcomputer.model.RoleUpdateDTO;
 import com.example.bitcomputer.model.UserRegisterDTO;
 
 @RestController
-@RequestMapping("/api/super")
-public class SuperUserController {
+@RequestMapping("/api/admin")
+public class AdminController {
 
     private final EmployeeRepository employeeRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
 
-    public SuperUserController(EmployeeRepository employeeRepository,
+    public AdminController(EmployeeRepository employeeRepository,
                                PasswordEncoder passwordEncoder,
                                JwtTokenProvider jwtTokenProvider) {
         this.employeeRepository = employeeRepository;
@@ -40,7 +41,11 @@ public class SuperUserController {
         this.jwtTokenProvider = jwtTokenProvider;
     }
 
-    @PutMapping("/set_role/{id}")
+    // I1: SUPER_USER 로의 역할 승격을 포함해, 권한 구조를 바꾸는 가장 강력한
+    // 행위다. targetPatientId 는 항상 null 로 남는다 - 이 경로 변수 이름이
+    // "id"(대상 직원 ID)라 AuditInterceptor 가 찾는 "patientId"와 겹치지 않는다.
+    @Audited(action = "ROLE_CHANGE")
+    @PutMapping("/users/{id}/role")
     public ResponseEntity<String> setRole(
             @PathVariable int id,
             @RequestBody RoleUpdateDTO request,
@@ -72,7 +77,8 @@ public class SuperUserController {
         return ResponseEntity.ok("Role set successfully");
     }
 
-    @PostMapping("/create_user")
+    @Audited(action = "USER_CREATE")
+    @PostMapping("/users")
     public ResponseEntity<String> createUser(
             @RequestBody UserRegisterDTO request,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
@@ -108,7 +114,7 @@ public class SuperUserController {
         return ResponseEntity.status(HttpStatus.CREATED).body("User created successfully");
     }
 
-    @GetMapping("/get_all_users")
+    @GetMapping("/users")
     public ResponseEntity<?> getAllEmployees(
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
         ResponseEntity<String> authError = validateSuperUser(authHeader);

@@ -2,8 +2,10 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
+import AuthLinkSwap from "@/components/common/AuthLink";
 import { login } from "@/services/auth";
+import { Button, Field, Panel } from "@/components/ui";
+import styles from "./page.module.css";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -27,67 +29,44 @@ export default function LoginPage() {
   }
 
   return (
-    <div style={{ maxWidth: 360, margin: "64px auto", padding: 24 }}>
-      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 16 }}>
-        로그인
-      </h1>
-      <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12 }}>
-        <label style={{ display: "grid", gap: 6 }}>
-          <span>사용자 ID</span>
-          <input
-            type="text"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            placeholder="employee01"
-            required
-            style={{
-              padding: "8px 12px",
-              border: "1px solid #ddd",
-              borderRadius: 8,
-            }}
-          />
-        </label>
-        <label style={{ display: "grid", gap: 6 }}>
-          <span>비밀번호</span>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="••••••••"
-            required
-            style={{
-              padding: "8px 12px",
-              border: "1px solid #ddd",
-              borderRadius: 8,
-            }}
-          />
-        </label>
+    <div className={styles.shell}>
+      <div className={styles.container}>
+        <h1 className={styles.title}>로그인</h1>
+        <Panel>
+          <form onSubmit={handleSubmit} className={styles.form}>
+            <Field label="사용자 ID" htmlFor="login-username" required>
+              <input
+                id="login-username"
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="employee01"
+              />
+            </Field>
+            <Field label="비밀번호" htmlFor="login-password" required>
+              <input
+                id="login-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+              />
+            </Field>
 
-        {error && (
-          <div style={{ color: "#c00", fontSize: 14 }} role="alert">
-            {error}
-          </div>
-        )}
+            {error && (
+              <p className={styles.formAlert} role="alert">
+                {error}
+              </p>
+            )}
 
-        <button
-          type="submit"
-          disabled={loading}
-          style={{
-            padding: "10px 14px",
-            borderRadius: 8,
-            background: "#111",
-            color: "#fff",
-            border: 0,
-            cursor: loading ? "not-allowed" : "pointer",
-          }}
-        >
-          {loading ? "로그인 중..." : "로그인"}
-        </button>
-      </form>
+            <Button type="submit" variant="primary" loading={loading}>
+              {loading ? "로그인 중..." : "로그인"}
+            </Button>
+          </form>
+        </Panel>
 
-      <p style={{ marginTop: 12, fontSize: 14 }}>
-        계정이 없으신가요? <Link href="/signup">회원가입</Link>
-      </p>
+        <AuthLinkSwap />
+      </div>
     </div>
   );
 }

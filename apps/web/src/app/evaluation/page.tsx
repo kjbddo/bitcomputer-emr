@@ -8,6 +8,7 @@ import {
   type DocumentGenerateResponse,
   type DocumentEvaluateResponse,
 } from "@/services/agent";
+import { Badge, Button, Field, Panel } from "@/components/ui";
 import styles from "./page.module.css";
 
 type ApiError = {
@@ -484,7 +485,7 @@ export default function EvaluationPage() {
 
   return (
     <main className={styles.page}>
-      <section className={styles.panel}>
+      <Panel className={styles.panel}>
         <h1 className={styles.title}>Document Evaluation</h1>
         <p className={styles.description}>
           XLSX 파일의 첫 번째 시트를 읽고 열 문자(`A`, `B`, `C`...)를 지정하면 각 행의
@@ -495,57 +496,52 @@ export default function EvaluationPage() {
         </p>
 
         <form className={styles.form} onSubmit={handleSubmit}>
-          <label className={styles.label}>
-            XLSX 파일
+          <Field label="XLSX 파일" htmlFor="evaluation-xlsx-file">
             <input
-              className={styles.input}
+              id="evaluation-xlsx-file"
               type="file"
               accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               onChange={(e) => setCsvFile(e.target.files?.[0] ?? null)}
               required
             />
-          </label>
+          </Field>
 
-          <label className={styles.label}>
-            diseaseCode 열
+          <Field label="diseaseCode 열" htmlFor="evaluation-disease-code-column">
             <input
-              className={styles.input}
+              id="evaluation-disease-code-column"
               type="text"
               value={diseaseCodeColumn}
               onChange={(e) => setDiseaseCodeColumn(e.target.value)}
               placeholder="예: A"
               required
             />
-          </label>
+          </Field>
 
-          <label className={styles.label}>
-            prescriptionCode 열
+          <Field label="prescriptionCode 열" htmlFor="evaluation-prescription-code-column">
             <input
-              className={styles.input}
+              id="evaluation-prescription-code-column"
               type="text"
               value={prescriptionCodeColumn}
               onChange={(e) => setPrescriptionCodeColumn(e.target.value)}
               placeholder="예: B"
               required
             />
-          </label>
+          </Field>
 
-          <label className={styles.label}>
-            prescriptionName 열
+          <Field label="prescriptionName 열" htmlFor="evaluation-prescription-name-column">
             <input
-              className={styles.input}
+              id="evaluation-prescription-name-column"
               type="text"
               value={prescriptionNameColumn}
               onChange={(e) => setPrescriptionNameColumn(e.target.value)}
               placeholder="예: C"
               required
             />
-          </label>
+          </Field>
 
-          <label className={styles.label}>
-            처리 개수 제한
+          <Field label="처리 개수 제한" htmlFor="evaluation-max-rows">
             <input
-              className={styles.input}
+              id="evaluation-max-rows"
               type="number"
               min={1}
               max={MAX_BATCH_ROWS}
@@ -554,7 +550,7 @@ export default function EvaluationPage() {
               onChange={(e) => setMaxRowsInput(e.target.value)}
               placeholder={`비우면 최대 ${MAX_BATCH_ROWS}개 처리`}
             />
-          </label>
+          </Field>
 
           <label className={styles.checkboxLabel}>
             <input
@@ -575,66 +571,65 @@ export default function EvaluationPage() {
           </label>
 
           <div className={styles.buttonRow}>
-            <button className={styles.button} type="submit" disabled={loading}>
-              {loading ? "비동기 처리 중..." : "XLSX 요청 시작"}
-            </button>
-            <button
-              className={styles.secondaryButton}
+            <Button type="submit" variant="primary" disabled={loading} loading={loading}>
+              XLSX 요청 시작
+            </Button>
+            <Button
               type="button"
+              variant="secondary"
               onClick={handleHealthCheck}
               disabled={loading || healthChecking}
+              loading={healthChecking}
             >
-              {healthChecking ? "헬스체크 중..." : "API Healthy 체크"}
-            </button>
-            <button
-              className={styles.secondaryButton}
+              API Healthy 체크
+            </Button>
+            <Button
               type="button"
+              variant="secondary"
               onClick={handleDownloadResults}
               disabled={loading || batchResults.length === 0}
             >
               결과 CSV 다운로드
-            </button>
+            </Button>
           </div>
         </form>
 
-        <div className={styles.block}>
-          <h2>Request Setup</h2>
-          <pre>{toPrettyJson(requestPreview)}</pre>
-        </div>
+        <Panel padding="md" title="Request Setup">
+          <pre className={styles.pre}>{toPrettyJson(requestPreview)}</pre>
+        </Panel>
 
-        <div className={styles.block}>
-          <h2>Progress</h2>
+        <Panel padding="md" title="Progress">
           {totalRows > 0 && (
             <div className={styles.progressWrap}>
               <div className={styles.progressTrack}>
-                <div className={styles.progressBar} style={{ width: `${progressPercent}%` }} />
+                <div
+                  className={styles.progressBar}
+                  style={{ "--progress-percent": progressPercent } as React.CSSProperties}
+                />
               </div>
               <div className={styles.progressText}>
                 {processedRows}/{totalRows} ({progressPercent}%)
               </div>
             </div>
           )}
-          <pre>{toPrettyJson(resultSummary)}</pre>
-        </div>
+          <pre className={styles.pre}>{toPrettyJson(resultSummary)}</pre>
+        </Panel>
 
-        <div className={styles.block}>
-          <h2>Latest medicalCertificate</h2>
-          <pre>{latestMedicalCertificate || "(아직 생성 전)"}</pre>
-        </div>
+        <Panel padding="md" title="Latest medicalCertificate">
+          <pre className={styles.pre}>{latestMedicalCertificate || "(아직 생성 전)"}</pre>
+        </Panel>
 
-        <div className={styles.block}>
-          <h2>Latest evaluation</h2>
-          <pre>{latestEvaluation ? toPrettyJson(latestEvaluation) : "(아직 평가 전)"}</pre>
-        </div>
+        <Panel padding="md" title="Latest evaluation">
+          <pre className={styles.pre}>{latestEvaluation ? toPrettyJson(latestEvaluation) : "(아직 평가 전)"}</pre>
+        </Panel>
 
-        <div className={styles.block}>
-          <h2>API Health Check</h2>
-          <pre>
+        <Panel padding="md" title="API Health Check">
+          <pre className={styles.pre}>
             {healthCheckResult
               ? toPrettyJson(healthCheckResult)
               : "(아직 실행 전) 버튼을 눌러 generate-test + evaluate 호출 결과를 확인하세요."}
           </pre>
-        </div>
+        </Panel>
 
         {error && (
           <div className={styles.errorBox} role="alert">
@@ -644,8 +639,7 @@ export default function EvaluationPage() {
         )}
 
         {batchResults.length > 0 && (
-          <div className={styles.block}>
-            <h2>Batch Results</h2>
+          <Panel padding="md" title="Batch Results">
             <div className={styles.resultList}>
               {batchResults.map((item) => (
                 <article
@@ -654,15 +648,11 @@ export default function EvaluationPage() {
                 >
                   <div className={styles.resultHeader}>
                     <strong>Row {item.rowNumber}</strong>
-                    <span
-                      className={
-                        item.status === "success" ? styles.successBadge : styles.errorBadge
-                      }
-                    >
+                    <Badge tone={item.status === "success" ? "success" : "danger"}>
                       {item.status === "success" ? "SUCCESS" : "ERROR"}
-                    </span>
+                    </Badge>
                   </div>
-                  <pre>
+                  <pre className={styles.pre}>
                     {toPrettyJson({
                       diseaseCode: item.diseaseCode,
                       prescriptionCode: item.prescriptionCode,
@@ -672,24 +662,24 @@ export default function EvaluationPage() {
                   {item.status === "success" ? (
                     <>
                       <div className={styles.resultSectionTitle}>medicalCertificate</div>
-                      <pre>{item.medicalCertificate || "(빈 응답)"}</pre>
+                      <pre className={styles.pre}>{item.medicalCertificate || "(빈 응답)"}</pre>
                       <div className={styles.resultSectionTitle}>generateRawResponse</div>
-                      <pre>{toPrettyJson(item.generateRawResponse)}</pre>
+                      <pre className={styles.pre}>{toPrettyJson(item.generateRawResponse)}</pre>
                       <div className={styles.resultSectionTitle}>evaluateRawResponse</div>
-                      <pre>{toPrettyJson(item.evaluateRawResponse)}</pre>
+                      <pre className={styles.pre}>{toPrettyJson(item.evaluateRawResponse)}</pre>
                     </>
                   ) : (
                     <>
                       <div className={styles.resultSectionTitle}>error</div>
-                      <pre>{item.error}</pre>
+                      <pre className={styles.pre}>{item.error}</pre>
                     </>
                   )}
                 </article>
               ))}
             </div>
-          </div>
+          </Panel>
         )}
-      </section>
+      </Panel>
     </main>
   );
 }

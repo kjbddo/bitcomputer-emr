@@ -28,7 +28,7 @@ def admin_client() -> httpx.Client:
     """부트스트랩 SUPER_USER 로 로그인한다.
 
     공개 가입은 항상 DEFAULT 이므로(Task 9), 역할이 있는 계정은 SUPER_USER 가
-    /api/super/create_user 로 만들어야 한다.
+    /api/admin/users 로 만들어야 한다.
     """
     assert BOOTSTRAP_PASSWORD, (
         "BOOTSTRAP_SUPERUSER_PASSWORD 가 필요하다. infra/.env 에 설정하고 "
@@ -49,7 +49,7 @@ def login_as(role: str) -> httpx.Client:
 
     admin = admin_client()
     admin.post(
-        "/api/super/create_user",
+        "/api/admin/users",
         headers=csrf_headers(admin),
         json={
             "name": username,

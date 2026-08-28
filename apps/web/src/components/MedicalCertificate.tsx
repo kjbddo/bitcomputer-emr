@@ -8,6 +8,7 @@ import {
   HttpError,
   saveDocumentCertificate,
 } from "@/services";
+import { Button, Modal, Panel } from "@/components/ui";
 import styles from "./MedicalCertificate.module.css";
 import { CertificateItem, CertificateType } from "./CertificateList";
 import type { CertificatePatientInfo } from "./CertificatePatientSearch";
@@ -88,7 +89,9 @@ function replaceFieldWithPrintableText(
   printable.style.padding = computed?.padding ?? "2px 4px";
   printable.style.border = "none";
   printable.style.background = "transparent";
-  printable.style.color = computed?.color ?? "#111827";
+  // 인쇄 스코프(.print-surface)가 이미 색을 라이트 값으로 고정하므로, computed 를
+  // 못 읽는 예외 상황에서도 하드코딩 hex 대신 상속으로 안전하게 대체한다.
+  printable.style.color = computed?.color || "inherit";
   printable.style.fontFamily = computed?.fontFamily ?? '"Malgun Gothic", Arial, sans-serif';
   printable.style.whiteSpace = "pre-wrap";
   printable.style.wordBreak = "break-word";
@@ -289,8 +292,15 @@ export default function MedicalCertificate({
     if (!certificatePageRef.current) {
       throw new Error("진단서 화면을 찾을 수 없습니다.");
     }
+    // 캡처 대상에는 .print-surface 가 적용되어 있어 --surface-raised 가 항상
+    // 라이트 값(흰색)으로 고정된다. html2canvas 의 배경 채움도 하드코딩 hex 대신
+    // 그 고정된 토큰 값을 런타임에 읽어 사용한다 — 다크 모드에서 캡처해도
+    // 검은 배경이 찍히지 않는다.
+    const pinnedSurface = getComputedStyle(certificatePageRef.current)
+      .getPropertyValue("--surface-raised")
+      .trim();
     const canvas = await html2canvas(certificatePageRef.current, {
-      backgroundColor: "#ffffff",
+      backgroundColor: pinnedSurface || null,
       scale: 2,
       useCORS: true,
       onclone: (clonedDoc, cloned) => {
@@ -507,145 +517,117 @@ export default function MedicalCertificate({
   };
 
   return (
-    <div className={styles.container}>
-      {aiPreviewModal != null && selected && (
-        <div
-          className={styles.modalBackdrop}
-          style={{ zIndex: 1001 }}
-          role="presentation"
-        >
-          <div
-            className={`${styles.modal} ${styles.modalWide}`}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="ai-preview-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 id="ai-preview-title" className={styles.modalHeading}>
-              생성된 의사 소견을 진단서에 넣겠습니까?
-            </h3>
-            <textarea
-              className={styles.aiPreviewTextarea}
-              readOnly
-              value={aiPreviewModal.text}
-              rows={12}
-              aria-label="AI 생성 소견 미리보기"
-            />
-            <div className={styles.modalActions}>
-              <button
-                type="button"
-                className={styles.modalReject}
-                onClick={handleAiPreviewReject}
-              >
-                거절
-              </button>
-              <button
-                type="button"
-                className={styles.modalAccept}
-                onClick={handleAiPreviewAccept}
-              >
-                수락
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {noticeModal != null && (
-        <div
-          className={styles.modalBackdrop}
-          role="presentation"
-          onClick={() => setNoticeModal(null)}
-        >
-          <div
-            className={styles.modal}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="cert-notice-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <p id="cert-notice-title" className={styles.modalMessage}>
-              {noticeModal}
-            </p>
-            <button
-              type="button"
-              className={styles.modalConfirm}
-              onClick={() => setNoticeModal(null)}
-            >
-              확인
-            </button>
-          </div>
-        </div>
-      )}
-      <div className={styles.header}>
-        <h2 className={styles.title}>
-          {selected ? selected.label : "진단서"}
-        </h2>
-        <div className={styles.headerActions}>
-          <button
-            type="button"
-            className={styles.aiButton}
-            onClick={handleAiGenerate}
-            disabled={
-              !selected || saving || aiGenerating || aiPreviewModal != null
-            }
-          >
-            {aiGenerating ? "생성 중…" : "AI 생성"}
-          </button>
-          <button
-            type="button"
-            className={styles.saveButton}
-            onClick={handleDownload}
-            disabled={
-              !selected ||
-              saving ||
-              aiGenerating ||
-              aiPreviewModal != null
-            }
-          >
-            {saving ? "PDF 생성 중…" : "PDF 다운로드"}
-          </button>
-          <button
-            type="button"
-            className={styles.saveButton}
-            onClick={handleSaveToDatabase}
-            disabled={
-              !selected ||
-              saving ||
-              aiGenerating ||
-              aiPreviewModal != null
-            }
-          >
-            {saving ? "저장 중…" : "저장"}
-          </button>
-        </div>
-      </div>
-      <div className={styles.body}>
-        {selected ? (
-          <div className={styles.certificatePage} ref={certificatePageRef}>
-            <img
-              src={TEMPLATE_IMAGES[selected.type]}
-              alt={selected.label}
-              className={styles.templateImage}
-              draggable={false}
-            />
-            <div className={styles.templateOverlay}>
-              {TEMPLATE_CONTROLS[selected.type].map(renderTemplateControl)}
-              {STAMP_POSITIONS[selected.type].map((stamp, index) => (
-                <img
-                  key={`${selected.type}-stamp-${index}`}
-                  src={STAMP_IMAGE}
-                  alt=""
-                  className={styles.stampImage}
-                  style={stamp}
-                  draggable={false}
-                />
-              ))}
-            </div>
-          </div>
-        ) : (
-          <p className={styles.placeholder}>목록에서 진단서를 선택하세요.</p>
+    <>
+      <Modal
+        open={noticeModal != null}
+        onClose={() => setNoticeModal(null)}
+        title="알림"
+        size="sm"
+        footer={
+          <Button type="button" variant="secondary" onClick={() => setNoticeModal(null)}>
+            확인
+          </Button>
+        }
+      >
+        <p className={styles.modalMessage}>{noticeModal}</p>
+      </Modal>
+
+      <Modal
+        open={aiPreviewModal != null}
+        // Escape / 백드롭 클릭도 거절로 취급한다. 모달만 닫으면 resolvedAiRound 가
+        // null 로 남아 저장 시 agentUsed:"false" 가 전송되고, AI 가 실제로 생성돼
+        // 의사에게 제시됐는데도 안 쓴 것으로 기록된다.
+        onClose={handleAiPreviewReject}
+        title="생성된 의사 소견을 진단서에 넣겠습니까?"
+        size="lg"
+        footer={
+          <>
+            <Button type="button" variant="ghost" onClick={handleAiPreviewReject}>
+              거절
+            </Button>
+            <Button type="button" variant="secondary" onClick={handleAiPreviewAccept}>
+              수락
+            </Button>
+          </>
+        }
+      >
+        {aiPreviewModal && (
+          <textarea
+            className={styles.aiPreviewTextarea}
+            readOnly
+            value={aiPreviewModal.text}
+            rows={12}
+            aria-label="AI 생성 소견 미리보기"
+          />
         )}
-      </div>
-    </div>
+      </Modal>
+
+      <Panel
+        className={styles.container}
+        title={selected ? selected.label : "진단서"}
+        actions={
+          <>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={handleAiGenerate}
+              disabled={!selected || saving || aiGenerating || aiPreviewModal != null}
+              loading={aiGenerating}
+            >
+              AI 생성
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={handleDownload}
+              disabled={!selected || saving || aiGenerating || aiPreviewModal != null}
+              loading={saving}
+            >
+              PDF 다운로드
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              onClick={handleSaveToDatabase}
+              disabled={!selected || saving || aiGenerating || aiPreviewModal != null}
+              loading={saving}
+            >
+              저장
+            </Button>
+          </>
+        }
+      >
+        <div className={styles.body}>
+          {selected ? (
+            <div className={`${styles.certificatePage} print-surface`} ref={certificatePageRef}>
+              <img
+                src={TEMPLATE_IMAGES[selected.type]}
+                alt={selected.label}
+                className={styles.templateImage}
+                draggable={false}
+              />
+              <div className={styles.templateOverlay}>
+                {TEMPLATE_CONTROLS[selected.type].map(renderTemplateControl)}
+                {STAMP_POSITIONS[selected.type].map((stamp, index) => (
+                  <img
+                    key={`${selected.type}-stamp-${index}`}
+                    src={STAMP_IMAGE}
+                    alt=""
+                    className={styles.stampImage}
+                    style={stamp}
+                    draggable={false}
+                  />
+                ))}
+              </div>
+            </div>
+          ) : (
+            <p className={styles.placeholder}>목록에서 진단서를 선택하세요.</p>
+          )}
+        </div>
+      </Panel>
+    </>
   );
 }

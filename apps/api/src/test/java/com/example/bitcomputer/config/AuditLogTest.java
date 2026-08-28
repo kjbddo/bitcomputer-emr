@@ -61,6 +61,10 @@ class AuditLogTest {
         assertEquals("DOCTOR", logs.get(0).getActorRole());
         assertEquals("GRANTED", logs.get(0).getOutcome());
         assertNotNull(logs.get(0).getRequestIp());
+        // 인터셉터가 경로 변수에서 대상 환자를 뽑아내는지까지 고정한다.
+        // 이 단언이 없으면 경로 변수 이름이 바뀌었을 때 targetPatientId 가 조용히
+        // null 로 떨어져도 이 층에서는 아무도 알아채지 못한다(E2E 만이 유일한 방어였다).
+        assertEquals(saved.getId(), logs.get(0).getTargetPatientId());
     }
 
     // I1 회귀: AuditInterceptor 가 preHandle 에서 무조건 GRANTED 를 기록하면, 존재하지

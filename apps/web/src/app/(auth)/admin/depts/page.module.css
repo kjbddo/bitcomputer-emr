@@ -1,0 +1,43 @@
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.addForm {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-end;
+}
+
+.addFormField {
+  min-width: 240px;
+}
+
+.errorMessage {
+  font-size: var(--font-size-sm);
+  color: var(--danger-text);
+}
+
+.successMessage {
+  font-size: var(--font-size-sm);
+  color: var(--success-text);
+}
+
+.deptCell {
+  font-weight: 600;
+}
+
+.editCell {
+  min-width: 200px;
+}
+
+.editActions {
+  display: flex;
+  gap: var(--space-2);
+}

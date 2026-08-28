@@ -1,0 +1,35 @@
+.shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100dvh;
+  padding: var(--space-6);
+}
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 360px;
+}
+
+.title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+  line-height: var(--line-height-xl);
+}
+
+.form {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.formAlert {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: var(--font-size-sm);
+}
+

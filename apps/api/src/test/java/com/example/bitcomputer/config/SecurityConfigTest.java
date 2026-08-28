@@ -1,10 +1,13 @@
 package com.example.bitcomputer.config;
 
+import com.example.bitcomputer.Repository.EmployeeRepository;
+import com.example.bitcomputer.entity.Employee;
 import com.example.bitcomputer.entity.Role;
 import com.example.bitcomputer.jwt.JwtTokenProvider;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
@@ -26,6 +29,29 @@ class SecurityConfigTest {
 
     @Autowired
     private JwtTokenProvider jwtTokenProvider;
+
+    @Autowired
+    private EmployeeRepository employeeRepository;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    // AdminController 는 SecurityConfig 의 hasRole("SUPER_USER") 와는 별개로,
+    // 요청자를 employeeRepository 에서 실제로 조회해 SUPER_USER 인지 다시 확인한다
+    // (validateSuperUser/extractEmployee). 그 belt-and-braces 검증을 통과하려면
+    // cookieFor 가 심는 "tester" 사용자가 실제로 DB 에 SUPER_USER 로 존재해야 한다.
+    private void ensureTesterIsSeededAsSuperUser() {
+        if (employeeRepository.findByUsername("tester") != null) {
+            return;
+        }
+        Employee tester = new Employee();
+        tester.setName("tester");
+        tester.setUsername("tester");
+        tester.setPassword(passwordEncoder.encode("unused"));
+        tester.setDeptId(1);
+        tester.setRole(Role.SUPER_USER);
+        employeeRepository.save(tester);
+    }
 
     private jakarta.servlet.http.Cookie cookieFor(Role role) {
         String token = jwtTokenProvider.generateAccessToken("tester", role);
@@ -98,13 +124,6 @@ class SecurityConfigTest {
                .andExpect(status().isForbidden());
     }
 
-    @Test
-    void superUserOnlyForRoleManagement() throws Exception {
-        mockMvc.perform(get("/api/super/employees")
-                       .cookie(cookieFor(Role.DOCTOR)))
-               .andExpect(status().isForbidden());
-    }
-
     // I3 회귀: /api/history-diagnoses/**, /api/history-diseases/** 매처는 실제로 존재하지
     // 않는 경로였다(컨트롤러는 전부 "/api/histories" 아래 매핑돼 있다). 그 결과 GET 은
     // 아무 제한 없이 anyRequest().hasAnyRole(RECEPTIONIST, NURSE, DOCTOR, SUPER_USER) 로
@@ -155,5 +174,28 @@ class SecurityConfigTest {
                        .param("employeeId", "1")
                        .cookie(cookieFor(Role.NURSE)))
                .andExpect(status().is(org.hamcrest.Matchers.not(403)));
+    }
+
+    @Test
+    void oldSuperPathNoLongerExists() throws Exception {
+        mockMvc.perform(get("/api/super/get_all_users")
+                       .cookie(cookieFor(Role.SUPER_USER)))
+               .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void adminUsersPathRequiresSuperUser() throws Exception {
+        mockMvc.perform(get("/api/admin/users")
+                       .cookie(cookieFor(Role.DOCTOR)))
+               .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DirtiesContext(methodMode = DirtiesContext.MethodMode.AFTER_METHOD)
+    void adminUsersPathAllowsSuperUser() throws Exception {
+        ensureTesterIsSeededAsSuperUser();
+        mockMvc.perform(get("/api/admin/users")
+                       .cookie(cookieFor(Role.SUPER_USER)))
+               .andExpect(status().isOk());
     }
 }

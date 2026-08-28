@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
+import { Badge, Button, EmptyState, Panel } from "@/components/ui";
 import styles from "./AIReport.module.css";
 import { PredictedDisease, uploadAndAnalyzeImage, XrayView } from "@/services/radiology";
 
@@ -56,7 +57,7 @@ export default function AIReport({
         setUploadedImage(reader.result as string);
       };
       reader.readAsDataURL(file);
-      
+
       // 에러 초기화
       setError(null);
     }
@@ -124,129 +125,116 @@ export default function AIReport({
   };
 
   return (
-    <div className={styles.container}>
-      <div className={styles.header}>
-        <h3>AI 리포트</h3>
-      </div>
-      <div className={styles.content}>
-        {/* 업로드된 이미지 표시 영역 */}
-        <div className={styles.imageSection}>
-          {uploadedImage ? (
-            <div className={styles.imageContainer}>
-              <img 
-                src={uploadedImage} 
-                alt="업로드된 이미지" 
-                className={styles.uploadedImage}
-              />
-              <button 
-                className={styles.removeButton}
-                onClick={handleRemoveImage}
-                aria-label="이미지 제거"
-              >
-                ×
-              </button>
-            </div>
-          ) : (
-            <div className={styles.imagePlaceholder}>
-              <p>이미지를 업로드하거나 선택하세요</p>
-            </div>
-          )}
-        </div>
-        
-        <div className={styles.controlSection}>
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleFileSelect}
-            accept="image/*"
-            style={{ display: "none" }}
-          />
-          <button 
-            className={styles.uploadButton}
-            onClick={handleUploadClick}
-          >
-            이미지 업로드
-          </button>
-          <select
-            className={styles.viewSelect}
-            value={view}
-            onChange={(event) => setView(event.target.value as XrayView)}
-            aria-label="X-ray 촬영 방향"
-          >
-            <option value="PA">PA</option>
-            <option value="AP">AP</option>
-          </select>
-          <button 
-            className={styles.analyzeButton}
-            disabled={!uploadedImage || isLoading}
-            onClick={handleAnalyze}
-          >
-            {isLoading ? "분석 중..." : "AI 분석"}
-          </button>
-        </div>
-
-        {/* 결과 이미지 표시 영역 */}
-        {resultImage && (
-          <div className={styles.resultImageSection}>
-            <div className={styles.imageContainer}>
-              <img 
-                src={resultImage} 
-                alt="분석 결과 이미지" 
-                className={styles.uploadedImage}
-              />
-            </div>
+    <Panel className={styles.container} title="AI 리포트">
+      {/* 업로드된 이미지 표시 영역 */}
+      <div className={styles.imageSection}>
+        {uploadedImage ? (
+          <div className={styles.imageContainer}>
+            <img
+              src={uploadedImage}
+              alt="업로드된 이미지"
+              className={styles.uploadedImage}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={styles.removeButton}
+              onClick={handleRemoveImage}
+              aria-label="이미지 제거"
+            >
+              ×
+            </Button>
           </div>
+        ) : (
+          <EmptyState title="이미지를 업로드하거나 선택하세요" />
         )}
+      </div>
 
-        {/* 분석 결과 텍스트 영역 */}
-        {(predictedDiseases.length > 0 || warning) && (
-          <div className={styles.resultTextSection}>
-            <div className={styles.resultContent}>
-              {engineStatus && engineStatus !== "real" && (
-                <div
-                  role="status"
-                  style={{
-                    background: "#fff4e5",
-                    border: "1px solid #ffa726",
-                    borderRadius: 4,
-                    padding: "8px 12px",
-                    marginBottom: 12,
-                    fontSize: 13,
-                  }}
-                >
+      <div className={styles.controlSection}>
+        <input
+          type="file"
+          ref={fileInputRef}
+          onChange={handleFileSelect}
+          accept="image/*"
+          style={{ display: "none" }}
+        />
+        <Button type="button" variant="secondary" onClick={handleUploadClick}>
+          이미지 업로드
+        </Button>
+        <select
+          className={styles.viewSelect}
+          value={view}
+          onChange={(event) => setView(event.target.value as XrayView)}
+          aria-label="X-ray 촬영 방향"
+        >
+          <option value="PA">PA</option>
+          <option value="AP">AP</option>
+        </select>
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={!uploadedImage || isLoading}
+          loading={isLoading}
+          onClick={handleAnalyze}
+        >
+          {isLoading ? "분석 중..." : "AI 분석"}
+        </Button>
+      </div>
+
+      {/* 결과 이미지 표시 영역 */}
+      {resultImage && (
+        <div className={styles.resultImageSection}>
+          <div className={styles.imageContainer}>
+            <img
+              src={resultImage}
+              alt="분석 결과 이미지"
+              className={styles.uploadedImage}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* 분석 결과 텍스트 영역 */}
+      {(predictedDiseases.length > 0 || warning) && (
+        <div className={styles.resultTextSection}>
+          <div className={styles.resultContent}>
+            {engineStatus && engineStatus !== "real" && (
+              <div role="status" className={styles.engineWarning}>
+                <Badge tone="warning">{engineStatus}</Badge>
+                <span>
                   이 결과는 <strong>{engineStatus}</strong> 엔진에서 생성되었습니다. 실제 모델
                   추론이 아니므로 임상 판단에 사용할 수 없습니다.
-                </div>
-              )}
-              <span className={styles.resultLabel}>추론된 상병:</span>
-              {predictedDiseases.length > 0 ? (
-                <ul className={styles.predictionList}>
-                  {predictedDiseases.map((item, index) => (
-                    <li key={`${item.disease}-${index}`} className={styles.predictionItem}>
-                      <div className={styles.predictionHeader}>
-                        <span className={styles.resultValue}>{item.disease}</span>
-                        <span className={styles.score}>{item.score.toFixed(3)}</span>
-                      </div>
-                      <p className={styles.reason}>{item.reason}</p>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <span className={styles.normal}>추론된 상병 없음</span>
-              )}
-              {warning && <p className={styles.warning}>{warning}</p>}
-            </div>
+                </span>
+              </div>
+            )}
+            <span className={styles.resultLabel}>추론된 상병:</span>
+            {predictedDiseases.length > 0 ? (
+              <ul className={styles.predictionList}>
+                {predictedDiseases.map((item, index) => (
+                  <li key={`${item.disease}-${index}`} className={styles.predictionItem}>
+                    <div className={styles.predictionHeader}>
+                      <span className={styles.resultValue}>{item.disease}</span>
+                      <span className={styles.score}>{item.score.toFixed(3)}</span>
+                    </div>
+                    <p className={styles.reason}>{item.reason}</p>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <span className={styles.normal}>추론된 상병 없음</span>
+            )}
+            {warning && <p className={styles.warning}>{warning}</p>}
           </div>
-        )}
+        </div>
+      )}
 
-        {/* 에러 메시지 표시 */}
-        {error && (
-          <div className={styles.errorMessage}>
-            <p>{error}</p>
-          </div>
-        )}
-      </div>
-    </div>
+      {/* 에러 메시지 표시 */}
+      {error && (
+        <div className={styles.errorMessage}>
+          <p>{error}</p>
+        </div>
+      )}
+    </Panel>
   );
 }
-

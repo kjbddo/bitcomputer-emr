@@ -2,8 +2,10 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
+import AuthLinkSwap from "@/components/common/AuthLink";
 import { signup } from "@/services/auth";
+import { Button, Field, Panel } from "@/components/ui";
+import styles from "./page.module.css";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -34,84 +36,61 @@ export default function SignupPage() {
   }
 
   return (
-    <div style={{ maxWidth: 360, margin: "64px auto", padding: 24 }}>
-      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 16 }}>회원가입</h1>
-      <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12 }}>
-        <label style={{ display: "grid", gap: 6 }}>
-          <span>이름</span>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="홍길동"
-            required
-            style={{ padding: "8px 12px", border: "1px solid #ddd", borderRadius: 8 }}
-          />
-        </label>
-        <label style={{ display: "grid", gap: 6 }}>
-          <span>사용자 ID</span>
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            placeholder="employee01"
-            required
-            style={{ padding: "8px 12px", border: "1px solid #ddd", borderRadius: 8 }}
-          />
-        </label>
-        <label style={{ display: "grid", gap: 6 }}>
-          <span>직무</span>
-          <select
-            value={role}
-            onChange={(e) => setRole(e.target.value)}
-            required
-            style={{ padding: "8px 12px", border: "1px solid #ddd", borderRadius: 8 }}
-          >
-            <option value="" disabled>
-              직무를 선택하세요
-            </option>
-            <option value="DOCTOR">의사</option>
-            <option value="NURSE">간호사</option>
-            <option value="RECEPTIONIST">접수원</option>
-          </select>
-        </label>
-        <label style={{ display: "grid", gap: 6 }}>
-          <span>비밀번호</span>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="••••••••"
-            required
-            style={{ padding: "8px 12px", border: "1px solid #ddd", borderRadius: 8 }}
-          />
-        </label>
+    <div className={styles.shell}>
+      <div className={styles.container}>
+        <h1 className={styles.title}>회원가입</h1>
+        <Panel>
+          <form onSubmit={handleSubmit} className={styles.form}>
+            <Field label="이름" htmlFor="signup-name" required>
+              <input
+                id="signup-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="홍길동"
+              />
+            </Field>
+            <Field label="사용자 ID" htmlFor="signup-username" required>
+              <input
+                id="signup-username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="employee01"
+              />
+            </Field>
+            <Field label="직무" htmlFor="signup-role" required>
+              <select id="signup-role" value={role} onChange={(e) => setRole(e.target.value)}>
+                <option value="" disabled>
+                  직무를 선택하세요
+                </option>
+                <option value="DOCTOR">의사</option>
+                <option value="NURSE">간호사</option>
+                <option value="RECEPTIONIST">접수원</option>
+              </select>
+            </Field>
+            <Field label="비밀번호" htmlFor="signup-password" required>
+              <input
+                id="signup-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+              />
+            </Field>
 
-        {error && (
-          <div style={{ color: "#c00", fontSize: 14 }} role="alert">
-            {error}
-          </div>
-        )}
+            {error && (
+              <p className={styles.formAlert} role="alert">
+                {error}
+              </p>
+            )}
 
-        <button
-          type="submit"
-          disabled={loading}
-          style={{
-            padding: "10px 14px",
-            borderRadius: 8,
-            background: "#111",
-            color: "#fff",
-            border: 0,
-            cursor: loading ? "not-allowed" : "pointer",
-          }}
-        >
-          {loading ? "가입 중..." : "회원가입"}
-        </button>
-      </form>
+            <Button type="submit" variant="primary" loading={loading}>
+              {loading ? "가입 중..." : "회원가입"}
+            </Button>
+          </form>
+        </Panel>
 
-      <p style={{ marginTop: 12, fontSize: 14 }}>
-        이미 계정이 있으신가요? <Link href="/login">로그인</Link>
-      </p>
+        <AuthLinkSwap />
+      </div>
     </div>
   );
 }
-
-

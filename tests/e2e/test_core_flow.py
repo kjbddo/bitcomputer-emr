@@ -177,3 +177,258 @@ def test_patient_lookup_is_audited(doctor: httpx.Client, super_user: httpx.Clien
 
 def test_doctor_cannot_read_audit_log(doctor: httpx.Client):
     assert doctor.get("/api/audit/logs").status_code == 403
+
+
+# ── Task 7: 부서 관리 ──────────────────────────────────────────────
+
+
+def test_admin_can_create_dept_and_see_it_in_list(super_user: httpx.Client):
+    """부서를 만들고 목록에서 확인한다."""
+    name = "E2E진료과"
+
+    created = super_user.post(
+        "/api/admin/depts",
+        headers=csrf_headers(super_user),
+        json={"dept": name},
+    )
+    # 이미 있으면 409 — 재실행 가능해야 하므로 둘 다 허용한다
+    assert created.status_code in (201, 409), created.text
+
+    listed = super_user.get("/api/depts")
+    assert listed.status_code == 200
+    assert any(d["dept"] == name for d in listed.json())
+
+
+def test_duplicate_dept_name_is_rejected(super_user: httpx.Client):
+    name = "E2E중복과"
+    super_user.post("/api/admin/depts", headers=csrf_headers(super_user), json={"dept": name})
+
+    again = super_user.post(
+        "/api/admin/depts",
+        headers=csrf_headers(super_user),
+        json={"dept": name},
+    )
+    assert again.status_code == 409
+
+
+def test_create_dept_blank_name_is_rejected(super_user: httpx.Client):
+    response = super_user.post(
+        "/api/admin/depts",
+        headers=csrf_headers(super_user),
+        json={"dept": "   "},
+    )
+    assert response.status_code == 400
+
+
+def test_admin_can_rename_dept(super_user: httpx.Client):
+    """부서명을 바꾸고 응답에 반영되는지 확인한다.
+
+    더러운 DB에서도 재실행 가능하도록, 두 이름 중 현재 존재하는 쪽을 찾아
+    반대쪽으로 토글한다(매번 실행할 때마다 A→B, 다음번엔 B→A).
+    """
+    name_a = "E2E변경전과"
+    name_b = "E2E변경후과"
+
+    depts = super_user.get("/api/depts").json()
+    current = next((d for d in depts if d["dept"] in (name_a, name_b)), None)
+
+    if current is None:
+        created = super_user.post(
+            "/api/admin/depts",
+            headers=csrf_headers(super_user),
+            json={"dept": name_a},
+        )
+        assert created.status_code in (201, 409), created.text
+        depts = super_user.get("/api/depts").json()
+        current = next(d for d in depts if d["dept"] == name_a)
+
+    target_name = name_b if current["dept"] == name_a else name_a
+
+    response = super_user.put(
+        f"/api/admin/depts/{current['id']}",
+        headers=csrf_headers(super_user),
+        json={"dept": target_name},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["dept"] == target_name
+
+
+def test_rename_dept_blank_name_is_rejected(super_user: httpx.Client):
+    depts = super_user.get("/api/depts").json()
+    assert depts, "부서 목록이 비어 있다"
+    target_id = depts[0]["id"]
+
+    response = super_user.put(
+        f"/api/admin/depts/{target_id}",
+        headers=csrf_headers(super_user),
+        json={"dept": "   "},
+    )
+    assert response.status_code == 400
+
+
+def test_rename_unknown_dept_id_returns_404(super_user: httpx.Client):
+    response = super_user.put(
+        "/api/admin/depts/999999",
+        headers=csrf_headers(super_user),
+        json={"dept": "존재하지않는부서수정시도"},
+    )
+    assert response.status_code == 404
+
+
+def test_unassigned_dept_exists_as_fallback(super_user: httpx.Client):
+    """UNASSIGNED 는 부서 없는 직원의 대체값으로 쓰이는 실제 부서 행이다."""
+    depts = super_user.get("/api/depts").json()
+    assert any(d["dept"] == "UNASSIGNED" for d in depts), "UNASSIGNED 부서가 없다"
+
+
+def test_doctor_cannot_create_dept(doctor: httpx.Client):
+    response = doctor.post(
+        "/api/admin/depts",
+        headers=csrf_headers(doctor),
+        json={"dept": "의사가만든과"},
+    )
+    assert response.status_code == 403
+
+
+def test_doctor_denied_dept_creation_is_audited(doctor: httpx.Client, super_user: httpx.Client):
+    """/api/admin/** 거부는 SecurityConfig 필터 단계(RestAccessDeniedHandler)에서
+    나므로 컨트롤러의 @Audited 경로가 아니라 ACCESS_DENIED 로 감사에
+    남는다. 403 응답만이 아니라 그 결과가 감사 로그에 실제로 남는지까지 확인한다.
+    """
+    response = doctor.post(
+        "/api/admin/depts",
+        headers=csrf_headers(doctor),
+        json={"dept": "감사확인용과"},
+    )
+    assert response.status_code == 403
+
+    audit = super_user.get(
+        "/api/audit/logs",
+        params={
+            "actorUsername": "e2e_doctor",
+            "action": "ACCESS_DENIED",
+            "outcome": "DENIED",
+            "size": 50,
+        },
+    )
+    assert audit.status_code == 200
+    rows = audit.json()["content"]
+    assert rows, "관리자 권한 거부가 감사 로그에 기록되지 않았다"
+    assert all(r["actorUsername"] == "e2e_doctor" for r in rows)
+    assert all(r["action"] == "ACCESS_DENIED" for r in rows)
+    assert all(r["outcome"] == "DENIED" for r in rows)
+    # detail 까지 봐야 "방금 이 POST 가 감사됐다"가 증명된다.
+    # 같은 actor 의 다른 거부(형제 테스트의 GET /api/audit/logs)가 남긴 행만으로도
+    # 위 세 단언은 통과하므로, 그것만으로는 이 테스트가 약속한 것을 증명하지 못한다.
+    assert any(
+        r["detail"] == "POST /api/admin/depts" for r in rows
+    ), "이 POST 거부가 감사 로그에 남지 않았다"
+
+
+def test_denied_admin_audit_access_is_audited(receptionist: httpx.Client, super_user: httpx.Client):
+    """/api/audit/** 도 SUPER_USER 전용이다 — RECEPTIONIST 의 거부된 시도 자체가
+    감사에 남는 것까지 확인해 '거부 → 감사 기록' 순환을 닫는다.
+    """
+    response = receptionist.get("/api/audit/logs")
+    assert response.status_code == 403
+
+    audit = super_user.get(
+        "/api/audit/logs",
+        params={
+            "actorUsername": "e2e_receptionist",
+            "action": "ACCESS_DENIED",
+            "outcome": "DENIED",
+            "size": 50,
+        },
+    )
+    rows = audit.json()["content"]
+    assert rows, "감사 로그 조회 거부가 감사 로그에 기록되지 않았다"
+    assert any(r["detail"] == "GET /api/audit/logs" for r in rows)
+
+
+def test_missing_csrf_token_is_rejected_and_audited(super_user: httpx.Client):
+    """CSRF_REJECTED 는 outcome 이 아니라 action 값이다 — CSRF 헤더 없이 뮤테이션을
+    보내면 403 이 오고, 감사 로그에는 outcome=DENIED, action=CSRF_REJECTED 로
+    (ACCESS_DENIED 가 아니라) 남아야 한다.
+    """
+    response = super_user.post("/api/admin/depts", json={"dept": "CSRF거부확인과"})
+    assert response.status_code == 403
+
+    audit = super_user.get(
+        "/api/audit/logs",
+        params={
+            "actorUsername": "admin",
+            "action": "CSRF_REJECTED",
+            "outcome": "DENIED",
+            "size": 50,
+        },
+    )
+    assert audit.status_code == 200
+    rows = audit.json()["content"]
+    assert rows, "CSRF 거부가 감사 로그에 기록되지 않았다"
+    assert all(r["action"] == "CSRF_REJECTED" for r in rows)
+    assert all(r["outcome"] == "DENIED" for r in rows)
+
+
+# ── Task 7: 감사 로그 필터 ────────────────────────────────────────
+
+
+def test_audit_log_filters_narrow_results(super_user: httpx.Client, patient_id: int):
+    """환자 조회 후, 그 행위가 필터로 찾아지는지 확인한다."""
+    super_user.get(f"/api/patients/{patient_id}")
+
+    filtered = super_user.get(
+        "/api/audit/logs",
+        params={"action": "PATIENT_VIEW", "targetPatientId": patient_id, "size": 50},
+    )
+    assert filtered.status_code == 200
+
+    rows = filtered.json()["content"]
+    assert rows, "필터로 조회한 감사 기록이 비어 있다"
+    assert all(r["action"] == "PATIENT_VIEW" for r in rows)
+    assert all(r["targetPatientId"] == patient_id for r in rows)
+
+
+def test_audit_log_outcome_filter_finds_denials(super_user: httpx.Client, receptionist: httpx.Client):
+    """거부된 시도가 outcome 필터로 찾아진다."""
+    # detail 은 "메서드 + URI" 뿐인데 같은 파일의 형제 테스트 둘이 같은 actor 로
+    # 같은 URI 를 POST 한다. 그래서 actor/outcome/detail 을 아무리 좁혀도 그들이
+    # 남긴 행으로 만족돼 "방금 이 요청이 감사됐다"는 증명되지 않는다.
+    # 유일하게 이 요청에 귀속되는 증거는 호출 전후의 증가분이다.
+    query = {
+        "outcome": "DENIED",
+        "actorUsername": "e2e_receptionist",
+        "action": "ACCESS_DENIED",
+        "size": 1,
+    }
+
+    before = super_user.get("/api/audit/logs", params=query)
+    assert before.status_code == 200
+    before_total = before.json()["totalElements"]
+
+    response = receptionist.post(
+        "/api/agent/prescription/recommend",
+        headers=csrf_headers(receptionist),
+        json={"history_diagnose_id": 1},
+    )
+    # RECEPTIONIST 는 /api/agent/** 에서 거부돼야 한다(SecurityConfig, DOCTOR/SUPER_USER 전용).
+    assert response.status_code == 403
+
+    after = super_user.get("/api/audit/logs", params={**query, "size": 50})
+    assert after.status_code == 200
+    body = after.json()
+
+    assert body["totalElements"] == before_total + 1, (
+        "이 거부 요청이 감사 로그에 새 행을 만들지 않았다 "
+        f"(before={before_total}, after={body['totalElements']})"
+    )
+
+    rows = body["content"]
+    assert all(r["outcome"] == "DENIED" for r in rows)
+    assert all(r["actorUsername"] == "e2e_receptionist" for r in rows)
+    # 정렬이 occurredAt DESC 로 고정돼 있으므로 방금 생긴 행이 맨 앞이다.
+    assert rows[0]["detail"] == "POST /api/agent/prescription/recommend"
+
+
+def test_old_super_path_is_gone(super_user: httpx.Client):
+    assert super_user.get("/api/super/get_all_users").status_code == 404

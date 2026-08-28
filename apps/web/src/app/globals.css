@@ -1,42 +1,89 @@
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
-html,
-body {
-  max-width: 100vw;
-  overflow-x: hidden;
-}
+@import "../styles/tokens.css";
+@import "../styles/reset.css";
 
 body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--surface-canvas);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-base);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-* {
-  box-sizing: border-box;
-  padding: 0;
-  margin: 0;
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]),
+select,
+textarea {
+  height: var(--control-height);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--font-size-base);
+  transition: border-color var(--dur-fast) var(--ease);
 }
 
-a {
-  color: inherit;
-  text-decoration: none;
+textarea {
+  height: auto;
+  min-height: calc(var(--control-height) * 2);
+  padding: var(--space-2) var(--space-3);
+  line-height: var(--line-height-base);
+  resize: vertical;
 }
 
-@media (prefers-color-scheme: dark) {
-  html {
-    color-scheme: dark;
-  }
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent-fill);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-muted);
+}
+
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]):hover:not(:disabled),
+select:hover:not(:disabled),
+textarea:hover:not(:disabled) {
+  border-color: var(--accent-fill);
+}
+
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]):disabled,
+select:disabled,
+textarea:disabled {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+table {
+  border-collapse: collapse;
+}
+
+/*
+ * 인쇄/PDF 캡처 스코프.
+ *
+ * MedicalCertificate 는 html2canvas 로 화면을 캡처해 PDF로 뽑는다. html2canvas 는
+ * getComputedStyle 로 이미 해석된 값을 읽으므로, 다크 모드에서 캡처하면 CSS 변수가
+ * 다크 값으로 해석되어 검은 배경·밝은 글자가 그대로 PDF에 찍힌다. 인쇄물(진단서)은
+ * 뷰어의 테마와 무관하게 항상 흰 종이·검은 글자여야 하므로, 캡처 대상 컨테이너에
+ * 이 클래스를 얹어 관련 토큰을 라이트 값으로 고정한다.
+ *
+ * 값은 전부 tokens.css 의 원시 램프(primitive)를 var() 로 참조한다 — 리터럴이
+ * 아니므로 GC-2 를 위반하지 않는다. 다만 의미 토큰이 아니라 원시 램프를 직접
+ * 참조하는 것은 GC-3(원시 램프 직접 참조 금지)의 유일한 예외다: 이 클래스의
+ * 목적 자체가 "테마를 따라가지 않게 고정"하는 것이라, 테마에 따라 바뀌는 의미
+ * 토큰이 아니라 절대 변하지 않는 원시 값을 가리켜야 의미가 있다. 전역 클래스여야
+ * CSS module 로 해시되지 않으므로 tokens.css 가 아닌 여기(globals.css)에 둔다.
+ */
+.print-surface {
+  --surface-raised: var(--white);
+  --surface-canvas: var(--white);
+  --text-primary: var(--slate-900);
+  --text-secondary: var(--slate-700);
+  --text-muted: var(--slate-600);
+  --border: var(--slate-300);
+  --border-strong: var(--slate-400);
+  color-scheme: light;
 }

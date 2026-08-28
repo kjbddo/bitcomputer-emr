@@ -1,6 +1,7 @@
 "use client";
 
 import { ReactNode, useState, useEffect } from "react";
+import { Button, EmptyState, Modal, Table, rowActivateProps } from "@/components/ui";
 import styles from "./SearchPatientModal.module.css";
 import { PatientInfo } from "./PatientInfoBar";
 import { get } from "@/services/http/client";
@@ -16,7 +17,7 @@ interface Patient {
 }
 
 interface SearchPatientModalProps {
-  isOpen: boolean;
+  open: boolean;
   onClose: () => void;
   title: string;
   onSelectPatient: (patient: PatientInfo) => void;
@@ -25,21 +26,22 @@ interface SearchPatientModalProps {
 
 type SearchOption = "전체" | "환자명" | "전화번호" | "생년월일" | "주민등록번호" | "환자번호";
 
-export default function SearchPatientModal({ isOpen, onClose, title, onSelectPatient, children }: SearchPatientModalProps) {
+const SEARCH_OPTIONS: SearchOption[] = ["전체", "환자명", "전화번호", "생년월일", "주민등록번호", "환자번호"];
+
+export default function SearchPatientModal({ open, onClose, title, onSelectPatient, children }: SearchPatientModalProps) {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [filteredPatients, setFilteredPatients] = useState<Patient[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOption, setSearchOption] = useState<SearchOption>("전체");
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
   useEffect(() => {
-    if (isOpen) {
+    if (open) {
       fetchAllPatients();
       setSearchQuery(""); // 모달이 열릴 때 검색어 초기화
       setSearchOption("전체"); // 검색 옵션 초기화
     }
-  }, [isOpen]);
+  }, [open]);
 
   useEffect(() => {
     // 검색어가 변경될 때마다 필터링
@@ -52,21 +54,21 @@ export default function SearchPatientModal({ isOpen, onClose, title, onSelectPat
         switch (searchOption) {
           case "환자명":
             return patient.name.toLowerCase().includes(query);
-          
+
           case "전화번호":
             const phoneNumber = patient.phoneNumber.replace(/-/g, "");
             return phoneNumber.includes(query.replace(/-/g, ""));
-          
+
           case "생년월일":
             const birthDate = formatDate(patient.birth).toLowerCase();
             return birthDate.includes(query);
-          
+
           case "주민등록번호":
             return patient.identityNumber.toLowerCase().includes(query);
-          
+
           case "환자번호":
             return patient.id.toString().includes(query);
-          
+
           case "전체":
           default:
             // 전체 검색: 모든 필드에서 검색
@@ -110,25 +112,6 @@ export default function SearchPatientModal({ isOpen, onClose, title, onSelectPat
     }
   };
 
-  // 드롭다운 외부 클릭 시 닫기
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (isDropdownOpen) {
-        const target = event.target as HTMLElement;
-        if (!target.closest(`.${styles.dropdownContainer}`)) {
-          setIsDropdownOpen(false);
-        }
-      }
-    };
-
-    if (isDropdownOpen) {
-      document.addEventListener("mousedown", handleClickOutside);
-      return () => {
-        document.removeEventListener("mousedown", handleClickOutside);
-      };
-    }
-  }, [isDropdownOpen]);
-
   const calculateAgeWithMonths = (birthString: string) => {
     if (!birthString) return "-";
     const birth = new Date(birthString);
@@ -169,123 +152,85 @@ export default function SearchPatientModal({ isOpen, onClose, title, onSelectPat
     onClose();
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div className={styles.overlay} onClick={onClose}>
-      <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
-        <div className={styles.header}>
-          <h3 className={styles.title}>{title}</h3>
-          <button className={styles.closeButton} onClick={onClose}>
-            ×
-          </button>
-        </div>
-        <div className={styles.content}>
-          {/* 검색 입력 필드 */}
-          <div className={styles.searchSection}>
-            <div className={styles.dropdownContainer}>
-              <button
-                className={styles.dropdownButton}
-                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-              >
-                {searchOption}
-                <span className={styles.dropdownArrow}>▼</span>
-              </button>
-              {isDropdownOpen && (
-                <div className={styles.dropdownMenu}>
-                  {(["전체", "환자명", "전화번호", "생년월일", "주민등록번호", "환자번호"] as SearchOption[]).map((option) => (
-                    <button
-                      key={option}
-                      className={`${styles.dropdownItem} ${searchOption === option ? styles.dropdownItemActive : ""}`}
-                      onClick={() => {
-                        setSearchOption(option);
-                        setIsDropdownOpen(false);
-                      }}
-                    >
-                      {option}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <input
-              type="text"
-              className={styles.searchInput}
-              placeholder={searchOption === "전체" 
-                ? "검색어를 입력하세요" 
-                : `${searchOption}으로 검색`}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-            {searchQuery && (
-              <button
-                className={styles.clearButton}
-                onClick={() => setSearchQuery("")}
-              >
-                ✕
-              </button>
-            )}
-          </div>
-
-          {isLoading ? (
-            <div className={styles.loadingMessage}>환자 목록을 불러오는 중...</div>
-          ) : (
-            <>
-              {searchQuery && (
-                <div className={styles.searchResultInfo}>
-                  검색 결과: {filteredPatients.length}명
-                </div>
-              )}
-              <div className={styles.tableContainer}>
-                <table className={styles.patientTable}>
-                  <thead>
-                    <tr className={styles.tableHeader}>
-                      <th>최근내원일</th>
-                      <th>환자명</th>
-                      <th>성별</th>
-                      <th>생년월일</th>
-                      <th>전화번호</th>
-                      <th>진료과</th>
-                      <th>담당의사</th>
-                      <th>환자 번호</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredPatients.length === 0 ? (
-                      <tr>
-                        <td colSpan={8} className={styles.emptyMessage}>
-                          {searchQuery ? "검색 결과가 없습니다." : "등록된 환자가 없습니다."}
-                        </td>
-                      </tr>
-                    ) : (
-                      filteredPatients.map((patient) => (
-                        <tr
-                          key={patient.id}
-                          className={styles.tableRow}
-                          onClick={() => handlePatientSelect(patient)}
-                        >
-                          <td className={styles.entryTime}>-</td> {/* 최근내원일 */}
-                          <td className={styles.patientName}>{patient.name}</td>
-                          <td className={styles.gender}>
-                            {patient.gender === 'M' ? '남' : patient.gender === 'F' ? '여' : '-'}
-                          </td>
-                          <td className={styles.birthDate}>{formatDate(patient.birth)}</td>
-                          <td className={styles.phoneNumber}>{patient.phoneNumber}</td>
-                          <td className={styles.department}>-</td>
-                          <td className={styles.docter}>-</td>
-                          <td className={styles.patientNumber}>{patient.id}</td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-          {children}
-        </div>
+    <Modal open={open} onClose={onClose} title={title} size="lg">
+      <div className={styles.searchSection}>
+        <select
+          className={styles.searchOption}
+          aria-label="검색 조건"
+          value={searchOption}
+          onChange={(e) => setSearchOption(e.target.value as SearchOption)}
+        >
+          {SEARCH_OPTIONS.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+        <input
+          type="text"
+          className={styles.searchInput}
+          placeholder={searchOption === "전체"
+            ? "검색어를 입력하세요"
+            : `${searchOption}으로 검색`}
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+        />
+        {searchQuery && (
+          <Button type="button" variant="ghost" size="sm" onClick={() => setSearchQuery("")}>
+            지우기
+          </Button>
+        )}
       </div>
-    </div>
+
+      {isLoading ? (
+        <EmptyState title="환자 목록을 불러오는 중..." />
+      ) : (
+        <>
+          {searchQuery && (
+            <p className={styles.searchResultInfo}>검색 결과: {filteredPatients.length}명</p>
+          )}
+          {filteredPatients.length === 0 ? (
+            <EmptyState
+              title={searchQuery ? "검색 결과가 없습니다." : "등록된 환자가 없습니다."}
+            />
+          ) : (
+            <Table className={styles.table}>
+              <thead>
+                <tr>
+                  <th scope="col">최근내원일</th>
+                  <th scope="col">환자명</th>
+                  <th scope="col">성별</th>
+                  <th scope="col">생년월일</th>
+                  <th scope="col">전화번호</th>
+                  <th scope="col">진료과</th>
+                  <th scope="col">담당의사</th>
+                  <th scope="col">환자 번호</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredPatients.map((patient) => (
+                  <tr
+                    key={patient.id}
+                    onClick={() => handlePatientSelect(patient)}
+                    {...rowActivateProps(() => handlePatientSelect(patient))}
+                  >
+                    <td>-</td>
+                    <td>{patient.name}</td>
+                    <td>{patient.gender === 'M' ? '남' : patient.gender === 'F' ? '여' : '-'}</td>
+                    <td>{formatDate(patient.birth)}</td>
+                    <td>{patient.phoneNumber}</td>
+                    <td>-</td>
+                    <td>-</td>
+                    <td>{patient.id}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+          )}
+        </>
+      )}
+      {children}
+    </Modal>
   );
 }
-
