@@ -52,7 +52,13 @@ export interface DocumentGenerateResponse {
   llmStatus?: string | null;
 }
 
-const DOCUMENT_API_TIMEOUT_MS = 90000;
+// 최종 리뷰 IMPORTANT: 이 값은 Java 의 http.client.rest-template.read-timeout-ms
+// (apps/api/src/main/resources/application.properties, 180000ms) 보다 커야
+// 한다 — 작으면 브라우저가 Java 보다 먼저 포기해버려, Java/게이트웨이가 아직
+// 정상적으로 처리 중인 요청도 사용자에게는 실패로 보인다. 이 값을 낮출 때는
+// Java 의 read-timeout-ms 도 함께 검토한다(infra/.env.example 의
+// LLM_GATEWAY_TIMEOUT_SECONDS 주석 참고).
+export const DOCUMENT_API_TIMEOUT_MS = 200000;
 
 export async function generateDocumentCertificate(
   body: DocumentGenerateRequest

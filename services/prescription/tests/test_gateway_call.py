@@ -404,3 +404,145 @@ def test_health_reports_llm_gateway_configured(monkeypatch):
     body = client.get("/health").json()
     assert "llm_gateway_configured" in body
     assert body["llm_gateway_configured"] is True
+
+
+def test_health_default_model_matches_wire_model_from_same_env(monkeypatch):
+    """최종 리뷰 IMPORTANT 2: prescription_api.py 는 /health(구 DEFAULT_MODEL,
+    import 시점) 와 recommend()(호출 시점 os.environ.get) 가 LLM_MODEL 을 각각
+    따로 읽고 있어서, /health 가 보고하는 default_model 이 실제로 게이트웨이에
+    실리는 model 과 어긋날 수 있었다. _default_llm_model() 로 단일화한다 —
+    monkeypatch.setenv 가 "import 이후"에 일어나므로, import 시점 상수를 쓰면
+    이 테스트가 실패한다."""
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://llm-gateway:8003/v1")
+    monkeypatch.setenv("LLM_MODEL", "distinct-model-for-test-xyz")
+
+    client = TestClient(pa.app)
+    body = client.get("/health").json()
+
+    assert body["default_model"] == "distinct-model-for-test-xyz"
+
+
+# ---------------------------------------------------------------------------
+# 최종 리뷰 IMPORTANT 2 — certificate_api.py 에만 있고 이 파일에는 이관되지
+# 않았던 가드: LLM_GATEWAY_TIMEOUT_SECONDS 파싱 실패 / 200 이지만 형식이 깨진
+# 본문
+# ---------------------------------------------------------------------------
+
+
+def test_gateway_uses_llm_gateway_timeout_seconds_env(monkeypatch):
+    """timeout 이 하드코딩되지 않고 LLM_GATEWAY_TIMEOUT_SECONDS 를 반영해야 한다.
+
+    LLM_TIMEOUT_SECONDS(게이트웨이 1회 시도당 타임아웃) 와 이름이 겹치면 안
+    된다 — 겹치면 운영자가 게이트웨이 타임아웃만 바꿔도 이 호출자의 총
+    대기시간이 함께 바뀌어 재시도가 무의미해진다."""
+    captured_kwargs: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _success_response({"prescriptions": []})
+
+    def _factory(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return _REAL_HTTPX_CLIENT(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", _factory)
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://llm-gateway:8003/v1")
+    monkeypatch.setenv("LLM_GATEWAY_TIMEOUT_SECONDS", "37")
+
+    pa._invoke_gateway_json("s", "u", "openai.gpt-5.6-luna")
+
+    assert captured_kwargs.get("timeout") == 37.0
+
+
+def test_gateway_invalid_gateway_timeout_env_raises_clean_error_not_500(monkeypatch):
+    """LLM_GATEWAY_TIMEOUT_SECONDS 가 숫자가 아니면 try 밖에서 ValueError 가
+    그대로 터져 트레이스백이 노출된 500 이 나가면 안 된다 — 깔끔한
+    HTTPException(503) 으로 바뀌어야 한다. MockTransport 를 설치해 파싱이
+    실패하지 않는 한 handler 가 절대 호출되지 않게 한다(핸들러가 불리면 파싱
+    실패가 503 으로 떨어지지 않고 실제 요청 경로까지 흘러갔다는 뜻)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(
+            "LLM_GATEWAY_TIMEOUT_SECONDS 파싱이 실패하면 httpx.Client 자체가 "
+            "생성되지 않아야 한다"
+        )
+
+    _install_transport(monkeypatch, handler)
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://llm-gateway:8003/v1")
+    monkeypatch.setenv("LLM_GATEWAY_TIMEOUT_SECONDS", "not-a-number")
+
+    with pytest.raises(pa.HTTPException) as exc_info:
+        pa._invoke_gateway_json("s", "u", "openai.gpt-5.6-luna")
+
+    assert exc_info.value.status_code == 503
+
+
+@pytest.mark.parametrize(
+    "body,description",
+    [
+        ({"choices": [{"message": {"content": None}}]}, "content-null"),
+        ({"choices": [{"message": {"content": ""}}]}, "content-empty-string"),
+        ({"choices": [{"message": {"content": "   \n\t"}}]}, "content-whitespace-only"),
+        ({"choices": [{"message": {"content": {"text": "x"}}}]}, "content-non-string-dict"),
+        ({"choices": [{"message": {"content": 42}}]}, "content-non-string-number"),
+        ({"choices": [{"message": {"content": ["a", "b"]}}]}, "content-non-string-list"),
+    ],
+)
+def test_gateway_200_malformed_body_raises_502_not_fabricated(monkeypatch, body, description):
+    """HTTP 200 이지만 본문 형식이 깨져 있으면, "None"/빈 문자열/딕셔너리를
+    str() 로 뭉갠 값을 진짜 처방 추천 JSON 으로 반환하면 안 된다 — 502 로
+    떨어져야 한다. 이 가드가 없으면 downstream 의 parse_prescriptions_llm_response
+    가 던지는 예외로 우연히 502 가 나가긴 하지만(GC-2 관점에서 "운 좋게
+    fail-closed"), 사유가 "빈 본문을 돌려주었습니다" 대신 JSON 파싱 실패로
+    뒤바뀐다 — 운영자가 원인을 오진하게 된다."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=body)
+
+    _install_transport(monkeypatch, handler)
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://llm-gateway:8003/v1")
+
+    with pytest.raises(pa.HTTPException) as exc_info:
+        pa._invoke_gateway_json("s", "u", "openai.gpt-5.6-luna")
+
+    assert exc_info.value.status_code == 502, description
+    detail = exc_info.value.detail
+    content = body["choices"][0]["message"]["content"]
+    assert repr(content) in detail, description
+
+
+def test_gateway_200_zero_width_space_only_content_raises_502_not_fabricated(monkeypatch):
+    """content 가 U+200B(zero-width space) 하나뿐이면 str.strip() 을 그대로
+    통과해 llmStatus="real" 인 "진짜" 처방 추천으로 새어나간다 — blank 판정
+    전에 zero-width 문자를 지워서 이 케이스를 502 로 닫는다."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"choices": [{"message": {"content": "​"}}]})
+
+    _install_transport(monkeypatch, handler)
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://llm-gateway:8003/v1")
+
+    with pytest.raises(pa.HTTPException) as exc_info:
+        pa._invoke_gateway_json("s", "u", "openai.gpt-5.6-luna")
+
+    assert exc_info.value.status_code == 502
+
+
+def test_recommend_real_mode_content_null_does_not_produce_fake_prescriptions(monkeypatch):
+    """게이트웨이가 200 과 함께 content: null 을 돌려주면, recommend() 전체
+    경로에서 502 가 그대로 올라와야 한다 — llmStatus="real" 인 지어낸 처방이
+    나가면 안 된다(GC-2)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"choices": [{"message": {"content": None}}]})
+
+    _install_transport(monkeypatch, handler)
+    monkeypatch.setenv("LLM_PROVIDER", "real")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://llm-gateway:8003/v1")
+
+    with pytest.raises(pa.HTTPException) as exc_info:
+        pa.recommend(_real_request(), x_prescription_eval_trace=None)
+
+    assert exc_info.value.status_code == 502

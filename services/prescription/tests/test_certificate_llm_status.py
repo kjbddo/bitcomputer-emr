@@ -223,8 +223,8 @@ def test_default_llm_model_fallback_when_env_absent(monkeypatch):
     assert ca._default_llm_model() == "openai.gpt-5.6-luna"
 
 
-def test_gateway_uses_llm_timeout_seconds_env(monkeypatch):
-    """M5: timeout 이 하드코딩되지 않고 LLM_TIMEOUT_SECONDS 를 반영해야 한다."""
+def test_gateway_uses_llm_gateway_timeout_seconds_env(monkeypatch):
+    """M5: timeout 이 하드코딩되지 않고 LLM_GATEWAY_TIMEOUT_SECONDS 를 반영해야 한다."""
     captured_kwargs: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -237,19 +237,19 @@ def test_gateway_uses_llm_timeout_seconds_env(monkeypatch):
 
     monkeypatch.setattr(httpx, "Client", _factory)
     monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://llm-gateway:8003/v1")
-    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "37")
+    monkeypatch.setenv("LLM_GATEWAY_TIMEOUT_SECONDS", "37")
 
     ca._invoke_gateway_text("s", "u", "openai.gpt-5.6-luna")
 
     assert captured_kwargs.get("timeout") == 37.0
 
 
-def test_gateway_invalid_timeout_env_raises_clean_error_not_500(monkeypatch):
-    """certificate_api.py:143 — LLM_TIMEOUT_SECONDS 가 숫자가 아니면 try 밖에서
+def test_gateway_invalid_gateway_timeout_env_raises_clean_error_not_500(monkeypatch):
+    """certificate_api.py:143 — LLM_GATEWAY_TIMEOUT_SECONDS 가 숫자가 아니면 try 밖에서
     ValueError 가 그대로 터져 트레이스백이 노출된 500 이 나갔다. 여기서는
     깔끔한 HTTPException(503) 으로 바뀌어야 한다.
 
-    M1(T2 변이): 잘못된 LLM_TIMEOUT_SECONDS 를 조용히 180.0 으로 되돌리는 변이가
+    M1(T2 변이): 잘못된 LLM_GATEWAY_TIMEOUT_SECONDS 를 조용히 180.0 으로 되돌리는 변이가
     `in (502, 503)` 이라는 느슨한 disjunction 때문에 살아남았다 — 파싱이 더 이상
     실패하지 않으면 MockTransport 없이 실제 httpx.Client 가 llm-gateway:8003 에
     접속을 시도하고, DNS/커넥션 실패가 ``except Exception`` 에서 502 로 잡혀
@@ -259,14 +259,14 @@ def test_gateway_invalid_timeout_env_raises_clean_error_not_500(monkeypatch):
 
     def handler(request: httpx.Request) -> httpx.Response:
         raise AssertionError(
-            "LLM_TIMEOUT_SECONDS 파싱이 실패하면 httpx.Client 자체가 생성되지 "
+            "LLM_GATEWAY_TIMEOUT_SECONDS 파싱이 실패하면 httpx.Client 자체가 생성되지 "
             "않아야 한다 — 이 handler 가 호출됐다는 건 파싱 실패가 503 으로 "
             "떨어지지 않고 실제 요청 경로까지 흘러갔다는 뜻이다."
         )
 
     _install_transport(monkeypatch, handler)
     monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://llm-gateway:8003/v1")
-    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "not-a-number")
+    monkeypatch.setenv("LLM_GATEWAY_TIMEOUT_SECONDS", "not-a-number")
 
     with pytest.raises(ca.HTTPException) as exc_info:
         ca._invoke_gateway_text("s", "u", "openai.gpt-5.6-luna")

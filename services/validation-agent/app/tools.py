@@ -178,8 +178,15 @@ def prescription_finder(
         "fetch_cohort_rx_from_arango": True,
     }
 
+    # 최종 리뷰 IMPORTANT: prescription-api 자신의 게이트웨이 호출 총 예산
+    # (LLM_GATEWAY_TIMEOUT_SECONDS, 기본 180s) 보다 짧으면 이 호출이 먼저
+    # 포기해버려 prescription_finder 가 게이트웨이 처리 도중에 "실패"로
+    # 기록된다 — prescription-api 는 여전히 응답을 만들고 있는데도. 이
+    # 호출자의 타임아웃은 prescription-api 의 총 예산과 맞추거나 더 커야
+    # 한다(infra/.env.example 의 LLM_GATEWAY_TIMEOUT_SECONDS 주석 참고).
+    timeout = float(os.environ.get("PRESCRIPTION_AGENT_TIMEOUT_SECONDS", "180"))
     try:
-        with httpx.Client(timeout=60.0) as client:
+        with httpx.Client(timeout=timeout) as client:
             response = client.post(f"{base_url}{path}", json=payload)
             response.raise_for_status()
             body = response.json()

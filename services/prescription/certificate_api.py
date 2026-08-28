@@ -53,7 +53,10 @@ def _load_dotenv_if_present() -> None:
         return
     env_file = SCRIPT_DIR / ".env"
     if env_file.is_file():
-        load_dotenv(env_file)
+        # 개발 환경에서 이미 export 된 예전 값(예: LLM_GATEWAY_BASE_URL)이 남아 있으면
+        # .env 값이 무시되는 혼선이 잦다. .env 를 "로컬 단일 진실"로 취급하기 위해
+        # override=True 로 로드한다 — prescription_api.py 와 동일한 정책(최종 리뷰).
+        load_dotenv(env_file, override=True)
 
 
 _load_dotenv_if_present()
@@ -167,17 +170,22 @@ def _invoke_gateway_text(system_prompt: str, user_prompt: str, model: str) -> st
             {"role": "user", "content": user_prompt},
         ],
     }
-    timeout_raw = os.environ.get("LLM_TIMEOUT_SECONDS", "180")
+    # LLM_TIMEOUT_SECONDS 가 아니다 — 그 이름은 게이트웨이의 1회 시도당 타임아웃
+    # (services/llm-gateway/app/config.py) 이 이미 쓰고 있다. infra/.env 는
+    # 한 파일을 공유하고 이 파일은 override=True 로 로드하므로, 이름이 같으면
+    # 운영자가 "게이트웨이 타임아웃"을 의도해 값을 바꿔도 이 호출자의 총
+    # 대기시간까지 함께 바뀌어 재시도가 전부 무의미해진다(최종 리뷰 IMPORTANT).
+    timeout_raw = os.environ.get("LLM_GATEWAY_TIMEOUT_SECONDS", "180")
     try:
         timeout = float(timeout_raw)
     except ValueError as exc:
         # certificate_api.py:143(구) — try 밖에서 ValueError 가 그대로 터지면
         # 트레이스백이 노출된 500 이 나간다. 잘못된 설정값도 "실패 계약"
         # 안에서 다뤄져야 한다(GC-2).
-        logger.exception("LLM_TIMEOUT_SECONDS 파싱 실패: %r", timeout_raw)
+        logger.exception("LLM_GATEWAY_TIMEOUT_SECONDS 파싱 실패: %r", timeout_raw)
         raise HTTPException(
             status_code=503,
-            detail=f"LLM_TIMEOUT_SECONDS 설정이 올바르지 않습니다: {timeout_raw!r}",
+            detail=f"LLM_GATEWAY_TIMEOUT_SECONDS 설정이 올바르지 않습니다: {timeout_raw!r}",
         ) from exc
     try:
         with httpx.Client(timeout=timeout) as client:

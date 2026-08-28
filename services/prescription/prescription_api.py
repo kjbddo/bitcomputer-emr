@@ -69,13 +69,40 @@ def _load_dotenv_if_present() -> None:
     if env_file.is_file():
         # 개발 환경에서 이미 export 된 예전 값(예: LLM_GATEWAY_BASE_URL)이 남아 있으면
         # .env 값이 무시되는 혼선이 잦다. .env 를 "로컬 단일 진실"로 취급하기 위해
-        # override=True 로 로드한다.
+        # override=True 로 로드한다 — certificate_api.py 와 동일한 정책(최종 리뷰).
         load_dotenv(env_file, override=True)
 
 
 _load_dotenv_if_present()
 
-DEFAULT_MODEL = os.environ.get("LLM_MODEL", "openai.gpt-5.6-luna")
+
+_ZERO_WIDTH_CHARS = "​‌‍﻿"
+
+
+def _strip_zero_width(text: str) -> str:
+    """블랭크 판정 전에 폭이 0인 문자를 제거한다.
+
+    certificate_api.py 의 동일 함수와 같은 이유: U+200B(zero-width space)
+    하나만 있는 content 는 str.strip() 을 통과해 llmStatus="real" 인 "진짜"
+    처방 추천으로 새어나간다. blank 판정에만 쓰고 반환값 자체는 건드리지
+    않는다(최종 리뷰 IMPORTANT 2 — 이 가드는 Task 8 에서 certificate_api.py 에만
+    들어가고 이 파일에는 이관되지 않았다).
+    """
+    for ch in _ZERO_WIDTH_CHARS:
+        text = text.replace(ch, "")
+    return text
+
+
+def _default_llm_model() -> str:
+    """LLM_MODEL 환경변수를 매 호출 시점에 읽는다.
+
+    certificate_api.py 의 동일 함수와 같은 이유: import 시점 상수(구 DEFAULT_MODEL)와
+    호출 시점 재조회가 각각 따로 os.environ.get() 을 부르면, import 시점 값은
+    프로세스가 뜬 이후 환경변수가 바뀌어도 갱신되지 않아 /health 가 보고하는
+    default_model 이 실제로 게이트웨이에 실리는 model 과 어긋날 수 있다(최종 리뷰
+    IMPORTANT 2). 단일 함수로 합쳐 두 지점이 항상 같은 값을 보게 한다.
+    """
+    return os.environ.get("LLM_MODEL", "openai.gpt-5.6-luna")
 
 
 class PrescriptionRecommendRequest(BaseModel):
@@ -198,7 +225,7 @@ def health() -> Dict[str, Any]:
     return {
         "status": "ok",
         "llm_gateway_configured": bool(os.environ.get("LLM_GATEWAY_BASE_URL")),
-        "default_model": DEFAULT_MODEL,
+        "default_model": _default_llm_model(),
         "arangodb_expected": (
             f"{os.environ.get('ARANGO_HOST', '127.0.0.1')}:"
             f"{os.environ.get('ARANGO_PORT', '8529')} "
@@ -300,7 +327,25 @@ def _invoke_gateway_json(system_prompt: str, user_prompt: str, model: str) -> st
             {"role": "user", "content": user_prompt},
         ],
     }
-    timeout = float(os.environ.get("LLM_TIMEOUT_SECONDS", "180"))
+    # LLM_TIMEOUT_SECONDS 가 아니다 — 그 이름은 게이트웨이의 1회 시도당 타임아웃
+    # (services/llm-gateway/app/config.py) 이 이미 쓰고 있다. infra/.env 는 한
+    # 파일을 공유하고 이 파일은 override=True 로 로드하므로, 이름이 같으면
+    # 운영자가 "게이트웨이 타임아웃"을 의도해 값을 바꿔도 이 호출자의 총
+    # 대기시간까지 함께 바뀌어 재시도가 전부 무의미해진다(최종 리뷰 IMPORTANT).
+    timeout_raw = os.environ.get("LLM_GATEWAY_TIMEOUT_SECONDS", "180")
+    try:
+        timeout = float(timeout_raw)
+    except ValueError as exc:
+        # 최종 리뷰 IMPORTANT 2: try 밖에서 ValueError 가 그대로 터지면
+        # 트레이스백이 노출된 500 이 나간다. certificate_api.py 는 Task 8 에서
+        # 이 가드를 받았지만 이 파일은 복사 당시(같은 디렉터리, 같은 빌드
+        # 컨텍스트) 받지 못했다. 잘못된 설정값도 "실패 계약" 안에서 다뤄져야
+        # 한다(GC-2).
+        logger.exception("LLM_GATEWAY_TIMEOUT_SECONDS 파싱 실패: %r", timeout_raw)
+        raise HTTPException(
+            status_code=503,
+            detail=f"LLM_GATEWAY_TIMEOUT_SECONDS 설정이 올바르지 않습니다: {timeout_raw!r}",
+        ) from exc
     try:
         with httpx.Client(timeout=timeout) as client:
             response = client.post(
@@ -309,7 +354,17 @@ def _invoke_gateway_json(system_prompt: str, user_prompt: str, model: str) -> st
                 json=payload,
             )
             response.raise_for_status()
-            return str(response.json()["choices"][0]["message"]["content"]).strip()
+            content = response.json()["choices"][0]["message"]["content"]
+            # 최종 리뷰 IMPORTANT 2: 200 이지만 형식이 깨진 본문(content: null/""/
+            # 비문자열)을 str() 로 뭉개서 반환하면 "None" 같은 지어낸 문자열이
+            # llmStatus="real" 인 진짜 처방 추천으로 통과한다(GC-2). certificate_api.py
+            # 는 Task 8 에서 이 가드를 받았다 — 여기서도 같은 검사를 적용한다.
+            # zero-width 문자만 있는 content 도 blank 판정 전에 걸러낸다.
+            if not isinstance(content, str) or not _strip_zero_width(content).strip():
+                raise ValueError(
+                    f"게이트웨이가 빈 본문을 돌려주었습니다: content={repr(content)[:200]}"
+                )
+            return content.strip()
     except httpx.HTTPStatusError as exc:
         # exc.response.text 는 게이트웨이가 GC-7 에 맞춰 이미 상류 응답을 걷어낸
         # 구조화된 본문(예: {"error":{"type":"upstream_error","upstreamStatus":N,
@@ -579,7 +634,10 @@ def recommend(
     # 게이트웨이에 실제로 실릴 모델. req.model 은 게이트웨이 payload 에 실리지
     # 않는다(luna 계약 — 서비스가 하나의 고정 모델만 사용). GC-2: req.model /
     # req.temperature 가 채워져 있는데도 조용히 버려지면 안 되므로 흔적을 남긴다.
-    wire_model = os.environ.get("LLM_MODEL", "openai.gpt-5.6-luna")
+    # 최종 리뷰 IMPORTANT 2: os.environ.get() 을 여기서 또 부르지 않는다 —
+    # /health(_default_llm_model()) 와 서로 다른 시점에 읽으면 두 값이 어긋날
+    # 수 있다. 단일 함수로 합쳐 항상 같은 값을 보게 한다.
+    wire_model = _default_llm_model()
     ignored_kwargs: Dict[str, Any] = {}
     if req.model and req.model != wire_model:
         logger.warning(

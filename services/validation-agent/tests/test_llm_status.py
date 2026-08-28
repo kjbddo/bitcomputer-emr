@@ -414,6 +414,41 @@ def test_tools_prescription_finder_forwards_upstream_llm_status(monkeypatch):
     assert result["recommendationLlmStatus"] == "stub"
 
 
+def test_tools_prescription_finder_uses_configurable_timeout_matching_prescription_budget(monkeypatch):
+    """최종 리뷰 IMPORTANT: 이 호출의 타임아웃이 하드코딩된 60s 대신
+    prescription-api 자신의 게이트웨이 총 예산(LLM_GATEWAY_TIMEOUT_SECONDS,
+    기본 180s) 과 맞는 기본값(180s) 을 쓰는지 확인한다. 60s 로 남아 있으면
+    prescription-api 가 게이트웨이 응답을 기다리는 도중 이 호출이 먼저
+    포기해버려, 실제로는 성공했을 요청이 fallback 으로 기록된다."""
+    captured_kwargs: dict = {}
+
+    def _client_factory(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return _FakeHttpxClient({"prescriptions": [], "llmStatus": "real"})
+
+    monkeypatch.setattr(tools.httpx, "Client", _client_factory)
+    monkeypatch.delenv("PRESCRIPTION_AGENT_TIMEOUT_SECONDS", raising=False)
+
+    tools.prescription_finder.invoke({"patient_id": "1", "diseases": [], "symptoms": ""})
+
+    assert captured_kwargs.get("timeout") == 180.0
+
+
+def test_tools_prescription_finder_timeout_reads_env(monkeypatch):
+    captured_kwargs: dict = {}
+
+    def _client_factory(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return _FakeHttpxClient({"prescriptions": [], "llmStatus": "real"})
+
+    monkeypatch.setattr(tools.httpx, "Client", _client_factory)
+    monkeypatch.setenv("PRESCRIPTION_AGENT_TIMEOUT_SECONDS", "33")
+
+    tools.prescription_finder.invoke({"patient_id": "1", "diseases": [], "symptoms": ""})
+
+    assert captured_kwargs.get("timeout") == 33.0
+
+
 def test_tools_prescription_finder_failure_reports_fallback_llm_status(monkeypatch):
     """처방 RAG 호출 자체가 실패하면 모델은 이 스텝에 관여하지 않았다 —
     상류가 뭐라고 했을지와 무관하게 fallback 이어야 한다."""

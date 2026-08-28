@@ -191,6 +191,7 @@ services:
       LLM_MODEL: ${LLM_MODEL:-openai.gpt-5.6-luna}
       PRESCRIPTION_AGENT_BASE_URL: http://prescription-api:8001
       PRESCRIPTION_AGENT_PATH: /api/agent/prescription/recommend
+      PRESCRIPTION_AGENT_TIMEOUT_SECONDS: ${PRESCRIPTION_AGENT_TIMEOUT_SECONDS:-180}
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672
       RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-guest}
