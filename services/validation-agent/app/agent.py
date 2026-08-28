@@ -37,8 +37,6 @@ KOREAN_PUBMED_TERMS = {
     "통증": "pain",
 }
 
-DEFAULT_OPENAI_MODEL = "gpt-5-nano"
-
 
 class ValidationState(TypedDict, total=False):
     event_id: int
@@ -95,8 +93,11 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
     max_iterations = int(os.environ.get("VALIDATION_REACT_MAX_ITERATIONS", "4"))
 
     final_result: Dict[str, Any] = {}
+    decision_sources: List[str] = []
     for iteration in range(1, max_iterations + 1):
         decision = _decide_next_tool(state, reasoning_trace, pubmed_queries, iteration)
+        source = str(decision.pop("_source", "fallback"))
+        decision_sources.append(source)
         action = str(decision.get("action") or "FINALIZE")
         if action == "FINALIZE":
             break
@@ -107,6 +108,7 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
             reasoning_trace,
             pubmed_evidence,
             pubmed_queries,
+            source,
         )
         if state.get("disease_check") or state.get("prescription_check"):
             final_result = _rule_based_finalize(state)
@@ -121,6 +123,8 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
             state,
             str(reason),
             pubmed_queries,
+            # 결정 루프 밖에서 항상 실행되는 호출이라 결정 출처가 없다 — 휴리스틱으로 표기한다.
+            source="fallback",
         ))
 
     if not state.get("candidate_prescriptions"):
@@ -136,6 +140,8 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
                 "symptoms": f"{state.get('symptoms') or ''}\n검증 사유: {reason}\nPubMed query: {query_context}",
             },
             prescription_finder,
+            # 결정 루프 밖에서 항상 실행되는 호출이라 결정 출처가 없다 — 휴리스틱으로 표기한다.
+            source="fallback",
         )
         candidates_from_finder = finder_result.get("candidatePrescriptions") or []
         if candidates_from_finder:
@@ -173,10 +179,26 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
             "pubmedEvidenceSummary": pubmed_evidence_summary,
         },
         "reasoningTrace": reasoning_trace,
+        "llmStatus": _resolve_llm_status(decision_sources),
     })
     if pubmed_evidence and final_overall != "PASS":
         final_result["reason"] = _with_pubmed_reason(str(final_result.get("reason") or ""), pubmed_evidence)
     return ValidationAgentResponse(**_normalize_final_result(final_result))
+
+
+def _resolve_llm_status(sources: List[str]) -> str:
+    """실행 경로에서 llmStatus 를 도출한다(spec §6.2, GC-3).
+
+    설정이 아니라 실제로 무엇이 결정을 내렸는지를 본다.
+    LLM 이 한 번이라도 결정했으면 real, 전부 stub 이면 stub, 그 외는 fallback.
+    """
+    if not sources:
+        return "fallback"
+    if all(s == "stub" for s in sources):
+        return "stub"
+    if any(s == "llm" for s in sources):
+        return "real"
+    return "fallback"
 
 
 def _invoke_tool(
@@ -185,6 +207,7 @@ def _invoke_tool(
     thought: str,
     payload: Dict[str, Any],
     tool_obj: Any,
+    source: str = "fallback",
 ) -> Dict[str, Any]:
     try:
         observation = tool_obj.invoke(payload)
@@ -195,15 +218,27 @@ def _invoke_tool(
         "action": action,
         "actionInput": payload,
         "observation": observation,
+        # 이 스텝이 LLM 추론에서 나왔는지 휴리스틱에서 나왔는지(spec §6.3).
+        "source": source,
     })
     return observation if isinstance(observation, dict) else {"status": "UNKNOWN", "raw": observation}
 
 
 def _create_llm() -> Optional[ChatOpenAI]:
-    if not os.environ.get("OPENAI_API_KEY"):
+    """게이트웨이를 통해 LLM 에 붙는다.
+
+    자격증명은 게이트웨이가 갖는다. 이 서비스는 base_url 만 안다(spec §3.1).
+    """
+    base_url = os.environ.get("LLM_GATEWAY_BASE_URL")
+    if not base_url:
         return None
-    model = os.environ.get("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
-    return ChatOpenAI(model=model, temperature=0)
+    # temperature 를 넘기지 않는다 — luna 계약이며 게이트웨이가 어차피 제거한다(spec §5).
+    return ChatOpenAI(
+        model=os.environ.get("LLM_MODEL", "openai.gpt-5.6-luna"),
+        base_url=base_url,
+        api_key="unused-gateway-handles-auth",
+        default_headers={"X-LLM-Caller": "validation-agent"},
+    )
 
 
 def _decide_next_tool(
@@ -212,13 +247,22 @@ def _decide_next_tool(
     pubmed_queries: List[str],
     iteration: int,
 ) -> Dict[str, Any]:
+    """결정 dict 에 `_source` 키를 실어 돌려준다.
+
+    `_source` 는 트레이스 표시와 llmStatus 산출에 쓰이며, 상위에서 제거된다.
+    """
     if resolve_provider() == "stub":
-        return stub_tool_decision(iteration)
-    if os.environ.get("OPENAI_API_KEY"):
+        decision = stub_tool_decision(iteration)
+        decision["_source"] = "stub"
+        return decision
+    if os.environ.get("LLM_GATEWAY_BASE_URL"):
         decision = _llm_tool_decision(state, reasoning_trace, pubmed_queries, iteration)
         if decision:
+            decision["_source"] = "llm"
             return decision
-    return _fallback_tool_decision(state, pubmed_queries)
+    decision = _fallback_tool_decision(state, pubmed_queries)
+    decision["_source"] = "fallback"
+    return decision
 
 
 def _llm_tool_decision(
@@ -361,6 +405,7 @@ def _execute_decided_tool(
     reasoning_trace: List[Dict[str, Any]],
     pubmed_evidence: List[Dict[str, Any]],
     pubmed_queries: List[str],
+    source: str,
 ) -> None:
     action = str(decision.get("action") or "")
     thought = str(decision.get("thought") or f"{action} 실행")
@@ -375,6 +420,7 @@ def _execute_decided_tool(
             thought,
             payload,
             xray_result_loader,
+            source=source,
         )
         return
 
@@ -390,6 +436,7 @@ def _execute_decided_tool(
             thought,
             payload,
             disease_validator,
+            source=source,
         )
         return
 
@@ -405,6 +452,7 @@ def _execute_decided_tool(
             thought,
             payload,
             prescription_validator,
+            source=source,
         )
         return
 
@@ -419,6 +467,7 @@ def _execute_decided_tool(
                 thought,
                 {"query": query, "max_results": int(action_input.get("max_results") or 3)},
                 pubmed_loader,
+                source=source,
             )
             pubmed_evidence.extend(_dedupe_pubmed_articles(pubmed_result.get("articles") or []))
         else:
@@ -429,6 +478,7 @@ def _execute_decided_tool(
                 state,
                 reason,
                 pubmed_queries,
+                source=source,
             ))
         return
 
@@ -446,6 +496,7 @@ def _execute_decided_tool(
             thought,
             payload,
             prescription_finder,
+            source=source,
         )
         candidates = finder_result.get("candidatePrescriptions") or []
         if candidates:
@@ -463,6 +514,7 @@ def _load_pubmed_evidence(
     state: ValidationState,
     reason: str,
     pubmed_queries: List[str],
+    source: str = "fallback",
 ) -> List[Dict[str, Any]]:
     articles: List[Dict[str, Any]] = []
     max_query_attempts = int(os.environ.get("VALIDATION_PUBMED_MAX_QUERY_ATTEMPTS", "4"))
@@ -476,6 +528,7 @@ def _load_pubmed_evidence(
             thought,
             {"query": query, "max_results": 3},
             pubmed_loader,
+            source=source,
         )
         articles.extend(pubmed_result.get("articles") or [])
         if articles:
@@ -1076,6 +1129,8 @@ def _normalize_final_result(result: Dict[str, Any]) -> Dict[str, Any]:
         ),
         "shouldNotifyDoctor": bool(result.get("shouldNotifyDoctor", overall != "PASS")),
         "shouldBlockAutoPrescription": bool(result.get("shouldBlockAutoPrescription", overall == "CRITICAL")),
+        # 설정이 아니라 실행 경로에서 나온 값을 그대로 통과시킨다(spec §6.2, GC-3).
+        "llmStatus": str(result.get("llmStatus") or "fallback"),
     }
 
 

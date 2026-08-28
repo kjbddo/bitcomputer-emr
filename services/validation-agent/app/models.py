@@ -37,3 +37,5 @@ class ValidationAgentResponse(BaseModel):
     candidatePrescriptions: List[Dict[str, Any]] = Field(default_factory=list)
     shouldNotifyDoctor: bool = False
     shouldBlockAutoPrescription: bool = False
+    # LLM 을 실제로 썼는지. 설정이 아니라 실행 경로에서 도출한다(spec §6.2).
+    llmStatus: str = "real"

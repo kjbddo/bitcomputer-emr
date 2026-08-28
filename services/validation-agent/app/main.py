@@ -39,7 +39,7 @@ from .env_check import require_env
 
 _required: list[str] = []
 if os.environ.get("LLM_PROVIDER", "real") != "stub":
-    _required.append("OPENAI_API_KEY")
+    _required.append("LLM_GATEWAY_BASE_URL")
 require_env(_required)
 
 app = FastAPI(
@@ -73,8 +73,8 @@ def favicon() -> Response:
 def health() -> Dict[str, Any]:
     return {
         "status": "ok",
-        "openai_api_key_set": bool(os.environ.get("OPENAI_API_KEY")),
-        "default_model": os.environ.get("OPENAI_MODEL", "gpt-5-nano"),
+        "llm_gateway_configured": bool(os.environ.get("LLM_GATEWAY_BASE_URL")),
+        "default_model": os.environ.get("LLM_MODEL", "openai.gpt-5.6-luna"),
         "prescription_agent": os.environ.get("PRESCRIPTION_AGENT_BASE_URL", "http://prescription-api:8001"),
         "rabbitmq_enabled": os.environ.get("VALIDATION_RABBITMQ_ENABLED", "true").lower() != "false",
     }
