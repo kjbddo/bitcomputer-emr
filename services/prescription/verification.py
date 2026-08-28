@@ -54,21 +54,43 @@ def _text(value: Any) -> str:
     return str(value).strip() if value is not None else ""
 
 
+def _safe_int(value: Any) -> Optional[int]:
+    """숫자로 변환할 수 없으면 예외 대신 None 을 반환한다(GC-4)."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    """숫자로 변환할 수 없으면 예외 대신 None 을 반환한다(GC-4)."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def verify_prescriptions(*, candidates: Sequence[Any], items: Sequence[Any]) -> VerificationResult:
     index = _index_candidates(candidates)
     has_candidates = bool(index)
     checks: List[CheckResult] = []
 
     # 구조 검사 — 조회 데이터 없이도 판정된다.
-    ranks = sorted(int(getattr(i, "rank", 0) or 0) for i in items)
+    # rank 가 숫자로 변환되지 않으면(예: "first") 예외를 던지는 대신
+    # 스키마 위반으로 취급한다 — 어차피 {1,2,3} 집합에 속할 수 없다(GC-4).
+    raw_ranks = [_safe_int(getattr(i, "rank", None)) for i in items]
     codes = [_text(getattr(i, "prescription_code", "")) for i in items]
-    schema_ok = ranks == [1, 2, 3] and len(set(codes)) == len(codes)
+    schema_ok = (
+        None not in raw_ranks
+        and sorted(raw_ranks) == [1, 2, 3]
+        and len(set(codes)) == len(codes)
+    )
     checks.append(
         CheckResult(
             id="schema_top3",
             target="response",
             outcome="ok" if schema_ok else "flagged",
-            evidence=f"rank={ranks} 코드중복={len(codes) - len(set(codes))}건",
+            evidence=f"rank={raw_ranks} 코드중복={len(codes) - len(set(codes))}건",
         )
     )
 
@@ -128,9 +150,13 @@ def verify_prescriptions(*, candidates: Sequence[Any], items: Sequence[Any]) -> 
                         id="dosage_verbatim", target=target, outcome="skipped",
                         evidence="출력에 용량이 없어 대조할 수 없음"))
                 else:
+                    # verbatim 은 "출력이 원본 용량 문구를 담고 있다"는 뜻이다.
+                    # 방향이 반대(원본이 출력을 담는 쪽)면 잘린 출력("1")이
+                    # 원본("1일 3회")의 부분 문자열이 되어 그대로 통과해버린다.
+                    # 원본이 출력에 포함돼야 한다 — 그 반대가 아니다.
                     checks.append(CheckResult(
                         id="dosage_verbatim", target=target,
-                        outcome="ok" if dosage in source_dosage else "flagged",
+                        outcome="ok" if source_dosage in dosage else "flagged",
                         evidence=f"후보 {source_dosage!r} vs 출력 {dosage!r}"))
 
         if confidence is None:
@@ -138,11 +164,20 @@ def verify_prescriptions(*, candidates: Sequence[Any], items: Sequence[Any]) -> 
                 id="confidence_in_range", target=target, outcome="skipped",
                 evidence="confidence_score 없음"))
         else:
-            in_range = 0.0 <= float(confidence) <= 1.0
-            checks.append(CheckResult(
-                id="confidence_in_range", target=target,
-                outcome="ok" if in_range else "flagged",
-                evidence=f"confidence_score={confidence}"))
+            safe_confidence = _safe_float(confidence)
+            if safe_confidence is None:
+                # 값이 아예 숫자로 변환되지 않는 경우는 "근거가 없어 판정 불가"
+                # (skipped) 가 아니라 "출력 형식 자체가 잘못됨" (flagged) 이다 —
+                # 범위를 벗어난 숫자와 같은 취급이다(GC-4: 예외 대신 판정으로).
+                checks.append(CheckResult(
+                    id="confidence_in_range", target=target, outcome="flagged",
+                    evidence=f"confidence_score={confidence!r} 가 숫자가 아님"))
+            else:
+                in_range = 0.0 <= safe_confidence <= 1.0
+                checks.append(CheckResult(
+                    id="confidence_in_range", target=target,
+                    outcome="ok" if in_range else "flagged",
+                    evidence=f"confidence_score={safe_confidence}"))
 
     skipped_reason: Optional[str] = None
     if not has_candidates:
