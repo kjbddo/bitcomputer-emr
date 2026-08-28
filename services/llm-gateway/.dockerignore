@@ -1,0 +1,10 @@
+# Docker 패턴은 컨텍스트 루트 기준 전체 경로에 매칭된다. `__pycache__/` 만 쓰면
+# 최상위 하나만 걸러지고 app/__pycache__ 같은 하위는 그대로 이미지에 들어간다.
+**/__pycache__/
+**/*.py[cod]
+.venv/
+venv/
+# 이 서비스만 Bedrock 자격증명을 쥔다. .gitignore 는 빌드 컨텍스트를 막지 못한다.
+.env
+.env.*
+.pytest_cache/
