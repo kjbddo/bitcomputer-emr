@@ -317,6 +317,12 @@ def test_doctor_denied_dept_creation_is_audited(doctor: httpx.Client, super_user
     assert all(r["actorUsername"] == "e2e_doctor" for r in rows)
     assert all(r["action"] == "ACCESS_DENIED" for r in rows)
     assert all(r["outcome"] == "DENIED" for r in rows)
+    # detail 까지 봐야 "방금 이 POST 가 감사됐다"가 증명된다.
+    # 같은 actor 의 다른 거부(형제 테스트의 GET /api/audit/logs)가 남긴 행만으로도
+    # 위 세 단언은 통과하므로, 그것만으로는 이 테스트가 약속한 것을 증명하지 못한다.
+    assert any(
+        r["detail"] == "POST /api/admin/depts" for r in rows
+    ), "이 POST 거부가 감사 로그에 남지 않았다"
 
 
 def test_denied_admin_audit_access_is_audited(receptionist: httpx.Client, super_user: httpx.Client):
@@ -391,12 +397,18 @@ def test_audit_log_outcome_filter_finds_denials(super_user: httpx.Client, recept
         json={"history_diagnose_id": 1},
     )
 
-    denied = super_user.get("/api/audit/logs", params={"outcome": "DENIED", "size": 50})
+    # 공유 테이블이라 outcome 만으로 거르면 아무 오래된 행이나 걸린다.
+    # 방금 거부시킨 actor 로 좁혀야 이 시도가 기록됐음을 말할 수 있다.
+    denied = super_user.get(
+        "/api/audit/logs",
+        params={"outcome": "DENIED", "actorUsername": "e2e_receptionist", "size": 50},
+    )
     assert denied.status_code == 200
 
     rows = denied.json()["content"]
     assert rows, "DENIED 필터 결과가 비어 있다"
     assert all(r["outcome"] == "DENIED" for r in rows)
+    assert all(r["actorUsername"] == "e2e_receptionist" for r in rows)
 
 
 def test_old_super_path_is_gone(super_user: httpx.Client):
