@@ -542,6 +542,56 @@ def test_prescription_finder_real_payload_does_not_promote_stub_decisions(monkey
     assert response.llmStatus == "stub"
 
 
+def test_prescription_finder_real_payload_never_marks_trace_llm(monkeypatch):
+    """Task 11 리뷰 IMPORTANT 2: "승격 금지"는 트레이스 자체로도 확인돼야 한다.
+
+    바로 위 테스트는 최상위 llmStatus 만 본다. `_downgrade_by_payload_source`
+    맨 위에 승격 분기(`if payload_status == "real": return "llm"`)를 끼워 넣으면
+    그 테스트는 여전히 통과한다 — 여기서 트레이스 source 는 애초에 "llm" 이
+    아니라 "rule" 에서 시작하기 때문이다(LLM_PROVIDER=stub 이면 결정 시퀀스가
+    Prescription Finder 를 직접 고르지 않아 루프 밖 후처리 경로로만 실행됨).
+    그 승격 분기는 source 가 무엇이었든 payload_status=="real" 이면 "llm" 을
+    돌려주므로, 트레이스 자체를 검증해야 잡힌다.
+    """
+    monkeypatch.setenv("LLM_PROVIDER", "stub")
+    _install_prescription_finder(monkeypatch, llm_status="real")
+
+    response = run_validation_agent(_request())
+
+    finder_entries = [e for e in response.reasoningTrace if e["action"] == "Prescription Finder"]
+    assert finder_entries, "Prescription Finder 스텝이 트레이스에 있어야 한다"
+    assert all(e["source"] != "llm" for e in finder_entries)
+
+
+class _RaisingPrescriptionFinder:
+    """`agent.prescription_finder` 를 통째로 대체해 호출 자체가 예외를 던지는
+    상황을 재현하는 대역."""
+
+    def invoke(self, payload=None):
+        raise RuntimeError("처방 RAG 연결 실패")
+
+
+def test_prescription_finder_exception_fails_closed_not_llm(monkeypatch):
+    """Task 11 리뷰 IMPORTANT 3: 처방 RAG 호출 자체가 예외를 던지면
+    `_invoke_prescription_finder` 의 except 블록(agent.py:286-287)이 만드는
+    observation 에는 `recommendationLlmStatus` 키가 아예 없다 — 이 죽은 경로가
+    아니라, 실제 예외 경로가 항상 거치는 지점이다. `observation.get(...)` 이
+    돌려주는 `None` 을 `(... or "real")` 로 되돌리면 실패한 호출이 "real" 로
+    읽혀 "llm" 출처로 둔갑한다.
+
+    `_install_llm_decisions` 로 결정 루프가 Prescription Finder 를 직접 고르게
+    해서(source="llm" 로 시작) 이 강등이 실제로 발동해야 하는 경로를 탄다.
+    """
+    _install_llm_decisions(monkeypatch)
+    monkeypatch.setattr(agent, "prescription_finder", _RaisingPrescriptionFinder())
+
+    response = run_validation_agent(_request())
+
+    finder_entries = [e for e in response.reasoningTrace if e["action"] == "Prescription Finder"]
+    assert finder_entries, "Prescription Finder 스텝이 트레이스에 있어야 한다"
+    assert all(e["source"] != "llm" for e in finder_entries)
+
+
 def test_hallucinated_action_produces_trace_entry(monkeypatch):
     # Finding B (GC-2): `_execute_decided_tool` 은 인식되는 액션마다
     # `if action == ...: return` 체인이고 terminal else 가 없어서, 모델이
