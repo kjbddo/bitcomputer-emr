@@ -112,11 +112,14 @@ services:
     container_name: bit-certificate-api
     command: ["python", "-m", "uvicorn", "certificate_api:app", "--host", "0.0.0.0", "--port", "5001"]
     environment:
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      LLM_GATEWAY_BASE_URL: http://llm-gateway:8003/v1
+      LLM_MODEL: ${LLM_MODEL:-openai.gpt-5.6-luna}
       LLM_PROVIDER: ${LLM_PROVIDER:-real}
     ports:
       - "5001:5001"
+    depends_on:
+      llm-gateway:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5001/health', timeout=5)\""]
       interval: 15s

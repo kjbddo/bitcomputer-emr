@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Spring Boot Back-End ↔ Gemini 기반 진단서 소견 생성 FastAPI 서비스.
+Spring Boot Back-End ↔ LLM 게이트웨이 기반 진단서 소견 생성 FastAPI 서비스.
 
 Spring은 MySQL에서 환자·진료 기록을 모은 뒤 이 서비스로 POST합니다.
-응답: {"medicalCertificate": "..."} — 진단서 소견 텍스트
+응답: {"medicalCertificate": "...", "llmStatus": "real"|"stub"} — 진단서 소견 텍스트
 
-prescription_api.py 와 동일한 구조로 작성됨.
+prescription_api.py 와 동일한 구조로 작성됨. LLM 호출은 자체적으로 하지 않고
+llm-gateway(services/llm-gateway) 를 경유한다(spec §3.1) — 자격증명은 게이트웨이만 갖는다.
 
 실행:
     cd GraphDB/langchain_graph_qa
@@ -24,6 +25,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
@@ -35,9 +37,6 @@ try:
     from dotenv import load_dotenv
 except ImportError:
     load_dotenv = None
-
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 
 from certificate_agent import SYSTEM_CERTIFICATE, build_certificate_agent_prompt
 from llm_provider import resolve_provider, stub_certificate_response
@@ -59,8 +58,7 @@ def _load_dotenv_if_present() -> None:
 
 _load_dotenv_if_present()
 
-DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
-DEFAULT_TEMPERATURE = float(os.environ.get("GEMINI_TEMPERATURE", "0.3"))
+DEFAULT_MODEL = os.environ.get("LLM_MODEL", "openai.gpt-5.6-luna")
 
 
 # ── Request / Response 스키마 ─────────────────────────────────────────────────
@@ -99,6 +97,8 @@ class CertificateGenerateRequest(BaseModel):
 
 class CertificateGenerateResponse(BaseModel):
     medicalCertificate: str
+    # LLM 을 실제로 썼는지. 실행 경로에서 도출한다(spec §6.2).
+    llmStatus: str = "real"
 
 
 # ── FastAPI 앱 ─────────────────────────────────────────────────────────────────
@@ -106,7 +106,7 @@ class CertificateGenerateResponse(BaseModel):
 app = FastAPI(
     title="BitComputer Certificate Generation Agent",
     version="0.1.0",
-    description="Gemini 기반 진단서 소견 생성 서비스 (Spring Boot 연동용).",
+    description="LLM 게이트웨이 기반 진단서 소견 생성 서비스 (Spring Boot 연동용).",
 )
 
 
@@ -114,19 +114,74 @@ app = FastAPI(
 def health() -> dict[str, Any]:
     return {
         "status": "ok",
-        "google_api_key_set": bool(os.environ.get("GOOGLE_API_KEY")),
+        "llm_gateway_configured": bool(os.environ.get("LLM_GATEWAY_BASE_URL")),
         "default_model": DEFAULT_MODEL,
     }
 
 
+def _invoke_gateway_text(system_prompt: str, user_prompt: str, model: str) -> str:
+    """게이트웨이를 통해 진단서 소견 텍스트를 받는다.
+
+    자격증명은 게이트웨이가 갖는다(spec §3.1). temperature 는 보내지 않는다 —
+    luna 계약이며 게이트웨이가 어차피 제거한다(spec §5). ``model`` 은 호출자가
+    실제로 payload 에 실릴 값을 명시적으로 넘긴다 — 여기서 다시 환경변수를
+    읽으면 호출자의 trace 가 기록한 모델과 실제로 보낸 모델이 어긋날 수 있다.
+    """
+    base_url = os.environ.get("LLM_GATEWAY_BASE_URL")
+    if not base_url:
+        raise HTTPException(
+            status_code=503,
+            detail="LLM_GATEWAY_BASE_URL 이 설정되지 않았습니다.",
+        )
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    }
+    timeout = float(os.environ.get("LLM_TIMEOUT_SECONDS", "180"))
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.post(
+                f"{base_url.rstrip('/')}/chat/completions",
+                headers={"X-LLM-Caller": "certificate-api"},
+                json=payload,
+            )
+            response.raise_for_status()
+            return str(response.json()["choices"][0]["message"]["content"]).strip()
+    except httpx.HTTPStatusError as exc:
+        # exc.response.text 는 게이트웨이가 GC-7 에 맞춰 이미 상류 응답을 걷어낸
+        # 구조화된 본문(예: {"error":{"type":"upstream_error","upstreamStatus":N,
+        # "attempts":N}})이므로 로그·detail 에 그대로 실어도 안전하다. 요청 헤더나
+        # Authorization 값은 여기서 절대 로그하지 않는다.
+        body = exc.response.text[:500]
+        logger.exception(
+            "게이트웨이 호출 실패: status=%s body=%s", exc.response.status_code, body
+        )
+        detail = f"LLM 게이트웨이 호출 실패: status={exc.response.status_code}"
+        try:
+            error_body = exc.response.json()
+        except ValueError:
+            error_body = None
+        upstream_info = error_body.get("error") if isinstance(error_body, dict) else None
+        if isinstance(upstream_info, dict) and (
+            "upstreamStatus" in upstream_info or "attempts" in upstream_info
+        ):
+            detail += (
+                f" upstreamStatus={upstream_info.get('upstreamStatus')}"
+                f" attempts={upstream_info.get('attempts')}"
+            )
+        else:
+            detail += f" body={body}"
+        raise HTTPException(status_code=502, detail=detail) from exc
+    except Exception as exc:
+        logger.exception("게이트웨이 호출 실패")
+        raise HTTPException(status_code=502, detail=f"LLM 게이트웨이 호출 실패: {exc}") from exc
+
+
 @app.post("/api/ai/document/generate", response_model=CertificateGenerateResponse)
 def generate_certificate(req: CertificateGenerateRequest) -> CertificateGenerateResponse:
-    if resolve_provider() != "stub" and not os.environ.get("GOOGLE_API_KEY"):
-        raise HTTPException(
-            status_code=500,
-            detail="GOOGLE_API_KEY 가 설정되지 않았습니다. 서버 환경변수 또는 .env 를 확인하세요.",
-        )
-
     user_msg = build_certificate_agent_prompt(
         patient_gender=req.patient_gender,
         patient_age=req.patient_age,
@@ -147,28 +202,16 @@ def generate_certificate(req: CertificateGenerateRequest) -> CertificateGenerate
 
     if resolve_provider() == "stub":
         certificate = stub_certificate_response(req)
+        llm_status = "stub"
     else:
-        llm = ChatGoogleGenerativeAI(model=DEFAULT_MODEL, temperature=DEFAULT_TEMPERATURE)
-
-        try:
-            resp = llm.invoke(
-                [
-                    ("system", SYSTEM_CERTIFICATE),
-                    ("human", user_msg),
-                ]
-            )
-        except ChatGoogleGenerativeAIError as exc:
-            logger.exception("Gemini 호출 실패 - history_id=%d", req.history_id)
-            raise HTTPException(status_code=502, detail=f"Gemini 호출 실패: {exc}") from exc
-
-        certificate = (
-            resp.content.strip() if hasattr(resp, "content") else str(resp).strip()
-        )
+        wire_model = os.environ.get("LLM_MODEL", "openai.gpt-5.6-luna")
+        certificate = _invoke_gateway_text(SYSTEM_CERTIFICATE, user_msg, wire_model)
+        llm_status = "real"
 
     logger.info(
         "진단서 생성 완료 - history_id=%d, length=%d", req.history_id, len(certificate)
     )
-    return CertificateGenerateResponse(medicalCertificate=certificate)
+    return CertificateGenerateResponse(medicalCertificate=certificate, llmStatus=llm_status)
 
 
 if __name__ == "__main__":
