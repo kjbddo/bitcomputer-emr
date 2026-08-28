@@ -70,3 +70,29 @@ def test_checkresult_is_immutable():
     check = _check("code_in_candidates", "ok")
     with pytest.raises(Exception):
         check.outcome = "flagged"  # type: ignore[misc]
+
+
+def test_verificationresult_is_immutable():
+    result = VerificationResult(
+        status="passed",
+        checks=[_check("code_in_candidates", "ok")],
+        skippedReason=None,
+    )
+    with pytest.raises(Exception):
+        result.status = "flagged"  # type: ignore[misc]
+
+
+def test_mutating_source_list_does_not_change_result():
+    source = [_check("code_in_candidates", "ok")]
+    result = VerificationResult(status="passed", checks=source, skippedReason=None)
+    source.append(_check("dosage_verbatim", "flagged"))
+    assert result.status == "passed"
+    assert len(result.checks) == 1
+    assert result.to_dict()["checks"] == [
+        {
+            "id": "code_in_candidates",
+            "target": "t",
+            "outcome": "ok",
+            "evidence": "e",
+        }
+    ]

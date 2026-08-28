@@ -6,7 +6,7 @@ spec: Docs/superpowers/specs/2026-08-29-runtime-verification-design.md §5
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, Sequence
+from typing import Any, Dict, Literal, Optional, Sequence, Tuple
 
 CheckOutcome = Literal["ok", "flagged", "skipped"]
 VerificationStatus = Literal["passed", "flagged", "skipped"]
@@ -42,8 +42,15 @@ class CheckResult:
 @dataclass(frozen=True)
 class VerificationResult:
     status: VerificationStatus
-    checks: List[CheckResult]
+    checks: Tuple[CheckResult, ...]
     skippedReason: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        # checks 는 List[CheckResult] 로 전달돼도 튜플로 굳힌다. frozen=True 는
+        # result.status 재할당만 막을 뿐, 전달받은 리스트 자체가 나중에 바뀌거나
+        # result.checks.append(...) 로 직접 변형되는 것은 막지 못한다 — 그 경로로
+        # status 와 모순되는 checks 를 갖는 결과가 만들어질 수 있었다.
+        object.__setattr__(self, "checks", tuple(self.checks))
 
     def to_dict(self) -> Dict[str, Any]:
         return {
