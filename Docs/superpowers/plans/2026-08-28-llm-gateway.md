@@ -80,6 +80,8 @@ Bedrock API 키를 로그·테스트 출력·커밋 어디에도 남기지 않�
 | 7 | prescription 이관 (Gemini 제거) | |
 | 8 | certificate 이관 (Gemini 제거) | |
 | 9 | 실측 4항목 + spec 갱신 | 가정 제거 |
+| 10 | `llmStatus` 를 Java DTO·web 까지 전달 | 결함 수정이 실제로 의사에게 도달 |
+| 11 | 진단서 경로의 `llmStatus` + 처방 RAG 출처 표시 | 세 서비스 모두 목적 달성 |
 
 ---
 
@@ -273,13 +275,15 @@ def normalize_params(
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
 class Settings:
     upstream_base_url: str
-    api_key: str
+    # repr=False 가 없으면 dataclass 기본 repr 이 키를 그대로 찍는다.
+    # 이 객체는 요청·재시도·에러 처리 경로로 넘겨 다니도록 설계됐다(GC-7).
+    api_key: str = field(repr=False)
     model: str
     reasoning_effort: str
     timeout_seconds: float
@@ -546,7 +550,20 @@ async def call_upstream(
             last_detail = f"connection error: {type(exc).__name__}"
         else:
             if response.status_code < 400:
-                return response.json(), attempts
+                try:
+                    return response.json(), attempts
+                except ValueError as exc:
+                    # 2xx 인데 본문이 JSON 이 아니다. 여기서 그냥 터뜨리면
+                    # JSONDecodeError 가 타입 없이 올라가 UpstreamError 만 잡는
+                    # 호출자가 놓친다. 계약을 지키기 위해 감싼다.
+                    raise UpstreamError(
+                        status=response.status_code,
+                        detail=(
+                            f"upstream returned {response.status_code} "
+                            f"with non-JSON body: {type(exc).__name__}"
+                        ),
+                        attempts=attempts,
+                    ) from exc
             last_status = response.status_code
             last_detail = f"upstream returned {response.status_code}: {response.text[:300]}"
             if response.status_code not in RETRYABLE_STATUS:
@@ -851,6 +868,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import sys
 import time
 from typing import Any, Dict
 
@@ -864,6 +883,26 @@ from app.params import normalize_params
 from app.upstream import UpstreamError, call_upstream
 
 logger = logging.getLogger("llm-gateway")
+
+
+def _configure_logging() -> None:
+    """계측 로그가 실제로 나가게 만든다.
+
+    설정하지 않으면 루트가 WARNING 이고 핸들러도 없다 — uvicorn 기본 설정에서도
+    그렇다. 그러면 logger.info() 로 내보내는 계측 레코드가 통째로 유실된다.
+    """
+    # 루트가 아니라 이 로거에만 설정한다. 루트 레벨을 올리면 NOTSET 인 모든
+    # 서드파티 로거의 바닥이 함께 올라가고, httpx 가 상류 호출마다 INFO 로
+    # 평문 한 줄씩 찍어 "한 줄에 JSON 하나" 가 깨진다.
+    logger.setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
+    if not any(getattr(h, "_llm_gateway", False) for h in logger.handlers):
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        handler._llm_gateway = True  # type: ignore[attr-defined]
+        logger.addHandler(handler)
+
+
+_configure_logging()
 
 app = FastAPI(title="LLM Gateway", version="0.1.0")
 
@@ -1678,6 +1717,845 @@ AWS 콘솔의 Service Quotas 에서 Bedrock 의 해당 모델 TPM 기본값을 �
 ```bash
 git add services/llm-gateway/scripts Docs/superpowers/specs/2026-08-28-llm-gateway-design.md
 git commit -m "test(llm-gateway): luna 파라미터 계약 실측과 spec 결과 기록"
+```
+
+---
+
+### Task 10: llmStatus 를 UI 까지 전달
+
+Task 6 의 `llmStatus` 는 백엔드 계약에만 존재하고 의사에게 도달하지 못한다. 리뷰어가
+확인한 경로: 동기 경로에서 `ValidationEventProcessor.process` 가 응답을
+`ValidationAgentResponse` DTO 로 역직렬화하는데, 이 DTO 는 `@JsonIgnoreProperties(ignoreUnknown = true)`
+이면서 `llmStatus`·`reasoningTrace` 를 모른다. 그 뒤 `toJson(response)` 로 재직렬화해
+`resultJson` 에 저장하므로 **두 필드가 저장 전에 사라진다.** 비동기(RabbitMQ) 경로는
+`ValidationJobResultConsumer` 가 raw `Map` 을 쓰므로 살아남는다 — 즉 같은 검증이 어느
+경로로 갔느냐에 따라 저장 내용이 다르다.
+
+`apps/web` 은 `llmStatus` 를 아예 읽지 않는다. B0 의 목표(휴리스틱 출력을 모델 출력인 양
+보여주는 것을 멈춘다)는 이 태스크 전까지 실제로는 달성되지 않는다.
+
+**Files:**
+- Modify: `apps/api/src/main/java/com/example/bitcomputer/model/ValidationAgentResponse.java`
+- Modify: `apps/web/src/services/history.ts`
+- Modify: `apps/web/src/components/Diagnosis.tsx`
+- Test: `apps/api/src/test/java/com/example/bitcomputer/model/ValidationAgentResponseTest.java` (신규)
+- Test: `apps/web/src/components/__tests__/Diagnosis.test.tsx` (기존이면 추가, 없으면 신규)
+
+**Interfaces:**
+- Consumes: Task 6 의 `ValidationAgentResponse.llmStatus: "real"|"stub"|"fallback"` 과
+  `reasoningTrace[].source: "llm"|"stub"|"rule"|"fallback"`
+- Produces: 두 필드가 동기·비동기 두 경로 모두에서 `ValidationResult.resultJson` 에 보존된다
+- Produces: 검증 모달이 `llmStatus !== "real"` 일 때 모델 미사용을 명시한다
+
+- [ ] **Step 1: 실패하는 Java 테스트 작성**
+
+`apps/api/src/test/java/com/example/bitcomputer/model/ValidationAgentResponseTest.java`:
+
+```java
+package com.example.bitcomputer.model;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class ValidationAgentResponseTest {
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    /**
+     * ValidationEventProcessor 는 응답을 이 DTO 로 역직렬화한 뒤 다시 직렬화해
+     * resultJson 에 저장한다. DTO 가 모르는 필드는 그 왕복에서 사라진다.
+     * 그래서 이 테스트는 "필드가 있다"가 아니라 "왕복이 보존한다"를 단언한다.
+     */
+    @Test
+    void roundTripPreservesLlmStatusAndReasoningTrace() throws Exception {
+        String upstream = "{"
+                + "\"overallStatus\": \"PASS\","
+                + "\"summary\": \"이상 없음\","
+                + "\"reason\": \"규칙 통과\","
+                + "\"llmStatus\": \"fallback\","
+                + "\"reasoningTrace\": [{\"action\": \"Disease Validator\", \"source\": \"fallback\"}],"
+                + "\"recommendedPrescriptions\": [{\"name\": \"약\"}],"
+                + "\"validation\": {\"k\": \"v\"}"
+                + "}";
+
+        ValidationAgentResponse parsed = objectMapper.readValue(upstream, ValidationAgentResponse.class);
+        String roundTripped = objectMapper.writeValueAsString(parsed);
+
+        assertThat(parsed.getLlmStatus()).isEqualTo("fallback");
+        assertThat(roundTripped).contains("\"llmStatus\":\"fallback\"");
+        assertThat(roundTripped).contains("\"source\":\"fallback\"");
+        assertThat(roundTripped).contains("recommendedPrescriptions");
+        assertThat(roundTripped).contains("\"reason\"");
+        assertThat(roundTripped).contains("\"validation\"");
+    }
+
+    /**
+     * 상류가 필드를 안 줬을 때 "모델이 돌았다"로 기울면 안 된다.
+     * 파이썬 쪽 기본값과 같은 방향(fail-closed)으로 맞춘다.
+     */
+    @Test
+    void missingLlmStatusDoesNotClaimRealModel() throws Exception {
+        ValidationAgentResponse parsed = objectMapper.readValue(
+                "{\"overallStatus\":\"PASS\",\"summary\":\"s\"}", ValidationAgentResponse.class);
+
+        assertThat(parsed.getLlmStatus()).isNotEqualTo("real");
+    }
+}
+```
+
+- [ ] **Step 2: 테스트가 실패하는지 확인**
+
+Run: `cd apps/api && ./gradlew test --tests "*ValidationAgentResponseTest*"`
+Expected: FAIL — `getLlmStatus()` 가 존재하지 않아 컴파일 에러.
+
+- [ ] **Step 3: DTO 에 누락 필드 추가**
+
+`ValidationAgentResponse.java` 의 필드 블록을 다음으로 교체한다. `llmStatus` 외에도
+`reason`·`recommendedPrescriptions`·`validation`·`reasoningTrace` 가 같은 이유로 잘리고
+있었으므로 함께 복구한다(그래야 동기·비동기 경로의 저장 내용이 같아진다):
+
+```java
+    private String overallStatus;
+    private String summary;
+    private String reason;
+    private List<Map<String, Object>> recommendedPrescriptions;
+    private Map<String, Object> validation;
+    private List<Map<String, Object>> reasoningTrace;
+    private List<Map<String, Object>> checks;
+    private List<Map<String, Object>> suspectedIssues;
+    private List<String> suggestedReviewItems;
+    private List<Map<String, Object>> candidatePrescriptions;
+
+    // 상류가 이 필드를 안 주면 "모델 미사용" 쪽으로만 틀린다.
+    // 파이썬 모델도 같은 기본값이다(services/validation-agent/app/models.py).
+    @Builder.Default
+    private String llmStatus = "fallback";
+
+    @JsonProperty("shouldNotifyDoctor")
+    private Boolean shouldNotifyDoctor;
+
+    @JsonProperty("shouldBlockAutoPrescription")
+    private Boolean shouldBlockAutoPrescription;
+```
+
+- [ ] **Step 4: 테스트 통과 확인**
+
+Run: `cd apps/api && ./gradlew test --tests "*ValidationAgentResponseTest*"`
+Expected: PASS
+
+- [ ] **Step 5: 커밋**
+
+```bash
+git add apps/api/src/main/java/com/example/bitcomputer/model/ValidationAgentResponse.java apps/api/src/test/java/com/example/bitcomputer/model/ValidationAgentResponseTest.java
+git commit -m "fix(api): 동기 검증 경로가 llmStatus 와 reasoningTrace 를 버리던 문제 수정"
+```
+
+- [ ] **Step 6: 웹 타입에 llmStatus 추가**
+
+`apps/web/src/services/history.ts` 의 `ValidationJobResponse["result"]` 에 한 줄 추가한다.
+`reasoningTrace` 는 이미 있다:
+
+```ts
+    llmStatus?: "real" | "stub" | "fallback";
+```
+
+- [ ] **Step 7: 실패하는 웹 테스트 작성**
+
+`apps/web/src/components/__tests__/Diagnosis.test.tsx` 에 다음을 추가한다(파일이 없으면
+같은 디렉터리의 다른 테스트 파일의 import 관례를 그대로 따라 새로 만든다):
+
+```tsx
+import { describe, expect, it } from "vitest";
+import { llmStatusNotice } from "../Diagnosis";
+
+describe("llmStatusNotice", () => {
+  it("모델이 실제로 돌았으면 아무것도 표시하지 않는다", () => {
+    expect(llmStatusNotice("real")).toBeNull();
+  });
+
+  it("폴백이면 모델 미사용을 명시한다", () => {
+    const notice = llmStatusNotice("fallback");
+    expect(notice).not.toBeNull();
+    expect(notice!.label).toContain("모델 미사용");
+    expect(notice!.tone).toBe("warning");
+  });
+
+  it("스텁이면 폴백과 구분되는 문구를 쓴다", () => {
+    const stub = llmStatusNotice("stub");
+    const fallback = llmStatusNotice("fallback");
+    expect(stub).not.toBeNull();
+    expect(stub!.label).not.toBe(fallback!.label);
+  });
+
+  // 필드가 없는 응답을 "모델이 돌았다"로 해석하면 이 태스크의 목적이 무너진다.
+  it("필드가 없으면 모델이 돌았다고 가정하지 않는다", () => {
+    expect(llmStatusNotice(undefined)).not.toBeNull();
+  });
+});
+```
+
+- [ ] **Step 8: 테스트가 실패하는지 확인**
+
+Run: `cd apps/web && yarn vitest run src/components/__tests__/Diagnosis.test.tsx`
+Expected: FAIL — `llmStatusNotice` 를 export 하지 않는다.
+
+- [ ] **Step 9: llmStatusNotice 구현**
+
+`apps/web/src/components/Diagnosis.tsx` 에서 `overallStatusTone` 바로 아래에 추가하고
+export 한다:
+
+```tsx
+// llmStatus 는 이번 요청이 실제로 어느 경로로 갔는지다(설정이 아니다).
+// "real" 이 아닌 모든 경우 — 값이 없는 경우 포함 — 를 드러낸다. 필드가 빠진 응답을
+// 조용히 "모델이 돌았다"로 읽으면 이 표시가 존재할 이유가 사라진다.
+export function llmStatusNotice(
+  llmStatus: string | undefined
+): { label: string; tone: "warning" | "neutral" } | null {
+  if (llmStatus === "real") return null;
+  if (llmStatus === "stub") {
+    return { label: "스텁 응답 (모델 미사용)", tone: "neutral" };
+  }
+  return { label: "규칙 기반 결과 — 모델 미사용", tone: "warning" };
+}
+```
+
+- [ ] **Step 10: 모달에 표시**
+
+`Diagnosis.tsx` 의 검증 모달에서 `modalCardHead` 블록을 다음으로 교체한다:
+
+```tsx
+            <div className={styles.modalCardHead}>
+              <Badge tone={overallStatusTone(validationModal.result?.overallStatus)}>
+                {validationModal.result?.overallStatus ?? validationModal.status}
+              </Badge>
+              {(() => {
+                const notice = llmStatusNotice(validationModal.result?.llmStatus);
+                return notice ? <Badge tone={notice.tone}>{notice.label}</Badge> : null;
+              })()}
+            </div>
+```
+
+- [ ] **Step 11: 테스트 통과 확인**
+
+Run: `cd apps/web && yarn vitest run src/components/__tests__/Diagnosis.test.tsx`
+Expected: PASS
+
+- [ ] **Step 12: 전체 웹 테스트 확인**
+
+Run: `cd apps/web && yarn vitest run`
+Expected: 기존 통과 수 + 4
+
+- [ ] **Step 13: 커밋**
+
+```bash
+git add apps/web/src/services/history.ts apps/web/src/components/Diagnosis.tsx apps/web/src/components/__tests__/Diagnosis.test.tsx
+git commit -m "feat(web): 검증 결과에 모델 미사용 여부 표시"
+```
+
+---
+
+### Task 11: 진단서 경로의 llmStatus 전달과 처방 조회 출처 표시
+
+Task 10 은 검증 경로만 닫았다. 진단서 경로에는 같은 결함이 그대로 있다.
+`CertificateAgentResponse.java` 는 `@JsonIgnoreProperties(ignoreUnknown = true)` 에
+`medicalCertificate` 필드 하나뿐이라 `certificate_api` 가 내보내는 `llmStatus` 가
+역직렬화에서 사라진다. 의사가 진단서 소견을 볼 때 모델이 돌았는지 알 방법이 없다.
+
+**그리고 Java 층에 자체 폴백이 하나 더 있다.** `AgentDocumentServiceImpl:309-313` 은
+에이전트 호출이 실패하거나 빈 문자열을 돌려주면 `buildDefaultCertificateTemplate` 로
+떨어진다. 그렇게 만들어진 템플릿 문장은 모델이 쓴 소견과 화면에서 구분되지 않는다.
+GC-3 대로라면 이 경우의 상태는 파이썬이 뭐라고 했든 상관없이 "폴백"이어야 한다.
+
+**처방 쪽은 조사 결과 Java DTO 가 문제가 아니다.** `PrescriptionAgentClient.recommend`
+의 유일한 호출자 `AgentServiceImpl.callAgentAndMap` 은 어디서도 불리지 않는 죽은
+코드다. 살아 있는 경로는 RabbitMQ raw `Map` 이라 애초에 필드를 안 버리고, 화면 배지는
+Task 10 이 이미 붙였다. 실제 구멍은 `services/validation-agent/app/tools.py:196` 이
+`prescription_api` 자신의 `llmStatus` 를 버리는 것이다.
+
+**주의 — Task 6 의 Critical 을 반복하지 말 것.** 이 값을 검증 에이전트의 최상위
+`llmStatus` 에 접어 넣으면 안 된다. 그렇게 했다가 결정이 전부 스텁인데 보조 호출
+하나가 성공했다는 이유로 `llmStatus="real"` 이 나온 적이 있다. 이 값은 해당 스텝의
+트레이스 `source` 에만 반영한다 — `source` 의 선언된 의미가 "이 스텝의 페이로드가
+어디서 왔나"이므로 정확히 들어맞는다.
+
+**Files:**
+- Create: `apps/web/src/utils/llmStatus.ts`
+- Modify: `apps/web/src/components/Diagnosis.tsx` (llmStatusNotice 를 공용 모듈에서 가져오도록)
+- Modify: `apps/web/src/components/__tests__/Diagnosis.test.tsx` (import 경로)
+- Modify: `apps/api/src/main/java/com/example/bitcomputer/model/CertificateAgentResponse.java`
+- Modify: `apps/api/src/main/java/com/example/bitcomputer/model/GenerateCertificateResponseDTO.java`
+- Modify: `apps/api/src/main/java/com/example/bitcomputer/serviceImpl/AgentDocumentServiceImpl.java`
+- Modify: `apps/web/src/services/agent.ts`
+- Modify: `apps/web/src/components/MedicalCertificate.tsx`
+- Modify: `services/validation-agent/app/tools.py`
+- Modify: `services/validation-agent/app/agent.py`
+- Test: `apps/api/src/test/java/com/example/bitcomputer/model/CertificateAgentResponseTest.java` (신규)
+- Test: `apps/web/src/components/__tests__/MedicalCertificate.test.tsx` (신규)
+- Test: `services/validation-agent/tests/test_llm_status.py` (추가)
+
+**Interfaces:**
+- Consumes: `certificate_api` 의 `llmStatus: Literal["real","stub"]` (필수, 기본값 없음)
+- Consumes: Task 10 의 `llmStatusNotice(llmStatus: string | null | undefined)`
+- Produces: `GenerateCertificateResponseDTO.llmStatus: String` — `"real"` / `"stub"` / `"fallback"`
+- Produces: `Prescription Finder` 트레이스 항목의 `source` 가 `prescription_api` 의 실행 경로를 반영
+
+---
+
+- [ ] **Step 1: llmStatusNotice 를 공용 모듈로 옮긴다**
+
+`Diagnosis.tsx` 에 있는 함수를 그대로 옮긴다. 진단서 화면도 같은 판정을 써야 하는데,
+컴포넌트에서 컴포넌트로 import 하면 순환 참조와 렌더 트리 결합이 생긴다.
+
+`apps/web/src/utils/llmStatus.ts` 를 새로 만든다:
+
+```ts
+// llmStatus 는 이번 요청이 실제로 어느 경로로 갔는지다(설정이 아니다).
+// "real" 이 아닌 모든 경우 — 값이 없는 경우 포함 — 를 드러낸다. 필드가 빠진 응답을
+// 조용히 "모델이 돌았다"로 읽으면 이 표시가 존재할 이유가 사라진다.
+export function llmStatusNotice(
+  llmStatus: string | null | undefined
+): { label: string; tone: "warning" | "neutral" } | null {
+  if (llmStatus === "real") return null;
+  if (llmStatus === "stub") {
+    return { label: "스텁 응답 (모델 미사용)", tone: "neutral" };
+  }
+  return { label: "규칙 기반 결과 — 모델 미사용", tone: "warning" };
+}
+```
+
+`Diagnosis.tsx` 에서는 함수 정의를 지우고 import 로 바꾼다:
+
+```tsx
+import { llmStatusNotice } from "@/utils/llmStatus";
+```
+
+`Diagnosis.tsx` 안의 다른 코드는 그대로 둔다. `Diagnosis.test.tsx` 의
+`import { llmStatusNotice } from "../Diagnosis";` 를
+`import { llmStatusNotice } from "@/utils/llmStatus";` 로 바꾼다.
+
+- [ ] **Step 2: 웹 테스트가 여전히 통과하는지 확인**
+
+Run: `cd apps/web && node .yarn/releases/yarn-4.12.0.cjs vitest run`
+Expected: 137 passed (이동만 했으므로 개수 변화 없음)
+
+`yarn` 이 PATH 에 없다. 위 명령처럼 릴리스 번들을 직접 실행한다.
+
+- [ ] **Step 3: 실패하는 Java 테스트 작성**
+
+`apps/api/src/test/java/com/example/bitcomputer/model/CertificateAgentResponseTest.java`:
+
+```java
+package com.example.bitcomputer.model;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class CertificateAgentResponseTest {
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    /**
+     * @JsonIgnoreProperties(ignoreUnknown = true) 가 붙어 있으므로 DTO 가 모르는
+     * 필드는 조용히 사라진다. 값까지 단언해야 "필드가 선언돼 있다"가 아니라
+     * "상류 값이 살아남았다"를 검증한다.
+     */
+    @Test
+    void parsesLlmStatusFromUpstream() throws Exception {
+        String upstream = "{\"medicalCertificate\":\"소견\",\"llmStatus\":\"stub\"}";
+
+        CertificateAgentResponse parsed =
+                objectMapper.readValue(upstream, CertificateAgentResponse.class);
+
+        assertThat(parsed.getMedicalCertificate()).isEqualTo("소견");
+        assertThat(parsed.getLlmStatus()).isEqualTo("stub");
+    }
+
+    /**
+     * 상류가 필드를 안 줬을 때 "모델이 돌았다"로 기울면 안 된다.
+     * 파이썬 쪽과 같은 방향(fail-closed)으로 맞춘다.
+     */
+    @Test
+    void missingLlmStatusFailsClosed() throws Exception {
+        CertificateAgentResponse parsed = objectMapper.readValue(
+                "{\"medicalCertificate\":\"소견\"}", CertificateAgentResponse.class);
+
+        assertThat(parsed.getLlmStatus()).isEqualTo("fallback");
+    }
+}
+```
+
+- [ ] **Step 4: 테스트가 실패하는지 확인**
+
+Run: `cd apps/api && ./gradlew test --tests "*CertificateAgentResponseTest*"`
+Expected: FAIL — `getLlmStatus()` 가 존재하지 않아 컴파일 에러.
+
+- [ ] **Step 5: CertificateAgentResponse 에 필드 추가**
+
+`CertificateAgentResponse.java` 의 클래스 본문을 다음으로 교체한다:
+
+```java
+    /** LLM 게이트웨이 경유로 생성된 진단서 소견 문자열. */
+    @JsonProperty("medicalCertificate")
+    private String medicalCertificate;
+
+    /**
+     * 이 응답이 실제로 모델에서 나왔는지. 설정이 아니라 실행 경로에서 나온다.
+     *
+     * <p>상류가 이 필드를 안 주면 "모델 미사용" 쪽으로만 틀린다. 누락을 조용히
+     * "모델이 돌았다"로 읽으면 이 필드가 존재할 이유가 사라진다.
+     */
+    @Builder.Default
+    @JsonProperty("llmStatus")
+    private String llmStatus = "fallback";
+```
+
+- [ ] **Step 6: 테스트 통과 확인**
+
+Run: `cd apps/api && ./gradlew test --tests "*CertificateAgentResponseTest*"`
+Expected: PASS (2개)
+
+- [ ] **Step 7: 실패하는 서비스 테스트 작성**
+
+Java 층에도 자체 폴백이 있다. 파이썬이 `"real"` 이라고 해도 그 응답을 못 쓰면
+템플릿으로 떨어지는데, 그때 상태는 `"fallback"` 이어야 한다.
+
+`AgentDocumentServiceImpl` 은 의존성이 많아 스프링 컨텍스트 없이 세우기 어렵다.
+판정 로직만 순수 함수로 떼어내 테스트한다. `AgentDocumentServiceImpl` 안에
+package-private static 메서드로 둔다.
+
+`apps/api/src/test/java/com/example/bitcomputer/serviceImpl/CertificateLlmStatusTest.java`:
+
+```java
+package com.example.bitcomputer.serviceImpl;
+
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class CertificateLlmStatusTest {
+
+    @Test
+    void usesUpstreamStatusWhenAgentTextWasUsed() {
+        assertThat(AgentDocumentServiceImpl.resolveCertificateLlmStatus("real", true))
+                .isEqualTo("real");
+        assertThat(AgentDocumentServiceImpl.resolveCertificateLlmStatus("stub", true))
+                .isEqualTo("stub");
+    }
+
+    /**
+     * 템플릿으로 떨어졌으면 상류가 뭐라고 했든 모델은 이 소견에 관여하지 않았다.
+     * 이 분기를 상류 값으로 두면 "real" 라벨이 붙은 템플릿 문장이 나간다.
+     */
+    @Test
+    void reportsFallbackWhenDefaultTemplateWasUsed() {
+        assertThat(AgentDocumentServiceImpl.resolveCertificateLlmStatus("real", false))
+                .isEqualTo("fallback");
+    }
+
+    @Test
+    void missingUpstreamStatusFailsClosed() {
+        assertThat(AgentDocumentServiceImpl.resolveCertificateLlmStatus(null, true))
+                .isEqualTo("fallback");
+        assertThat(AgentDocumentServiceImpl.resolveCertificateLlmStatus("  ", true))
+                .isEqualTo("fallback");
+    }
+}
+```
+
+- [ ] **Step 8: 테스트가 실패하는지 확인**
+
+Run: `cd apps/api && ./gradlew test --tests "*CertificateLlmStatusTest*"`
+Expected: FAIL — `resolveCertificateLlmStatus` 가 존재하지 않아 컴파일 에러.
+
+- [ ] **Step 9: 판정 로직과 배선 구현**
+
+`AgentDocumentServiceImpl.java` 에 메서드를 추가한다(`buildGenerateResponse` 바로 위):
+
+```java
+    /**
+     * 진단서 소견의 출처를 실행 경로에서 판정한다(GC-3).
+     *
+     * @param upstreamStatus 파이썬 certificate_api 가 보고한 값
+     * @param agentTextUsed  실제로 에이전트 문장을 썼는지. false 면 기본 템플릿이다.
+     */
+    static String resolveCertificateLlmStatus(String upstreamStatus, boolean agentTextUsed) {
+        if (!agentTextUsed) return "fallback";
+        if (upstreamStatus == null || upstreamStatus.isBlank()) return "fallback";
+        return upstreamStatus;
+    }
+```
+
+`generateCertificate` 의 호출 블록(309-314행)을 다음으로 교체한다:
+
+```java
+        // Python 진단서 에이전트 호출 → 실패 시 기본 템플릿으로 폴백
+        Optional<CertificateAgentResponse> agentResponse = certificateAgentClient.generate(agentRequest);
+        String agentText = agentResponse
+                .map(CertificateAgentResponse::getMedicalCertificate)
+                .filter(s -> s != null && !s.isBlank())
+                .orElse(null);
+        boolean agentTextUsed = agentText != null;
+        String medicalCertificate = agentTextUsed
+                ? agentText
+                : buildDefaultCertificateTemplate(agentRequest);
+        String llmStatus = resolveCertificateLlmStatus(
+                agentResponse.map(CertificateAgentResponse::getLlmStatus).orElse(null),
+                agentTextUsed);
+
+        return buildGenerateResponse(username, medicalCertificate, llmStatus);
+```
+
+`generateTestCertificate` 의 같은 블록(359-364행 근처)도 같은 형태로 교체한다.
+두 곳 모두 `buildGenerateResponse` 에 `llmStatus` 를 넘긴다.
+
+`buildGenerateResponse` 의 시그니처와 본문을 바꾼다:
+
+```java
+    private GenerateCertificateResponseDTO buildGenerateResponse(
+            String username, String medicalCertificate, String llmStatus) {
+        Employee employee = employeeRepository.findByUsername(username);
+        Role role = employee != null ? employee.getRole() : Role.DEFAULT;
+        String accessToken = jwtTokenProvider.generateAccessToken(username, role);
+        String refreshToken = jwtTokenProvider.generateRefreshToken(username);
+
+        GenerateCertificateResponseDTO response = new GenerateCertificateResponseDTO();
+        response.setGrantType("Bearer");
+        response.setAccessToken(accessToken);
+        response.setRefreshToken(refreshToken);
+        response.setMedicalCertificate(medicalCertificate);
+        response.setLlmStatus(llmStatus);
+        return response;
+    }
+```
+
+`Optional` import 가 없으면 추가한다.
+
+`GenerateCertificateResponseDTO.java` 에 필드를 추가한다:
+
+```java
+    private String medicalCertificate;
+    /** 소견이 실제로 모델에서 나왔는지: "real" | "stub" | "fallback". */
+    private String llmStatus;
+```
+
+- [ ] **Step 10: 테스트 통과 확인**
+
+Run: `cd apps/api && ./gradlew test --tests "*CertificateAgentResponseTest*" --tests "*CertificateLlmStatusTest*"`
+Expected: PASS (5개)
+
+Run: `cd apps/api && ./gradlew test`
+Expected: 실패는 사전 존재 3건(`PatientServiceImplTest$Create` 2건,
+`WaitingServiceImplTest$RegisterWaitingTest` 1건)뿐. 새 실패가 있으면 멈춘다.
+
+- [ ] **Step 11: 커밋**
+
+```bash
+git add apps/api/src/main/java/com/example/bitcomputer/model/CertificateAgentResponse.java apps/api/src/main/java/com/example/bitcomputer/model/GenerateCertificateResponseDTO.java apps/api/src/main/java/com/example/bitcomputer/serviceImpl/AgentDocumentServiceImpl.java apps/api/src/test/java/com/example/bitcomputer/model/CertificateAgentResponseTest.java apps/api/src/test/java/com/example/bitcomputer/serviceImpl/CertificateLlmStatusTest.java
+git commit -m "fix(api): 진단서 응답이 llmStatus 를 버리던 문제 수정"
+```
+
+- [ ] **Step 12: 웹 타입에 llmStatus 추가**
+
+`apps/web/src/services/agent.ts` 의 `DocumentGenerateResponse` 에 한 줄 추가한다.
+Java 가 계약 밖 문자열과 `null` 을 그대로 내보낼 수 있으므로 좁은 유니온을 쓰지 않는다:
+
+```ts
+  /** 소견이 실제로 모델에서 나왔는지. 값 공간을 좁히지 않는다 — Java 가 검증하지 않는다. */
+  llmStatus?: string | null;
+```
+
+- [ ] **Step 13: 실패하는 웹 테스트 작성**
+
+`apps/web/src/components/__tests__/MedicalCertificate.test.tsx` 를 새로 만든다.
+`Diagnosis.test.tsx` 의 mock 관례를 그대로 따른다(`vi.mock` + `vi.importActual` 통과).
+
+```tsx
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+
+vi.mock("@/services/agent", async () => {
+  const actual = await vi.importActual<typeof import("@/services/agent")>(
+    "@/services/agent"
+  );
+  return {
+    ...actual,
+    generateDocumentCertificateByHistory: vi.fn(),
+  };
+});
+
+import MedicalCertificate from "../MedicalCertificate";
+import { generateDocumentCertificateByHistory } from "@/services/agent";
+
+describe("진단서 AI 미리보기의 llmStatus 배선", () => {
+  beforeEach(() => {
+    vi.mocked(generateDocumentCertificateByHistory).mockResolvedValue({
+      grantType: "Bearer",
+      accessToken: "a",
+      refreshToken: "r",
+      medicalCertificate: "환자는 통원 치료가 필요합니다.",
+      llmStatus: "fallback",
+    });
+  });
+
+  it("llmStatus 가 fallback 이면 미리보기에 모델 미사용 배지가 뜬다", async () => {
+    // 렌더에 필요한 props 는 컴포넌트 시그니처를 읽고 최소로 채운다.
+    // 상병 적용 상태(diagnosisApply.historyId)가 있어야 AI 생성 버튼이 동작한다.
+    renderWithAppliedDiagnosis();
+
+    fireEvent.click(screen.getByRole("button", { name: /AI/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    const badge = await within(dialog).findByText("규칙 기반 결과 — 모델 미사용");
+    expect(badge).toHaveAttribute("data-tone", "warning");
+  });
+
+  it("llmStatus 가 real 이면 배지가 없다", async () => {
+    vi.mocked(generateDocumentCertificateByHistory).mockResolvedValue({
+      grantType: "Bearer",
+      accessToken: "a",
+      refreshToken: "r",
+      medicalCertificate: "환자는 통원 치료가 필요합니다.",
+      llmStatus: "real",
+    });
+    renderWithAppliedDiagnosis();
+
+    fireEvent.click(screen.getByRole("button", { name: /AI/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByLabelText("AI 생성 소견 미리보기");
+    expect(within(dialog).queryByText(/모델 미사용/)).toBeNull();
+  });
+
+  // 필드가 없는 응답을 "모델이 돌았다"로 읽으면 이 표시가 존재할 이유가 사라진다.
+  it("llmStatus 가 없으면 모델이 돌았다고 가정하지 않는다", async () => {
+    vi.mocked(generateDocumentCertificateByHistory).mockResolvedValue({
+      grantType: "Bearer",
+      accessToken: "a",
+      refreshToken: "r",
+      medicalCertificate: "환자는 통원 치료가 필요합니다.",
+    });
+    renderWithAppliedDiagnosis();
+
+    fireEvent.click(screen.getByRole("button", { name: /AI/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByText(/모델 미사용/);
+  });
+});
+```
+
+`renderWithAppliedDiagnosis` 는 이 파일 안의 헬퍼로 만든다. `MedicalCertificate.tsx`
+의 props 와 `useMedicalSelection` 스토어 사용을 읽고, 상병이 적용된 상태(즉
+`diagnosisApply.historyId` 가 채워진 상태)를 만들어 렌더한다. `Diagnosis.test.tsx`
+가 `@store/medicalSelection` 을 어떻게 다루는지 먼저 읽고 같은 방식을 쓴다.
+
+- [ ] **Step 14: 테스트가 실패하는지 확인**
+
+Run: `cd apps/web && node .yarn/releases/yarn-4.12.0.cjs vitest run src/components/__tests__/MedicalCertificate.test.tsx`
+Expected: FAIL — 배지가 없다.
+
+- [ ] **Step 15: 미리보기 모달에 배지 렌더**
+
+`MedicalCertificate.tsx` 의 `handleAiGenerate` 에서 상태를 함께 담는다:
+
+```tsx
+      const text = res.medicalCertificate ?? res.medical_certificate ?? "";
+      setResolvedAiRound(null);
+      setAiPreviewModal({ text, llmStatus: res.llmStatus });
+```
+
+`aiPreviewModal` state 타입에 `llmStatus?: string | null` 을 추가한다.
+
+모달 본문(554-561행)을 다음으로 교체한다:
+
+```tsx
+        {aiPreviewModal && (
+          <>
+            {(() => {
+              const notice = llmStatusNotice(aiPreviewModal.llmStatus);
+              return notice ? (
+                <div className={styles.aiPreviewNotice}>
+                  <Badge tone={notice.tone}>{notice.label}</Badge>
+                </div>
+              ) : null;
+            })()}
+            <textarea
+              className={styles.aiPreviewTextarea}
+              readOnly
+              value={aiPreviewModal.text}
+              rows={12}
+              aria-label="AI 생성 소견 미리보기"
+            />
+          </>
+        )}
+```
+
+import 를 추가한다:
+
+```tsx
+import { llmStatusNotice } from "@/utils/llmStatus";
+```
+
+`Badge` 가 이미 import 돼 있는지 확인하고, 없으면 `@/components/ui` 에서 가져온다.
+
+`MedicalCertificate.module.css` 에 여백만 주는 클래스를 추가한다. 색은 `Badge` 가
+가진다 — 색 리터럴을 쓰지 않는다(`no-hardcoded-color` 가드가 막는다):
+
+```css
+.aiPreviewNotice {
+  margin-bottom: var(--space-3);
+}
+```
+
+- [ ] **Step 16: 테스트 통과 확인**
+
+Run: `cd apps/web && node .yarn/releases/yarn-4.12.0.cjs vitest run src/components/__tests__/MedicalCertificate.test.tsx`
+Expected: PASS (3개)
+
+- [ ] **Step 17: 전체 웹 테스트와 타입 확인**
+
+Run: `cd apps/web && node .yarn/releases/yarn-4.12.0.cjs vitest run`
+Expected: 140 passed (137 + 3)
+
+Run: `cd apps/web && node .yarn/releases/yarn-4.12.0.cjs tsc --noEmit`
+Expected: 출력 없음
+
+- [ ] **Step 18: 커밋**
+
+```bash
+git add apps/web/src/utils/llmStatus.ts apps/web/src/services/agent.ts apps/web/src/components/MedicalCertificate.tsx apps/web/src/components/MedicalCertificate.module.css apps/web/src/components/Diagnosis.tsx apps/web/src/components/__tests__/Diagnosis.test.tsx apps/web/src/components/__tests__/MedicalCertificate.test.tsx
+git commit -m "feat(web): 진단서 AI 미리보기에 모델 미사용 여부 표시"
+```
+
+- [ ] **Step 19: 실패하는 파이썬 테스트 작성**
+
+`prescription_api` 자신의 `llmStatus` 는 `tools.py` 에서 버려지고 있다. 이 값을
+**최상위 `llmStatus` 에 접어 넣지 않는다** — Task 6 에서 보조 호출의 성공을 상태에
+반영했다가 결정이 전부 스텁인데 `"real"` 이 나오는 결함을 만들었다. 이 값은 해당
+스텝의 트레이스 `source` 에만 반영한다.
+
+`services/validation-agent/tests/test_llm_status.py` 에 추가한다:
+
+```python
+def test_prescription_finder_trace_marks_stub_recommendation(monkeypatch):
+    """처방 RAG 가 스텁 응답을 돌려주면 그 스텝의 source 는 llm 이 될 수 없다.
+
+    결정 자체는 LLM 이 했더라도, 이 스텝의 페이로드는 스텁에서 나왔다.
+    source 의 선언된 의미가 "이 스텝의 페이로드가 어디서 왔나"이므로 여기가 맞다.
+    """
+    _install_llm_decisions(monkeypatch)  # 이 파일의 기존 헬퍼를 그대로 쓴다
+    _install_prescription_finder(monkeypatch, llm_status="stub")
+
+    response = run_validation_agent(_request())
+
+    finder = [e for e in response.reasoningTrace if e["action"] == "Prescription Finder"]
+    assert finder, "Prescription Finder 스텝이 트레이스에 있어야 한다"
+    assert all(e["source"] != "llm" for e in finder)
+
+
+def test_prescription_finder_stub_does_not_flip_top_level_status(monkeypatch):
+    """스텝 출처가 최상위 llmStatus 를 오염시키면 안 된다(Task 6 회귀 방지).
+
+    보조 호출의 결과를 결정 소스에 섞었다가, 결정이 전부 스텁인데 llmStatus 가
+    "real" 로 나오는 결함을 만든 적이 있다. 방향을 반대로도 확인한다 —
+    처방 RAG 가 스텁이라고 해서 LLM 이 내린 결정이 지워지지도 않아야 한다.
+    """
+    _install_llm_decisions(monkeypatch)
+    _install_prescription_finder(monkeypatch, llm_status="stub")
+
+    response = run_validation_agent(_request())
+
+    assert response.llmStatus == "real"
+```
+
+`_install_prescription_finder` 는 이 파일 안에 만든다. 기존 `_FakePubmedLoader` 가
+모듈 이름을 바꿔치기하는 방식을 그대로 따른다(`agent.prescription_finder` 는 pydantic
+`StructuredTool` 이라 인스턴스 속성을 직접 monkeypatch 할 수 없다).
+
+- [ ] **Step 20: 테스트가 실패하는지 확인**
+
+Run: `cd services/validation-agent && python -m pytest tests/test_llm_status.py -q`
+Expected: FAIL — `tools.py` 가 `llmStatus` 를 안 실어 보내므로 트레이스에 반영되지 않는다.
+
+- [ ] **Step 21: tools.py 가 llmStatus 를 실어 보내게 한다**
+
+`services/validation-agent/app/tools.py` 의 성공 반환 블록(191-196행)을 교체한다:
+
+```python
+    return {
+        "status": "LOADED",
+        "evidence": ["기존 처방 RAG에서 참고 처방 후보를 조회했습니다."],
+        "candidatePrescriptions": body.get("prescriptions") or [],
+        # 처방 RAG 자신이 모델을 썼는지. 이 스텝의 페이로드 출처이지, 검증 결정의
+        # 출처가 아니다 — 최상위 llmStatus 에 섞으면 안 된다(Task 6 회귀).
+        "recommendationLlmStatus": body.get("llmStatus"),
+    }
+```
+
+실패 반환 블록에도 같은 키를 넣는다. 값은 `"fallback"` 이다 — 호출이 실패했으면
+모델은 이 스텝에 관여하지 않았다:
+
+```python
+        return {
+            "status": "FAILED",
+            "evidence": [f"처방 RAG 호출 실패: {exc}"],
+            "candidatePrescriptions": [],
+            "recommendationLlmStatus": "fallback",
+        }
+```
+
+- [ ] **Step 22: agent.py 가 그 값으로 트레이스를 표시하게 한다**
+
+`Prescription Finder` 스텝을 트레이스에 넣는 지점을 찾아, 관측값의
+`recommendationLlmStatus` 로 `source` 를 강등한다. PubMed 질의에 이미 있는
+"강등만 하고 승격은 하지 않는다" 규칙을 그대로 쓴다:
+
+```python
+def _downgrade_by_payload_source(source: str, payload_status: str | None) -> str:
+    """스텝의 페이로드 출처가 모델이 아니면 강등한다. 승격은 절대 하지 않는다.
+
+    결정이 LLM 이었어도 그 스텝이 실제로 쓴 데이터가 스텁/폴백에서 왔다면
+    트레이스는 그 사실을 우선한다. 반대로, 결정이 LLM 이 아니었는데 페이로드가
+    모델에서 왔다고 source 를 "llm" 으로 올리지는 않는다 — source 는 이 스텝이
+    어디서 결정됐는지도 함께 담기 때문이다.
+    """
+    if source != "llm":
+        return source
+    if payload_status == "real":
+        return source
+    return "fallback"
+```
+
+`Prescription Finder` 트레이스 항목을 만들 때 이 함수를 통과시킨다.
+**`decision_sources` 에는 아무것도 append 하지 않는다.**
+
+- [ ] **Step 23: 테스트 통과 확인**
+
+Run: `cd services/validation-agent && python -m pytest -q`
+Expected: 19 passed (17 + 2)
+
+- [ ] **Step 24: 뮤테이션으로 새 테스트가 실제로 실패하는지 확인**
+
+`git checkout --` 나 `git stash` 를 쓰지 않는다. 파일을 복사해 백업하고 복사로 되돌린다.
+
+1. `tools.py` 의 `"recommendationLlmStatus": body.get("llmStatus")` 를 `"real"` 고정으로 바꾼다
+   → `test_prescription_finder_trace_marks_stub_recommendation` 이 실패해야 한다.
+2. `_downgrade_by_payload_source` 를 `return source` 로 바꾼다
+   → 같은 테스트가 실패해야 한다.
+3. `decision_sources.append(payload_status)` 를 일부러 추가한다
+   → `test_prescription_finder_stub_does_not_flip_top_level_status` 가 실패해야 한다.
+
+각 뮤테이션 후 복원하고 `git status --porcelain` 이 비었는지 확인한다.
+
+- [ ] **Step 25: 커밋**
+
+```bash
+git add services/validation-agent/app/tools.py services/validation-agent/app/agent.py services/validation-agent/tests/test_llm_status.py
+git commit -m "fix(validation-agent): 처방 RAG 의 실행 경로를 트레이스에 반영"
 ```
 
 ---

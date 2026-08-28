@@ -1,0 +1,308 @@
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+
+import Diagnosis from "../Diagnosis";
+import { llmStatusNotice } from "@/utils/llmStatus";
+import { MedicalSelectionProvider } from "@store/medicalSelection";
+import {
+  getValidationJob,
+  recommendPrescriptions,
+  type ValidationJobResponse,
+} from "@/services/history";
+
+// jsdom 은 <dialog> 의 모달 동작을 구현하지 않는다. open 속성만 흉내 낸다.
+// (apps/web/src/components/ui/__tests__/Modal.test.tsx 와 동일한 폴리필)
+beforeAll(() => {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.open = true;
+  };
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement) {
+    this.open = false;
+    this.dispatchEvent(new Event("close"));
+  };
+});
+
+vi.mock("@/services/history", async () => {
+  const actual = await vi.importActual<typeof import("@/services/history")>(
+    "@/services/history"
+  );
+  return {
+    ...actual,
+    recommendPrescriptions: vi.fn(),
+    getValidationJob: vi.fn(),
+  };
+});
+
+const mockedRecommend = vi.mocked(recommendPrescriptions);
+const mockedGetJob = vi.mocked(getValidationJob);
+
+describe("llmStatusNotice", () => {
+  it("모델이 실제로 돌았으면 아무것도 표시하지 않는다", () => {
+    expect(llmStatusNotice("real")).toBeNull();
+  });
+
+  it("폴백이면 모델 미사용을 명시한다", () => {
+    const notice = llmStatusNotice("fallback");
+    expect(notice).not.toBeNull();
+    expect(notice!.label).toContain("모델 미사용");
+    expect(notice!.tone).toBe("warning");
+  });
+
+  it("스텁이면 폴백과 구분되는 문구를 쓴다", () => {
+    const stub = llmStatusNotice("stub");
+    const fallback = llmStatusNotice("fallback");
+    expect(stub).not.toBeNull();
+    expect(stub!.label).not.toBe(fallback!.label);
+    // 위 부등호 비교만으로는 두 문구가 어떤 값으로 바뀌어도(둘이 다르기만
+    // 하면) 통과한다. 실제 사용자에게 보이는 문구를 고정한다 — 이 값이
+    // 실제로 가장 자주 나오는 값이다(현재 프로젝트에 Bedrock 키가 없어
+    // "real" 경로가 없으므로).
+    expect(stub!.label).toBe("스텁 응답 (모델 미사용)");
+  });
+
+  // fallback 의 tone 만 확인하면 stub 분기의 tone 이 조용히 바뀌어도(예: neutral
+  // -> warning) 이 describe 블록 전체가 통과해버린다.
+  it("스텁의 tone 은 neutral 이다", () => {
+    expect(llmStatusNotice("stub")!.tone).toBe("neutral");
+  });
+
+  // 필드가 없는 응답을 "모델이 돌았다"로 해석하면 이 태스크의 목적이 무너진다.
+  it("필드가 없으면 모델이 돌았다고 가정하지 않는다", () => {
+    expect(llmStatusNotice(undefined)).not.toBeNull();
+  });
+
+  // "real" 정확 일치만 통과시켜야 한다. 대소문자를 관대하게 받아주면(예:
+  // .toLowerCase() === "real") 오늘은 우연히 안전해도 계약을 느슨하게 만드는
+  // 변경이 조용히 들어올 수 있다. 대문자 "REAL" 은 계약 밖 값이므로 여전히
+  // fail-closed 여야 한다.
+  it("real 이 아닌 다른 대소문자 표기는 모델이 돌았다고 인정하지 않는다", () => {
+    expect(llmStatusNotice("REAL")).not.toBeNull();
+  });
+});
+
+// llmStatusNotice 단위 테스트만으로는 실제 모달이 validationModal.result?.llmStatus
+// 를 제대로 읽어 배지에 넘기는지 확인할 수 없다 — 이 배선이 끊겨도(예: 엉뚱한 필드를
+// 읽거나 하드코딩된 값을 넘겨도) 위 단위 테스트는 전부 통과한다. 그래서 실제 렌더
+// 경로(AI 처방 추천 클릭 -> 작업 폴링 -> 모달 오픈)를 통해 배지 문구가 실제로
+// 나타나는지 확인한다.
+//
+// 모달을 열면 같은 llmStatus 배지가 모달과 "AI 추천 처방" 패널 양쪽에 동시에
+// 뜬다(패널은 모달을 닫아도 남는다 — 아래 "모달을 닫아도" 테스트 참고). 그래서
+// 텍스트 매칭은 모달 안으로 범위를 좁혀 getByRole("dialog") 로 스코프한다.
+describe("검증 모달의 llmStatus 배선", () => {
+  const clinicVisit = { patientId: 1, deptId: 1 };
+
+  function renderDiagnosis() {
+    return render(
+      <MedicalSelectionProvider>
+        <Diagnosis clinicVisit={clinicVisit} ensureHistory={async () => 10} employeeId={1} />
+      </MedicalSelectionProvider>
+    );
+  }
+
+  function mockJobWithLlmStatus(jobId: string, llmStatus: string) {
+    mockedRecommend.mockResolvedValue({ jobId, historyId: 10, status: "RUNNING" });
+    mockedGetJob.mockResolvedValue({
+      jobId,
+      historyId: 10,
+      status: "DONE",
+      result: {
+        overallStatus: "PASS",
+        summary: "이상 없음",
+        llmStatus,
+        recommendedPrescriptions: [
+          {
+            id: 1,
+            rank: 1,
+            prescription_code: "C1",
+            prescription_name: "약1",
+            reason: "",
+            confidence_score: 0.9,
+            dose: 1,
+            time: 1,
+            days: 1,
+          },
+        ],
+      },
+    } as ValidationJobResponse);
+  }
+
+  it("결과의 llmStatus 가 fallback 이면 모달에 모델 미사용 배지가 뜬다", async () => {
+    mockJobWithLlmStatus("job-1", "fallback");
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog");
+    const noticeBadge = await within(dialog).findByText("규칙 기반 결과 — 모델 미사용");
+    // M5: tone 을 문구가 아니라 배지 자체(class/속성)로도 확인한다. 문구만
+    // 확인하면 warning -> neutral 로 tone 이 조용히 바뀌어도 못 잡는다.
+    expect(noticeBadge).toHaveAttribute("data-tone", "warning");
+    // overallStatus 가 WARNING/NEEDS_REVIEW 면 amber 배지가 둘 나란히 선다.
+    // 이 접두어가 둘 중 어느 쪽이 실행 경로 표시인지 구분해준다. 없으면
+    // 무라벨 amber 칩 두 개로 조용히 되돌아간다.
+    expect(within(dialog).getByText("모델")).toBeInTheDocument();
+  });
+
+  it("결과의 llmStatus 가 real 이면 모델 미사용 배지가 뜨지 않는다", async () => {
+    mockJobWithLlmStatus("job-2", "real");
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("이상 없음")).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/모델 미사용/)).toBeNull();
+  });
+
+  // IMPORTANT 3: 모달은 확인 클릭으로 사라지지만, aiRecommendations 와 함께
+  // 화면에 남는 "AI 추천 처방" 패널에는 llmStatus 를 알려줄 방법이 없었다.
+  // 모달을 닫은 뒤에도 배지가 패널에 남아 있는지 실제 렌더 경로로 확인한다.
+  it("모달을 닫아도 AI 추천 처방 패널에 모델 미사용 배지가 남는다", async () => {
+    mockJobWithLlmStatus("job-3", "fallback");
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByText("규칙 기반 결과 — 모델 미사용");
+
+    fireEvent.click(screen.getByRole("button", { name: "확인" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    const panelBadge = screen.getByText("규칙 기반 결과 — 모델 미사용");
+    expect(panelBadge).toBeInTheDocument();
+    expect(panelBadge).toHaveAttribute("data-tone", "warning");
+  });
+});
+
+// IMPORTANT 3(최종 리뷰): 최상위 llmStatus 배지는 작업 전체를 하나로 뭉뚱그린다.
+// fallback 작업이라도 reasoningTrace 의 개별 스텝은 llm 출처일 수 있고 그
+// 반대도 가능하다 — "검증 이유" 목록은 step.source 를 무시하고 action/
+// observation 만 이어붙였으므로, 하드코딩된 폴백 thought 문구가 모델 추론처럼
+// 읽힐 수 있었다(spec §6.3 완료 조건 6: "사람이 트레이스만 보고 LLM 추론으로
+// 오인할 수 없어야 한다"). 스텝별 출처 표시가 실제로 렌더되는지 렌더 경로로
+// 확인한다.
+describe("검증 이유 목록의 스텝별 출처 표시", () => {
+  const clinicVisit = { patientId: 1, deptId: 1 };
+
+  function renderDiagnosis() {
+    return render(
+      <MedicalSelectionProvider>
+        <Diagnosis clinicVisit={clinicVisit} ensureHistory={async () => 10} employeeId={1} />
+      </MedicalSelectionProvider>
+    );
+  }
+
+  function mockJobWithTrace(jobId: string, reasoningTrace: Array<Record<string, unknown>>) {
+    mockedRecommend.mockResolvedValue({ jobId, historyId: 10, status: "RUNNING" });
+    mockedGetJob.mockResolvedValue({
+      jobId,
+      historyId: 10,
+      status: "DONE",
+      result: {
+        overallStatus: "PASS",
+        summary: "이상 없음",
+        llmStatus: "real",
+        reasoningTrace,
+        recommendedPrescriptions: [],
+      },
+    } as unknown as ValidationJobResponse);
+  }
+
+  it("source 가 rule/fallback 인 스텝에는 (규칙 기반) 표시가 붙는다", async () => {
+    mockJobWithTrace("job-trace-1", [
+      {
+        action: "질병 검증",
+        observation: { status: "MATCH", evidence: ["근거 A"] },
+        source: "fallback",
+      },
+    ]);
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      await within(dialog).findByText("질병 검증 (규칙 기반): MATCH - 근거 A")
+    ).toBeInTheDocument();
+  });
+
+  it("source 가 stub 인 스텝에는 (스텁) 표시가 붙는다", async () => {
+    mockJobWithTrace("job-trace-2", [
+      {
+        action: "처방 검증",
+        observation: { status: "APPROPRIATE", evidence: ["근거 B"] },
+        source: "stub",
+      },
+    ]);
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      await within(dialog).findByText("처방 검증 (스텁): APPROPRIATE - 근거 B")
+    ).toBeInTheDocument();
+  });
+
+  it("source 가 llm 인 스텝에는 출처 표시가 붙지 않는다", async () => {
+    mockJobWithTrace("job-trace-3", [
+      {
+        action: "PubMed 요약",
+        observation: { status: "LOADED", evidence: ["근거 C"] },
+        source: "llm",
+      },
+    ]);
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      await within(dialog).findByText("PubMed 요약: LOADED - 근거 C")
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText(/PubMed 요약 \(/)).toBeNull();
+  });
+
+  // source 가 없거나 계약 밖이면 모델 추론과 구분되지 않는다. 이 브랜치의 다른
+  // 모든 경계와 같은 방향으로, "llm" 정확 일치만 무표시여야 한다.
+  it("source 가 없는 스텝은 모델 추론으로 보이지 않는다", async () => {
+    mockJobWithTrace("job-trace-4", [
+      {
+        action: "질병 검증",
+        observation: { status: "MATCH", evidence: ["근거 D"] },
+      },
+    ]);
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      await within(dialog).findByText("질병 검증 (규칙 기반): MATCH - 근거 D")
+    ).toBeInTheDocument();
+  });
+
+  it("source 가 계약 밖 값이면 모델 추론으로 보이지 않는다", async () => {
+    mockJobWithTrace("job-trace-5", [
+      {
+        action: "처방 검증",
+        observation: { status: "OK", evidence: ["근거 E"] },
+        source: "RULE",
+      },
+    ]);
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      await within(dialog).findByText("처방 검증 (규칙 기반): OK - 근거 E")
+    ).toBeInTheDocument();
+  });
+});

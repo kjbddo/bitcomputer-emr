@@ -12,6 +12,9 @@
 
 python-arango>=8.0.0
 python-dotenv>=1.0.0
+# certificate_api 는 Task 8 로 게이트웨이 경유로 이관되어 더 이상 이 패키지를 쓰지
+# 않지만, run_prescription_agent.py/run_graph_qa.py(CLI 도구, 범위 밖)가 모듈
+# 최상단에서 ChatGoogleGenerativeAI 를 계속 import 하므로 여기서는 제거하지 않는다.
 langchain-google-genai>=2.0.0
 langchain-community>=0.3.0
 # Spring Boot 연동용 FastAPI 서비스 (prescription_api.py)

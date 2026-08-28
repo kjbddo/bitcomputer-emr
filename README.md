@@ -25,8 +25,9 @@ docker compose --env-file .env.docker up -d frontend
 | Front-End | `bit-frontend` | 3000 | Next.js UI |
 | Spring Boot | `bit-spring-boot` | 8080 | WAS / API |
 | Flask 영상판독 | `bit-flask-radiology` | 5000 | 기존 영상판독 엔진 |
-| 진단서 의사소견 | `bit-certificate-api` | 5001 | Gemini 기반 진단서 문장 생성 |
-| 처방 추천 | `bit-prescription-api` | 8001 | ArangoDB + Gemini 처방 추천 |
+| LLM 게이트웨이 | `bit-llm-gateway` | 8003 | 모든 서비스의 단일 LLM 진입점 (Bedrock) |
+| 진단서 의사소견 | `bit-certificate-api` | 5001 | LLM 게이트웨이 경유 진단서 문장 생성 |
+| 처방 추천 | `bit-prescription-api` | 8001 | ArangoDB + LLM 게이트웨이 경유 처방 추천 |
 | 진료 데이터 검증 | `bit-validation-agent` | 8002 | LangGraph 기반 처방 추천/검증 ReAct worker |
 | XrayGraphRAG | `bit-xraygraph` | 8000 | X-ray 유사 사례 검색 / 상병 추론 |
 | MySQL | `bit-mysql` | 3307 | Spring 업무 DB |
@@ -236,12 +237,15 @@ Spring/처방 추천 서비스가 사용할 DB는 `.env.docker`와 `docker-compo
 
 ## 6. 진단서 의사소견 데이터 준비
 
-진단서 의사소견은 ArangoDB가 아니라 MySQL + Gemini 기반이다.
+진단서 의사소견은 ArangoDB가 아니라 MySQL + LLM 게이트웨이(`services/llm-gateway`) 기반이다.
 
 필요한 것:
 
 - MySQL에 환자, 진료, 상병, 처방 데이터가 있어야 한다.
-- `.env.docker`에 `GOOGLE_API_KEY` 또는 `GEMINI_API_KEY`를 넣어야 한다.
+- certificate-api의 `LLM_GATEWAY_BASE_URL`은 `infra/docker-compose.yml`에 `http://llm-gateway:8003/v1`로
+  고정되어 있어 env 파일로 바꿀 수 없다. env로 조정 가능한 값은 `LLM_MODEL`뿐이다 — 필요하면
+  `infra/.env`에 넣는다. certificate-api는 Gemini를 직접 호출하지 않고 `services/llm-gateway`를
+  경유한다.
 
 확인:
 
@@ -249,7 +253,7 @@ Spring/처방 추천 서비스가 사용할 DB는 `.env.docker`와 `docker-compo
 curl http://localhost:5001/health
 ```
 
-`google_api_key_set`이 `true`여야 실제 Gemini 호출이 가능하다.
+`llm_gateway_configured`가 `true`여야 실제 게이트웨이 호출이 가능하다.
 
 ## 7. 처방 추천 / 진료 데이터 검증 에이전트
 
@@ -331,8 +335,8 @@ curl "http://localhost:8080/api/validation-jobs/{jobId}"
 | `RABBITMQ_PASSWORD` | `guest` | RabbitMQ 비밀번호 |
 | `VALIDATION_RABBITMQ_REQUEST_QUEUE` | `validation.prescription.request` | 추천/검증 요청 queue |
 | `VALIDATION_RABBITMQ_RESULT_QUEUE` | `validation.prescription.result` | 추천/검증 결과 queue |
-| `OPENAI_API_KEY` | 없음 | ValidationAgent LLM 호출용 OpenAI API 키 |
-| `OPENAI_MODEL` | `gpt-5-nano` | ValidationAgent tool decider/PubMed 요약용 모델. 속도와 비용을 우선한 기본값 |
+| `LLM_GATEWAY_BASE_URL` | `http://llm-gateway:8003/v1` | ValidationAgent 가 게이트웨이 경유로 LLM 을 호출하는 base URL. 자격증명은 게이트웨이가 가짐 |
+| `LLM_MODEL` | `openai.gpt-5.6-luna` | ValidationAgent tool decider/PubMed 요약용 모델 |
 
 검증 에이전트는 DB를 직접 수정하지 않는다. 상병/처방 자동 변경도 하지 않고, 의료진 검토용 결과만 `validation_result`에 저장한다.
 

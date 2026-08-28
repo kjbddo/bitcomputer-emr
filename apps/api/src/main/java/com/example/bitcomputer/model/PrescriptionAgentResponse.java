@@ -23,7 +23,7 @@ import java.util.List;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class PrescriptionAgentResponse {
 
-    /** Gemini 가 반환한 rank 1·2·3 처방 항목. 길이는 항상 3 이 보장됨(Python 검증). */
+    /** LLM 게이트웨이가 반환한 rank 1·2·3 처방 항목. 길이는 항상 3 이 보장됨(Python 검증). */
     private List<Item> prescriptions;
 
     /** Python 이 Arango 로 top_rx 를 보강했으면 true. */

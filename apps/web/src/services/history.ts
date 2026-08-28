@@ -97,6 +97,10 @@ export interface ValidationJobResponse {
     overallStatus?: string;
     summary?: string;
     reason?: string;
+    // Java DTO 는 이 필드를 그대로 왕복시킬 뿐 값을 검증하지 않는다(null 이나
+    // "real"|"stub"|"fallback" 밖의 문자열도 그대로 저장·전달된다). 유니온 타입은
+    // "이 셋 중 하나만 온다"는 보장을 실제로는 없는데 있는 것처럼 표시한다.
+    llmStatus?: string | null;
     recommendedPrescriptions?: RecommendedPrescriptionItem[];
     candidatePrescriptions?: RecommendedPrescriptionItem[];
     checks?: Array<Record<string, unknown>>;

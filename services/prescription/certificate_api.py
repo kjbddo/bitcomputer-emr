@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Spring Boot Back-End ↔ Gemini 기반 진단서 소견 생성 FastAPI 서비스.
+Spring Boot Back-End ↔ LLM 게이트웨이 기반 진단서 소견 생성 FastAPI 서비스.
 
 Spring은 MySQL에서 환자·진료 기록을 모은 뒤 이 서비스로 POST합니다.
-응답: {"medicalCertificate": "..."} — 진단서 소견 텍스트
+응답: {"medicalCertificate": "...", "llmStatus": "real"|"stub"} — 진단서 소견 텍스트
 
-prescription_api.py 와 동일한 구조로 작성됨.
+prescription_api.py 와 동일한 구조로 작성됨. LLM 호출은 자체적으로 하지 않고
+llm-gateway(services/llm-gateway) 를 경유한다(spec §3.1) — 자격증명은 게이트웨이만 갖는다.
 
 실행:
     cd GraphDB/langchain_graph_qa
@@ -22,8 +23,9 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
@@ -35,9 +37,6 @@ try:
     from dotenv import load_dotenv
 except ImportError:
     load_dotenv = None
-
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 
 from certificate_agent import SYSTEM_CERTIFICATE, build_certificate_agent_prompt
 from llm_provider import resolve_provider, stub_certificate_response
@@ -54,13 +53,39 @@ def _load_dotenv_if_present() -> None:
         return
     env_file = SCRIPT_DIR / ".env"
     if env_file.is_file():
-        load_dotenv(env_file)
+        # 개발 환경에서 이미 export 된 예전 값(예: LLM_GATEWAY_BASE_URL)이 남아 있으면
+        # .env 값이 무시되는 혼선이 잦다. .env 를 "로컬 단일 진실"로 취급하기 위해
+        # override=True 로 로드한다 — prescription_api.py 와 동일한 정책(최종 리뷰).
+        load_dotenv(env_file, override=True)
 
 
 _load_dotenv_if_present()
 
-DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
-DEFAULT_TEMPERATURE = float(os.environ.get("GEMINI_TEMPERATURE", "0.3"))
+
+_ZERO_WIDTH_CHARS = "\u200b\u200c\u200d\ufeff"
+
+
+def _strip_zero_width(text: str) -> str:
+    """블랭크 판정 전에 폭이 0인 문자를 제거한다.
+
+    M6: U+200B(zero-width space) 하나만 있는 content 는 str.strip() 을 통과해
+    llmStatus="real" 인 "진짜" 진단서로 새어나간다. blank 판정에만 쓰고
+    반환값 자체는 건드리지 않는다 — 본문 중간에 낀 zero-width 문자까지
+    지우는 건 이 수정의 범위 밖이다."""
+    for ch in _ZERO_WIDTH_CHARS:
+        text = text.replace(ch, "")
+    return text
+
+
+def _default_llm_model() -> str:
+    """LLM_MODEL 환경변수를 매 호출 시점에 읽는다.
+
+    N12: 이전에는 import 시점 상수(DEFAULT_MODEL)와 호출 시점 재조회가
+    각각 따로 os.environ.get() 을 불렀다. import 시점 값은 프로세스가 뜬
+    이후 환경변수가 바뀌어도 갱신되지 않으므로, /health 가 보고하는
+    default_model 이 실제로 게이트웨이에 실리는 model 과 어긋날 수
+    있었다. 단일 함수로 합쳐 두 지점이 항상 같은 값을 보게 한다."""
+    return os.environ.get("LLM_MODEL", "openai.gpt-5.6-luna")
 
 
 # ── Request / Response 스키마 ─────────────────────────────────────────────────
@@ -99,6 +124,11 @@ class CertificateGenerateRequest(BaseModel):
 
 class CertificateGenerateResponse(BaseModel):
     medicalCertificate: str
+    # LLM 을 실제로 썼는지. engineStatus 와 달리 실행 경로에서 도출한다(spec §6.2).
+    # 기본값을 두지 않는다 — 생성 시 값을 빠뜨리면 "모델이 실제로 판단했다"는
+    # 거짓 신호를 조용히 내보내게 된다. prescription_api.PrescriptionRecommendResponse.llmStatus
+    # 와 동일한 강도로 맞춘다.
+    llmStatus: Literal["real", "stub"]
 
 
 # ── FastAPI 앱 ─────────────────────────────────────────────────────────────────
@@ -106,7 +136,7 @@ class CertificateGenerateResponse(BaseModel):
 app = FastAPI(
     title="BitComputer Certificate Generation Agent",
     version="0.1.0",
-    description="Gemini 기반 진단서 소견 생성 서비스 (Spring Boot 연동용).",
+    description="LLM 게이트웨이 기반 진단서 소견 생성 서비스 (Spring Boot 연동용).",
 )
 
 
@@ -114,19 +144,105 @@ app = FastAPI(
 def health() -> dict[str, Any]:
     return {
         "status": "ok",
-        "google_api_key_set": bool(os.environ.get("GOOGLE_API_KEY")),
-        "default_model": DEFAULT_MODEL,
+        "llm_gateway_configured": bool(os.environ.get("LLM_GATEWAY_BASE_URL")),
+        "default_model": _default_llm_model(),
     }
+
+
+def _invoke_gateway_text(system_prompt: str, user_prompt: str, model: str) -> str:
+    """게이트웨이를 통해 진단서 소견 텍스트를 받는다.
+
+    자격증명은 게이트웨이가 갖는다(spec §3.1). temperature 는 보내지 않는다 —
+    luna 계약이며 게이트웨이가 어차피 제거한다(spec §5). ``model`` 은 호출자가
+    실제로 payload 에 실릴 값을 명시적으로 넘긴다 — 여기서 다시 환경변수를
+    읽으면 호출자의 trace 가 기록한 모델과 실제로 보낸 모델이 어긋날 수 있다.
+    """
+    base_url = os.environ.get("LLM_GATEWAY_BASE_URL")
+    if not base_url:
+        raise HTTPException(
+            status_code=503,
+            detail="LLM_GATEWAY_BASE_URL 이 설정되지 않았습니다.",
+        )
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    }
+    # LLM_TIMEOUT_SECONDS 가 아니다 — 그 이름은 게이트웨이의 1회 시도당 타임아웃
+    # (services/llm-gateway/app/config.py) 이 이미 쓰고 있다. infra/.env 는
+    # 한 파일을 공유하고 이 파일은 override=True 로 로드하므로, 이름이 같으면
+    # 운영자가 "게이트웨이 타임아웃"을 의도해 값을 바꿔도 이 호출자의 총
+    # 대기시간까지 함께 바뀌어 재시도가 전부 무의미해진다(최종 리뷰 IMPORTANT).
+    timeout_raw = os.environ.get("LLM_GATEWAY_TIMEOUT_SECONDS", "180")
+    try:
+        timeout = float(timeout_raw)
+    except ValueError as exc:
+        # certificate_api.py:143(구) — try 밖에서 ValueError 가 그대로 터지면
+        # 트레이스백이 노출된 500 이 나간다. 잘못된 설정값도 "실패 계약"
+        # 안에서 다뤄져야 한다(GC-2).
+        logger.exception("LLM_GATEWAY_TIMEOUT_SECONDS 파싱 실패: %r", timeout_raw)
+        raise HTTPException(
+            status_code=503,
+            detail=f"LLM_GATEWAY_TIMEOUT_SECONDS 설정이 올바르지 않습니다: {timeout_raw!r}",
+        ) from exc
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.post(
+                f"{base_url.rstrip('/')}/chat/completions",
+                headers={"X-LLM-Caller": "certificate-api"},
+                json=payload,
+            )
+            response.raise_for_status()
+            content = response.json()["choices"][0]["message"]["content"]
+            # M6: U+200B 등 폭이 0인 문자만 있는 문자열은 str.strip() 을 그대로
+            # 통과한다 — blank 판정 전에 zero-width 문자를 먼저 지운다. 반환값
+            # 자체(content.strip())는 건드리지 않는다.
+            if not isinstance(content, str) or not _strip_zero_width(content).strip():
+                # CRITICAL C1: 200 이지만 형식이 깨진 본문(content: null/""/비문자열)을
+                # str() 로 뭉개서 반환하면 "None" 같은 지어낸 문자열이 llmStatus="real" 인
+                # 진짜 진단서 소견으로 통과한다(GC-2). 여기서 명시적으로 거부해
+                # 아래 ``except Exception`` 분기(502, 사유 보존)로 떨어뜨린다.
+                # M2: content 가 대용량(예: 200KB dict)이면 repr(content) 를 그대로
+                # 실을 경우 502 detail·로그가 무한정 커진다 — 형제 분기인
+                # HTTPStatusError 의 body[:500] 과 같은 정신으로 잘라낸다.
+                raise ValueError(
+                    f"게이트웨이가 빈 본문을 돌려주었습니다: content={repr(content)[:200]}"
+                )
+            return content.strip()
+    except httpx.HTTPStatusError as exc:
+        # exc.response.text 는 게이트웨이가 GC-7 에 맞춰 이미 상류 응답을 걷어낸
+        # 구조화된 본문(예: {"error":{"type":"upstream_error","upstreamStatus":N,
+        # "attempts":N}})이므로 로그·detail 에 그대로 실어도 안전하다. 요청 헤더나
+        # Authorization 값은 여기서 절대 로그하지 않는다.
+        body = exc.response.text[:500]
+        logger.exception(
+            "게이트웨이 호출 실패: status=%s body=%s", exc.response.status_code, body
+        )
+        detail = f"LLM 게이트웨이 호출 실패: status={exc.response.status_code}"
+        try:
+            error_body = exc.response.json()
+        except ValueError:
+            error_body = None
+        upstream_info = error_body.get("error") if isinstance(error_body, dict) else None
+        if isinstance(upstream_info, dict) and (
+            "upstreamStatus" in upstream_info or "attempts" in upstream_info
+        ):
+            detail += (
+                f" upstreamStatus={upstream_info.get('upstreamStatus')}"
+                f" attempts={upstream_info.get('attempts')}"
+            )
+        else:
+            detail += f" body={body}"
+        raise HTTPException(status_code=502, detail=detail) from exc
+    except Exception as exc:
+        logger.exception("게이트웨이 호출 실패")
+        raise HTTPException(status_code=502, detail=f"LLM 게이트웨이 호출 실패: {exc}") from exc
 
 
 @app.post("/api/ai/document/generate", response_model=CertificateGenerateResponse)
 def generate_certificate(req: CertificateGenerateRequest) -> CertificateGenerateResponse:
-    if resolve_provider() != "stub" and not os.environ.get("GOOGLE_API_KEY"):
-        raise HTTPException(
-            status_code=500,
-            detail="GOOGLE_API_KEY 가 설정되지 않았습니다. 서버 환경변수 또는 .env 를 확인하세요.",
-        )
-
     user_msg = build_certificate_agent_prompt(
         patient_gender=req.patient_gender,
         patient_age=req.patient_age,
@@ -147,28 +263,16 @@ def generate_certificate(req: CertificateGenerateRequest) -> CertificateGenerate
 
     if resolve_provider() == "stub":
         certificate = stub_certificate_response(req)
+        llm_status = "stub"
     else:
-        llm = ChatGoogleGenerativeAI(model=DEFAULT_MODEL, temperature=DEFAULT_TEMPERATURE)
-
-        try:
-            resp = llm.invoke(
-                [
-                    ("system", SYSTEM_CERTIFICATE),
-                    ("human", user_msg),
-                ]
-            )
-        except ChatGoogleGenerativeAIError as exc:
-            logger.exception("Gemini 호출 실패 - history_id=%d", req.history_id)
-            raise HTTPException(status_code=502, detail=f"Gemini 호출 실패: {exc}") from exc
-
-        certificate = (
-            resp.content.strip() if hasattr(resp, "content") else str(resp).strip()
-        )
+        wire_model = _default_llm_model()
+        certificate = _invoke_gateway_text(SYSTEM_CERTIFICATE, user_msg, wire_model)
+        llm_status = "real"
 
     logger.info(
         "진단서 생성 완료 - history_id=%d, length=%d", req.history_id, len(certificate)
     )
-    return CertificateGenerateResponse(medicalCertificate=certificate)
+    return CertificateGenerateResponse(medicalCertificate=certificate, llmStatus=llm_status)
 
 
 if __name__ == "__main__":

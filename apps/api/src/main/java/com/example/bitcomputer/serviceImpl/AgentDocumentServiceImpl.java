@@ -4,6 +4,7 @@ import com.example.bitcomputer.Repository.*;
 import com.example.bitcomputer.entity.*;
 import com.example.bitcomputer.jwt.JwtTokenProvider;
 import com.example.bitcomputer.model.CertificateAgentRequest;
+import com.example.bitcomputer.model.CertificateAgentResponse;
 import com.example.bitcomputer.model.CertificateFormDTO;
 import com.example.bitcomputer.model.CertificateHistoryDTO;
 import com.example.bitcomputer.model.GenerateCertificateResponseDTO;
@@ -306,12 +307,20 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
                 .build();
 
         // Python 진단서 에이전트 호출 → 실패 시 기본 템플릿으로 폴백
-        String medicalCertificate = certificateAgentClient.generate(agentRequest)
-                .map(r -> r.getMedicalCertificate())
+        Optional<CertificateAgentResponse> agentResponse = certificateAgentClient.generate(agentRequest);
+        String agentText = agentResponse
+                .map(CertificateAgentResponse::getMedicalCertificate)
                 .filter(s -> s != null && !s.isBlank())
-                .orElseGet(() -> buildDefaultCertificateTemplate(agentRequest));
+                .orElse(null);
+        boolean agentTextUsed = agentText != null;
+        String medicalCertificate = agentTextUsed
+                ? agentText
+                : buildDefaultCertificateTemplate(agentRequest);
+        String llmStatus = resolveCertificateLlmStatus(
+                agentResponse.map(CertificateAgentResponse::getLlmStatus).orElse(null),
+                agentTextUsed);
 
-        return buildGenerateResponse(username, medicalCertificate);
+        return buildGenerateResponse(username, medicalCertificate, llmStatus);
     }
 
     @Override
@@ -356,12 +365,20 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
                         .build()))
                 .build();
 
-        String medicalCertificate = certificateAgentClient.generate(agentRequest)
-                .map(r -> r.getMedicalCertificate())
+        Optional<CertificateAgentResponse> agentResponse = certificateAgentClient.generate(agentRequest);
+        String agentText = agentResponse
+                .map(CertificateAgentResponse::getMedicalCertificate)
                 .filter(s -> s != null && !s.isBlank())
-                .orElseGet(() -> buildDefaultCertificateTemplate(agentRequest));
+                .orElse(null);
+        boolean agentTextUsed = agentText != null;
+        String medicalCertificate = agentTextUsed
+                ? agentText
+                : buildDefaultCertificateTemplate(agentRequest);
+        String llmStatus = resolveCertificateLlmStatus(
+                agentResponse.map(CertificateAgentResponse::getLlmStatus).orElse(null),
+                agentTextUsed);
 
-        return buildGenerateResponse(username, medicalCertificate);
+        return buildGenerateResponse(username, medicalCertificate, llmStatus);
     }
 
     @Override
@@ -439,7 +456,29 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
         return purpose == null ? "" : purpose.trim();
     }
 
-    private GenerateCertificateResponseDTO buildGenerateResponse(String username, String medicalCertificate) {
+    /** {@link #resolveCertificateLlmStatus} 가 상류 값을 그대로 통과시켜도 되는 계약값(GC-2). */
+    private static final Set<String> KNOWN_LLM_STATUS_VALUES = Set.of("real", "stub", "fallback");
+
+    /**
+     * 진단서 소견의 출처를 실행 경로에서 판정한다(GC-3).
+     *
+     * @param upstreamStatus 파이썬 certificate_api 가 보고한 값
+     * @param agentTextUsed  실제로 에이전트 문장을 썼는지. false 면 기본 템플릿이다.
+     */
+    static String resolveCertificateLlmStatus(String upstreamStatus, boolean agentTextUsed) {
+        if (!agentTextUsed) return "fallback";
+        if (upstreamStatus == null || upstreamStatus.isBlank()) return "fallback";
+        if (!KNOWN_LLM_STATUS_VALUES.contains(upstreamStatus)) {
+            // 오늘의 웹 소비자는 "real" 과 정확히 일치하는지만 보므로 계약 밖 값도
+            // fail-closed 로 안전하게 처리되지만, 조용히 넘기면 상류 계약 위반이
+            // 아무 흔적 없이 지나간다(GC-2).
+            log.warn("certificate_api 가 계약 밖 llmStatus 값을 보고했습니다: {}", upstreamStatus);
+        }
+        return upstreamStatus;
+    }
+
+    private GenerateCertificateResponseDTO buildGenerateResponse(
+            String username, String medicalCertificate, String llmStatus) {
         Employee employee = employeeRepository.findByUsername(username);
         Role role = employee != null ? employee.getRole() : Role.DEFAULT;
         String accessToken = jwtTokenProvider.generateAccessToken(username, role);
@@ -450,6 +489,7 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
         response.setAccessToken(accessToken);
         response.setRefreshToken(refreshToken);
         response.setMedicalCertificate(medicalCertificate);
+        response.setLlmStatus(llmStatus);
         return response;
     }
 

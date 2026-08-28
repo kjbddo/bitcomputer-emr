@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from typing import Any, Dict, List, Optional, TypedDict
@@ -19,6 +20,8 @@ from .tools import (
     xray_result_loader,
 )
 
+logger = logging.getLogger("validation_agent.agent")
+
 
 KOREAN_PUBMED_TERMS = {
     "결절성 근막염": "nodular fasciitis",
@@ -36,8 +39,6 @@ KOREAN_PUBMED_TERMS = {
     "발열": "fever",
     "통증": "pain",
 }
-
-DEFAULT_OPENAI_MODEL = "gpt-5-nano"
 
 
 class ValidationState(TypedDict, total=False):
@@ -95,10 +96,25 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
     max_iterations = int(os.environ.get("VALIDATION_REACT_MAX_ITERATIONS", "4"))
 
     final_result: Dict[str, Any] = {}
+    decision_sources: List[str] = []
     for iteration in range(1, max_iterations + 1):
         decision = _decide_next_tool(state, reasoning_trace, pubmed_queries, iteration)
+        source = str(decision.pop("_source", "fallback"))
+        decision_sources.append(source)
         action = str(decision.get("action") or "FINALIZE")
         if action == "FINALIZE":
+            # 결정 자체는 났지만 도구 실행이 없어 _invoke_tool 이 절대 불리지
+            # 않는 유일한 분기다. 트레이스가 "도구 호출"만 기록하면 이 결정은
+            # 흔적 없이 사라져, llmStatus="real" 이 근거로 삼을 트레이스 항목이
+            # 하나도 없는 상태가 된다(리뷰 H1, GC-2). _invoke_tool 이 만드는
+            # 항목과 같은 shape/키로 직접 기록한다.
+            reasoning_trace.append({
+                "thought": str(decision.get("thought") or "추가로 확인할 것이 없어 종료를 결정했다."),
+                "action": "FINALIZE",
+                "actionInput": decision.get("actionInput") if isinstance(decision.get("actionInput"), dict) else {},
+                "observation": {"status": "FINALIZED"},
+                "source": source,
+            })
             break
         _execute_decided_tool(
             decision,
@@ -107,6 +123,7 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
             reasoning_trace,
             pubmed_evidence,
             pubmed_queries,
+            source,
         )
         if state.get("disease_check") or state.get("prescription_check"):
             final_result = _rule_based_finalize(state)
@@ -115,39 +132,54 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
     final_overall = str(final_result.get("overallStatus") or "NEEDS_REVIEW").upper()
     if final_overall == "PASS" and not pubmed_evidence:
         reason = final_result.get("reason") or final_result.get("summary") or ""
-        pubmed_evidence.extend(_load_pubmed_evidence(
+        # 반환되는 두 번째 값(쿼리 생성 출처)은 트레이스 마킹(_load_pubmed_evidence
+        # 내부의 per-query 다운그레이드)에만 쓰인다. 이 호출 자체는 "결정"이 아니라
+        # 결정 루프 밖에서 항상 실행되는 보조 후처리이므로 decision_sources 에는
+        # 절대 반영하지 않는다 — 그 오염이 llmStatus 를 거짓으로 "real" 로 만드는
+        # 원인이었다(리뷰 finding 1, 이전 수정에서 도입된 회귀).
+        evidence, _query_source = _load_pubmed_evidence(
             reasoning_trace,
             "검증 통과 결과에 참고할 의학 문헌 후보를 PubMed에서 검색한다.",
             state,
             str(reason),
             pubmed_queries,
-        ))
+            # 결정 루프 밖에서 항상 실행되는 후처리라 "결정"의 출처가 없다 — 늘 도는
+            # 규칙이라는 뜻으로 "rule" 로 표기한다(흠 없는 LLM 응답에도 "fallback" 이
+            # 찍혀 신호를 무의미하게 만드는 문제였다, 리뷰 finding 2).
+            source="rule",
+        )
+        pubmed_evidence.extend(evidence)
 
     if not state.get("candidate_prescriptions"):
         reason = final_result.get("reason") or final_result.get("summary") or ""
         query_context = ", ".join(pubmed_queries[-2:]) or _build_pubmed_query(state, str(reason))
-        finder_result = _invoke_tool(
+        finder_result = _invoke_prescription_finder(
             reasoning_trace,
-            "Prescription Finder",
             "검증 상태와 무관하게 AI 처방 추천 결과를 생성하기 위해 처방 후보를 조회한다.",
             {
                 "patient_id": str((state.get("patient_summary") or {}).get("patientId") or request.patientId or ""),
                 "diseases": state.get("saved_diseases", []),
                 "symptoms": f"{state.get('symptoms') or ''}\n검증 사유: {reason}\nPubMed query: {query_context}",
             },
-            prescription_finder,
+            # 결정 루프 밖에서 항상 실행되는 후처리라 "rule" 로 표기한다(리뷰 finding 2).
+            source="rule",
         )
         candidates_from_finder = finder_result.get("candidatePrescriptions") or []
         if candidates_from_finder:
             state["candidate_prescriptions"] = _normalize_prescription_candidates(candidates_from_finder)
 
-    pubmed_evidence_summary = _summarize_pubmed_evidence(state, pubmed_evidence, final_overall)
+    # summary_source 는 "PubMed 근거 요약(규칙 기반)" 라벨을 붙일지 판단하는 데만
+    # 쓴다. 이 호출도 결정 루프 밖의 보조 후처리라 decision_sources 에는 절대
+    # 반영하지 않는다(리뷰 finding 1).
+    pubmed_evidence_summary, summary_source = _summarize_pubmed_evidence(state, pubmed_evidence, final_overall)
     if pubmed_evidence_summary:
         checks = final_result.get("checks") if isinstance(final_result.get("checks"), list) else []
+        # 규칙 기반 문자열 조합 요약을 모델이 쓴 것처럼 보이게 하지 않는다(리뷰 finding 1).
+        summary_label = "PubMed 근거 요약" if summary_source == "llm" else "PubMed 근거 요약(규칙 기반)"
         checks.append({
             "type": "PUBMED_EVIDENCE",
             "status": "REFERENCE",
-            "message": f"PubMed 근거 요약: {pubmed_evidence_summary}",
+            "message": f"{summary_label}: {pubmed_evidence_summary}",
             "evidence": [
                 _format_pubmed_article(article, include_abstract=True)
                 for article in pubmed_evidence[:3]
@@ -173,10 +205,26 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
             "pubmedEvidenceSummary": pubmed_evidence_summary,
         },
         "reasoningTrace": reasoning_trace,
+        "llmStatus": _resolve_llm_status(decision_sources),
     })
     if pubmed_evidence and final_overall != "PASS":
         final_result["reason"] = _with_pubmed_reason(str(final_result.get("reason") or ""), pubmed_evidence)
     return ValidationAgentResponse(**_normalize_final_result(final_result))
+
+
+def _resolve_llm_status(sources: List[str]) -> str:
+    """실행 경로에서 llmStatus 를 도출한다(spec §6.2, GC-3).
+
+    설정이 아니라 실제로 무엇이 결정을 내렸는지를 본다.
+    LLM 이 한 번이라도 결정했으면 real, 전부 stub 이면 stub, 그 외는 fallback.
+    """
+    if not sources:
+        return "fallback"
+    if all(s == "stub" for s in sources):
+        return "stub"
+    if any(s == "llm" for s in sources):
+        return "real"
+    return "fallback"
 
 
 def _invoke_tool(
@@ -185,6 +233,7 @@ def _invoke_tool(
     thought: str,
     payload: Dict[str, Any],
     tool_obj: Any,
+    source: str = "fallback",
 ) -> Dict[str, Any]:
     try:
         observation = tool_obj.invoke(payload)
@@ -195,15 +244,90 @@ def _invoke_tool(
         "action": action,
         "actionInput": payload,
         "observation": observation,
+        # 이 스텝이 어디서 나왔는지: "llm" | "stub" | "rule" | "fallback"(spec §6.3).
+        # "rule" 은 결정 루프의 지원 없이 항상 실행되는 규칙 기반 후처리 스텝
+        # (예: PASS 후 PubMed 보강, 후보 없을 때의 Prescription Finder 재조회) 전용이다
+        # — 이 스텝들은 애초에 LLM 이 관여할 여지가 없으므로, 흠 없는 LLM 응답에도
+        # "fallback" 이 찍혀 신호가 무의미해지는 것을 막는다(리뷰 finding 2).
+        "source": source,
+    })
+    return observation if isinstance(observation, dict) else {"status": "UNKNOWN", "raw": observation}
+
+
+def _downgrade_by_payload_source(source: str, payload_status: Optional[str]) -> str:
+    """스텝의 페이로드 출처가 모델이 아니면 강등한다. 승격은 절대 하지 않는다.
+
+    결정이 LLM 이었어도 그 스텝이 실제로 쓴 데이터가 스텁/폴백에서 왔다면
+    트레이스는 그 사실을 우선한다. 반대로, 결정이 LLM 이 아니었는데 페이로드가
+    모델에서 왔다고 source 를 "llm" 으로 올리지는 않는다 — source 는 이 스텝이
+    어디서 결정됐는지도 함께 담기 때문이다.
+    """
+    if source != "llm":
+        return source
+    if payload_status == "real":
+        return source
+    return "fallback"
+
+
+def _invoke_prescription_finder(
+    reasoning_trace: List[Dict[str, Any]],
+    thought: str,
+    payload: Dict[str, Any],
+    source: str,
+) -> Dict[str, Any]:
+    """Prescription Finder 전용 호출 래퍼.
+
+    이 스텝의 트레이스 `source` 는 스텝을 촉발한 결정의 출처(`source`)에서
+    시작하되, 처방 RAG 자신이 보고한 `recommendationLlmStatus` 로 다운그레이드한다
+    (GC-3, task 11 §Step 22) — 결정이 LLM 이었어도 실제로 쓴 페이로드가
+    스텁/폴백에서 왔다면 트레이스는 그 사실을 우선한다. **`decision_sources` 에는
+    절대 반영하지 않는다** — 최상위 llmStatus 를 오염시키면 Task 6 의 결함이
+    재발한다(브리프 §주의).
+    """
+    try:
+        observation = prescription_finder.invoke(payload)
+    except Exception as exc:  # noqa: BLE001
+        observation = {"status": "FAILED", "evidence": [str(exc)]}
+    payload_status = (
+        observation.get("recommendationLlmStatus") if isinstance(observation, dict) else None
+    )
+    trace_source = _downgrade_by_payload_source(source, payload_status)
+    reasoning_trace.append({
+        "thought": thought,
+        "action": "Prescription Finder",
+        "actionInput": payload,
+        "observation": observation,
+        "source": trace_source,
     })
     return observation if isinstance(observation, dict) else {"status": "UNKNOWN", "raw": observation}
 
 
 def _create_llm() -> Optional[ChatOpenAI]:
-    if not os.environ.get("OPENAI_API_KEY"):
+    """게이트웨이를 통해 LLM 에 붙는다.
+
+    자격증명은 게이트웨이가 갖는다. 이 서비스는 base_url 만 안다(spec §3.1).
+
+    timeout/max_retries 를 명시하지 않으면 langchain-openai 가 내부 openai SDK
+    에 timeout=None(무한대) 을 넘긴다 — SDK 기본값 600s 를 오히려 무력화한다.
+    이 서비스는 RabbitMQ 컨슈머 스레드 하나가 prefetch_count=1 로 도는 구조라
+    (rabbit_worker.py), 이 호출이 걸리면 ack/nack 없이 영원히 막혀 뒤에 오는
+    모든 환자 작업이 무기한 대기한다(최종 리뷰 CRITICAL). max_retries=0 도
+    timeout 만큼 중요하다 — 재시도는 게이트웨이가 소유한다(spec §6.1). SDK가
+    자체적으로 재시도하면 게이트웨이의 backoff 안에 SDK의 backoff 가 중첩돼
+    상류 429 상황에서 호출 수가 곱으로 불어난다.
+    """
+    base_url = os.environ.get("LLM_GATEWAY_BASE_URL")
+    if not base_url:
         return None
-    model = os.environ.get("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
-    return ChatOpenAI(model=model, temperature=0)
+    # temperature 를 넘기지 않는다 — luna 계약이며 게이트웨이가 어차피 제거한다(spec §5).
+    return ChatOpenAI(
+        model=os.environ.get("LLM_MODEL", "openai.gpt-5.6-luna"),
+        base_url=base_url,
+        api_key="unused-gateway-handles-auth",
+        default_headers={"X-LLM-Caller": "validation-agent"},
+        timeout=float(os.environ.get("VALIDATION_LLM_TIMEOUT_SECONDS", "180")),
+        max_retries=0,
+    )
 
 
 def _decide_next_tool(
@@ -212,13 +336,22 @@ def _decide_next_tool(
     pubmed_queries: List[str],
     iteration: int,
 ) -> Dict[str, Any]:
+    """결정 dict 에 `_source` 키를 실어 돌려준다.
+
+    `_source` 는 트레이스 표시와 llmStatus 산출에 쓰이며, 상위에서 제거된다.
+    """
     if resolve_provider() == "stub":
-        return stub_tool_decision(iteration)
-    if os.environ.get("OPENAI_API_KEY"):
+        decision = stub_tool_decision(iteration)
+        decision["_source"] = "stub"
+        return decision
+    if os.environ.get("LLM_GATEWAY_BASE_URL"):
         decision = _llm_tool_decision(state, reasoning_trace, pubmed_queries, iteration)
         if decision:
+            decision["_source"] = "llm"
             return decision
-    return _fallback_tool_decision(state, pubmed_queries)
+    decision = _fallback_tool_decision(state, pubmed_queries)
+    decision["_source"] = "fallback"
+    return decision
 
 
 def _llm_tool_decision(
@@ -294,7 +427,12 @@ def _llm_tool_decision(
             HumanMessage(content=prompt),
         ])
         parsed = _parse_json_object(str(response.content))
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # 예외 메시지는 로그하지 않는다 — LLM_GATEWAY_BASE_URL 에 잘못 심긴
+        # 자격증명이 있다면 트레이스백/메시지에 요청 URL이 실릴 수 있다(GC-7).
+        # 타입만으로도 운영자가 원인 계열(연결 실패/타임아웃/파싱 실패 등)을
+        # 좁히기에 충분하다.
+        logger.warning("게이트웨이 도구 결정 호출 실패, 폴백으로 전환: %s", type(exc).__name__)
         return None
     if not parsed:
         return None
@@ -361,6 +499,7 @@ def _execute_decided_tool(
     reasoning_trace: List[Dict[str, Any]],
     pubmed_evidence: List[Dict[str, Any]],
     pubmed_queries: List[str],
+    source: str,
 ) -> None:
     action = str(decision.get("action") or "")
     thought = str(decision.get("thought") or f"{action} 실행")
@@ -375,6 +514,7 @@ def _execute_decided_tool(
             thought,
             payload,
             xray_result_loader,
+            source=source,
         )
         return
 
@@ -390,6 +530,7 @@ def _execute_decided_tool(
             thought,
             payload,
             disease_validator,
+            source=source,
         )
         return
 
@@ -405,6 +546,7 @@ def _execute_decided_tool(
             thought,
             payload,
             prescription_validator,
+            source=source,
         )
         return
 
@@ -419,17 +561,24 @@ def _execute_decided_tool(
                 thought,
                 {"query": query, "max_results": int(action_input.get("max_results") or 3)},
                 pubmed_loader,
+                source=source,
             )
             pubmed_evidence.extend(_dedupe_pubmed_articles(pubmed_result.get("articles") or []))
         else:
             reason = _summary_for_current_state(state)
-            pubmed_evidence.extend(_load_pubmed_evidence(
+            # 두 번째 반환값(쿼리 생성 출처)은 _load_pubmed_evidence 내부에서 이미
+            # per-query 트레이스 다운그레이드에 반영됐다. 여기서 decision_sources 에
+            # 다시 밀어넣지 않는다 — 이 스텝 자체는 "결정"이 아니라 그 결정이
+            # 실행된 보조 도구 호출일 뿐이다(리뷰 finding 1).
+            evidence, _query_source = _load_pubmed_evidence(
                 reasoning_trace,
                 thought,
                 state,
                 reason,
                 pubmed_queries,
-            ))
+                source=source,
+            )
+            pubmed_evidence.extend(evidence)
         return
 
     if action == "Prescription Finder":
@@ -440,16 +589,29 @@ def _execute_decided_tool(
             "diseases": state.get("saved_diseases", []),
             "symptoms": f"{state.get('symptoms') or ''}\n검증 사유: {reason}\nPubMed query: {query_context}",
         }
-        finder_result = _invoke_tool(
+        finder_result = _invoke_prescription_finder(
             reasoning_trace,
-            action,
             thought,
             payload,
-            prescription_finder,
+            source=source,
         )
         candidates = finder_result.get("candidatePrescriptions") or []
         if candidates:
             state["candidate_prescriptions"] = _normalize_prescription_candidates(candidates)
+        return
+
+    # 인식하지 못하는 액션(모델의 도구명 환각 등)이다. 위 분기 전부를 그냥
+    # 통과시켜 아무 트레이스도, observation 도 남기지 않고 리턴하면 GC-2("절대
+    # 조용히 버리지 않는다") 위반이다(리뷰 H2). 인식된 액션과 같은
+    # shape/키(thought/action/actionInput/observation/source)로 드롭 사실
+    # 자체를 트레이스에 남긴다.
+    reasoning_trace.append({
+        "thought": thought,
+        "action": action,
+        "actionInput": action_input,
+        "observation": {"status": "UNKNOWN_ACTION", "evidence": [action]},
+        "source": source,
+    })
 
 
 def _summary_for_current_state(state: ValidationState) -> str:
@@ -463,40 +625,79 @@ def _load_pubmed_evidence(
     state: ValidationState,
     reason: str,
     pubmed_queries: List[str],
-) -> List[Dict[str, Any]]:
+    source: str = "fallback",
+) -> tuple[List[Dict[str, Any]], str]:
+    """PubMed 근거를 조회하고, `(articles, query_source)` 를 돌려준다.
+
+    `source` 인자는 이 호출을 촉발한 결정/컨텍스트의 출처다(예: 항상 실행되는
+    후처리라면 `"rule"`). 하지만 실제로 검색에 쓰인 질의문이 LLM 번역에서
+    나오지 않고 하드코딩된 사전 빌더에서 나왔다면, 트레이스는 그 사실을
+    우선한다 — `source == "llm"` 인데 이번에 실제로 쓰인 질의문은 규칙 기반인
+    경우까지 "llm" 이라 주장하지 않도록 다운그레이드한다(리뷰 finding 1).
+
+    이 판단은 후보 목록 전체가 아니라 **선택된 질의문 하나하나마다** 이뤄진다
+    (리뷰 finding 2). `_build_pubmed_queries` 는 LLM 생성 질의문을 먼저 반환하고
+    이어서 `KOREAN_PUBMED_TERMS` 사전 빌더 질의문을 반환하는데, 루프는 이미
+    `pubmed_queries` 에 있는(=이전 호출에서 이미 쓰인) 질의문을 건너뛴다. 그
+    결과 두 번째 `_load_pubmed_evidence` 호출에서는 LLM 질의문이 중복 제거로
+    빠지고 사전 빌더 질의문이 선택되는데, 예전 코드는 "이번 배치에 LLM 질의문이
+    하나라도 있었는가"만 봐서 다운그레이드를 건너뛰고 "llm" 을 그대로 찍었다.
+    반대로 `source` 가 이미 `"rule"`/`"stub"`/`"fallback"` 이면(=결정 자체가
+    LLM이 아니었으면) 그 표기를 그대로 둔다 — 질의문이 LLM에서 나왔다고 해서
+    "llm" 로 격상하지는 않는다.
+    """
     articles: List[Dict[str, Any]] = []
     max_query_attempts = int(os.environ.get("VALIDATION_PUBMED_MAX_QUERY_ATTEMPTS", "4"))
-    for query in _build_pubmed_queries(state, reason)[:max_query_attempts]:
+    queries, llm_queries = _build_pubmed_queries(state, reason)
+    for query in queries[:max_query_attempts]:
         if not query or query in pubmed_queries:
             continue
         pubmed_queries.append(query)
+        trace_source = source if query in llm_queries else ("fallback" if source == "llm" else source)
         pubmed_result = _invoke_tool(
             reasoning_trace,
             "Pubmed Loader",
             thought,
             {"query": query, "max_results": 3},
             pubmed_loader,
+            source=trace_source,
         )
         articles.extend(pubmed_result.get("articles") or [])
         if articles:
             break
-    return _dedupe_pubmed_articles(articles)
+    return _dedupe_pubmed_articles(articles), ("llm" if llm_queries else "fallback")
 
 
-def _build_pubmed_queries(state: ValidationState, reason: str) -> List[str]:
-    queries: List[str] = []
-    queries.extend(_generate_pubmed_queries_with_llm(state, reason))
+def _build_pubmed_queries(state: ValidationState, reason: str) -> tuple[List[str], List[str]]:
+    """검색어 후보 목록과 함께, 그중 어떤 것이 LLM 이 생성한 질의문인지를 돌려준다.
+
+    두 번째 반환값은 (예전처럼 "llm"/"fallback" 문자열 하나가 아니라) LLM 이
+    실제로 생성한 질의문 리스트다 — 호출부가 "이번에 선택된 질의문이 정말
+    이 리스트에 속하는지"를 개별적으로 물어볼 수 있어야 배치 단위 다운그레이드
+    누락(리뷰 finding 2)을 막을 수 있다. LLM 번역 검색어 생성이 실패하면 빈
+    리스트가 된다.
+    """
+    llm_queries, _query_source = _generate_pubmed_queries_with_llm(state, reason)
+    llm_queries = _dedupe_queries(llm_queries)
+    queries: List[str] = list(llm_queries)
     queries.append(_build_pubmed_query(state, reason))
     queries.append(_build_pubmed_reference_query(state))
     queries.append(_build_pubmed_disease_query(state))
     queries.append(_build_pubmed_prescription_query(state))
-    return _dedupe_queries(queries)
+    return _dedupe_queries(queries), llm_queries
 
 
-def _generate_pubmed_queries_with_llm(state: ValidationState, reason: str) -> List[str]:
+def _generate_pubmed_queries_with_llm(state: ValidationState, reason: str) -> tuple[List[str], str]:
+    """PubMed 검색어를 LLM으로 생성한다.
+
+    두 번째 반환값은 이 함수 자신의 실행 결과 출처다(`"llm"` 성공 / `"fallback"` 실패).
+    이전에는 예외를 삼키고 빈 리스트만 돌려주어, 실패했다는 사실이 호출부 어디에도
+    남지 않았다 — `_build_pubmed_queries` 가 이어서 하드코딩된 `KOREAN_PUBMED_TERMS`
+    기반 빌더로 넘어가도, 그 사실이 트레이스에 드러나지 않는 결함이 있었다(리뷰 finding 1).
+    """
     llm = _create_llm()
     if not llm:
-        return []
+        return [], "fallback"
 
     payload = _compact_state(state)
     prompt = f"""다음 진료 검증 컨텍스트를 PubMed ESearch에 적합한 영어 검색어로 정규화하라.
@@ -522,16 +723,22 @@ def _generate_pubmed_queries_with_llm(state: ValidationState, reason: str) -> Li
             HumanMessage(content=prompt),
         ])
         parsed = _parse_json_object(str(response.content))
-    except Exception:
-        return []
+    except Exception as exc:  # noqa: BLE001
+        # 타입만 로그한다 — 메시지/트레이스백은 URL 에 새어든 자격증명을
+        # 실을 수 있다(GC-7).
+        logger.warning("게이트웨이 PubMed 쿼리 생성 실패, 폴백으로 전환: %s", type(exc).__name__)
+        return [], "fallback"
 
     if not parsed or not isinstance(parsed.get("queries"), list):
-        return []
-    return [
+        return [], "fallback"
+    queries = [
         _clean_pubmed_query(query)
         for query in parsed["queries"]
         if isinstance(query, str) and _clean_pubmed_query(query)
     ]
+    if not queries:
+        return [], "fallback"
+    return queries, "llm"
 
 
 def _build_pubmed_query(state: ValidationState, reason: str) -> str:
@@ -639,9 +846,15 @@ def _summarize_pubmed_evidence(
     state: ValidationState,
     pubmed_evidence: List[Dict[str, Any]],
     overall: str,
-) -> str:
+) -> tuple[str, str]:
+    """PubMed 근거 요약과 함께 `(summary, source)` 를 돌려준다.
+
+    `source` 는 `"llm"`(모델이 실제로 요약) 또는 `"fallback"`(`_fallback_pubmed_summary`
+    의 문자열 조합)이다. 이전에는 이 함수가 어느 경로를 탔는지 호출부가 알 방법이
+    없어, 규칙 기반 요약이 `checks[]` 에 모델이 쓴 것처럼 노출됐다(리뷰 finding 1).
+    """
     if not pubmed_evidence:
-        return ""
+        return "", "fallback"
 
     llm = _create_llm()
     if llm:
@@ -680,11 +893,13 @@ def _summarize_pubmed_evidence(
             ])
             summary = " ".join(str(response.content).split())
             if summary:
-                return summary[:900]
-        except Exception:
-            pass
+                return summary[:900], "llm"
+        except Exception as exc:  # noqa: BLE001
+            # 타입만 로그한다 — 메시지/트레이스백은 URL 에 새어든 자격증명을
+            # 실을 수 있다(GC-7).
+            logger.warning("게이트웨이 PubMed 요약 실패, 규칙 기반으로 전환: %s", type(exc).__name__)
 
-    return _fallback_pubmed_summary(pubmed_evidence)
+    return _fallback_pubmed_summary(pubmed_evidence), "fallback"
 
 
 def _fallback_pubmed_summary(pubmed_evidence: List[Dict[str, Any]]) -> str:
@@ -919,7 +1134,10 @@ def _llm_finalize(state: ValidationState) -> Optional[Dict[str, Any]]:
         if parsed:
             parsed["candidatePrescriptions"] = state.get("candidate_prescriptions", [])
             return _normalize_final_result(parsed)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        # 타입만 로그한다 — 메시지/트레이스백은 URL 에 새어든 자격증명을
+        # 실을 수 있다(GC-7).
+        logger.warning("게이트웨이 최종화 호출 실패, 규칙 기반으로 전환: %s", type(exc).__name__)
         return None
     return None
 
@@ -1076,6 +1294,8 @@ def _normalize_final_result(result: Dict[str, Any]) -> Dict[str, Any]:
         ),
         "shouldNotifyDoctor": bool(result.get("shouldNotifyDoctor", overall != "PASS")),
         "shouldBlockAutoPrescription": bool(result.get("shouldBlockAutoPrescription", overall == "CRITICAL")),
+        # 설정이 아니라 실행 경로에서 나온 값을 그대로 통과시킨다(spec §6.2, GC-3).
+        "llmStatus": str(result.get("llmStatus") or "fallback"),
     }
 
 

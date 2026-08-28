@@ -10,22 +10,11 @@ import {
 } from "@/services/agent";
 import { Badge, Button, Field, Panel } from "@/components/ui";
 import styles from "./page.module.css";
+import { buildResultsCsv, type BatchResult } from "./buildResultsCsv";
 
 type ApiError = {
   error?: string;
   message?: string;
-};
-
-type BatchResult = {
-  rowNumber: number;
-  diseaseCode: string;
-  prescriptionCode: string;
-  prescriptionName: string;
-  status: "success" | "error";
-  medicalCertificate?: string;
-  generateRawResponse?: unknown;
-  evaluateRawResponse?: DocumentEvaluateResponse;
-  error?: string;
 };
 
 type HealthCheckResult = {
@@ -50,12 +39,6 @@ function toPrettyJson(value: unknown): string {
   } catch {
     return String(value);
   }
-}
-
-function escapeCsvCell(value: unknown): string {
-  const text = String(value ?? "");
-  const escaped = text.replace(/"/g, '""');
-  return `"${escaped}"`;
 }
 
 function columnLabelToIndex(label: string): number | null {
@@ -159,45 +142,6 @@ function buildDummyEvaluateResponse(medicalCertificate: string): DocumentEvaluat
       },
     ],
   };
-}
-
-function buildResultsCsv(results: BatchResult[]): string {
-  const header = [
-    "rowNumber",
-    "diseaseCode",
-    "prescriptionCode",
-    "prescriptionName",
-    "status",
-    "medicalCertificate",
-    "score",
-    "entailmentCount",
-    "totalPairs",
-    "premise",
-    "details",
-    "error",
-  ];
-
-  const lines = results.map((item) => {
-    const evaluation = item.evaluateRawResponse;
-    return [
-      item.rowNumber,
-      item.diseaseCode,
-      item.prescriptionCode,
-      item.prescriptionName,
-      item.status,
-      item.medicalCertificate ?? "",
-      evaluation?.score ?? "",
-      evaluation?.entailmentCount ?? "",
-      evaluation?.totalPairs ?? "",
-      evaluation?.premise ?? "",
-      evaluation ? JSON.stringify(evaluation.details) : "",
-      item.error ?? "",
-    ]
-      .map(escapeCsvCell)
-      .join(",");
-  });
-
-  return [header.map(escapeCsvCell).join(","), ...lines].join("\r\n");
 }
 
 export default function EvaluationPage() {
@@ -440,6 +384,7 @@ export default function EvaluationPage() {
             prescriptionName,
             status: "success",
             medicalCertificate: generatedCertificate,
+            llmStatus: generated.llmStatus,
             generateRawResponse: generated,
             evaluateRawResponse: evaluated,
           };

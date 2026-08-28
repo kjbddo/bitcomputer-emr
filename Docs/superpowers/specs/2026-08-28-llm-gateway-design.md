@@ -240,6 +240,7 @@ LLM 을 쓰는 응답에 `llmStatus` 필드를 추가한다.
 - [ ] `response_format: {"type": "json_object"}` 이 mantle 에서 동작하는가 (`prescription_api` 가 의존한다)
 - [ ] mantle 의 tool calling 이 LangChain `ChatOpenAI` 경유로 동작하는가 (`validation-agent` 의 ReAct 가 의존한다)
 - [ ] Bedrock TPM 기본 쿼터가 이 워크로드에 충분한가 (출력 토큰이 10배로 차감된다)
+- [ ] 게이트웨이의 시도당 타임아웃 45초가 luna 의 실제 p95 대비 충분한가 — 낮게 잡았다면 정상 지연이 하드 실패로 바뀐다. 시도 1이 생성 도중 끊기고 부분 출력이 과금된 채 버려지며, 3회 반복 후 호출자는 136.5초 뒤 502 를 받는다. 이 값은 전체 타임아웃 사다리의 기준점이다(services/llm-gateway/app/config.py).
 
 ---
 
@@ -251,5 +252,5 @@ LLM 을 쓰는 응답에 `llmStatus` 필드를 추가한다.
 4. `LLM_PROVIDER=stub` 에서 게이트웨이 없이 기존 테스트·E2E 가 그대로 통과한다.
 5. 게이트웨이가 `temperature` 를 제거하고 `max_tokens` 를 변환하며, 그 사실을 로그로 남긴다 — 테스트로 고정한다.
 6. LLM 을 쓸 수 없을 때 응답의 `llmStatus` 가 `fallback` 이고, 폴백 트레이스가 LLM 추론과 구분된다 — 테스트로 고정한다.
-7. §10 의 네 항목이 실측되고 결과가 이 문서에 기록됐다.
+7. §10 의 다섯 항목이 실측되고 결과가 이 문서에 기록됐다.
 8. 게이트웨이가 compose 스택에서 기동하고 헬스체크를 통과한다.

@@ -24,7 +24,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException
@@ -39,9 +39,6 @@ try:
     from dotenv import load_dotenv
 except ImportError:
     load_dotenv = None
-
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 
 from llm_provider import resolve_provider, stub_prescription_response
 
@@ -70,15 +67,42 @@ def _load_dotenv_if_present() -> None:
         return
     env_file = SCRIPT_DIR / ".env"
     if env_file.is_file():
-        # 개발 환경에서 이미 export 된 GOOGLE_API_KEY(구키)가 남아 있으면 .env 값이 무시되는 혼선이 잦다.
-        # .env 를 "로컬 단일 진실"로 취급하기 위해 override=True 로 로드한다.
+        # 개발 환경에서 이미 export 된 예전 값(예: LLM_GATEWAY_BASE_URL)이 남아 있으면
+        # .env 값이 무시되는 혼선이 잦다. .env 를 "로컬 단일 진실"로 취급하기 위해
+        # override=True 로 로드한다 — certificate_api.py 와 동일한 정책(최종 리뷰).
         load_dotenv(env_file, override=True)
 
 
 _load_dotenv_if_present()
 
-DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-DEFAULT_TEMPERATURE = float(os.environ.get("GEMINI_TEMPERATURE", "0.0"))
+
+_ZERO_WIDTH_CHARS = "​‌‍﻿"
+
+
+def _strip_zero_width(text: str) -> str:
+    """블랭크 판정 전에 폭이 0인 문자를 제거한다.
+
+    certificate_api.py 의 동일 함수와 같은 이유: U+200B(zero-width space)
+    하나만 있는 content 는 str.strip() 을 통과해 llmStatus="real" 인 "진짜"
+    처방 추천으로 새어나간다. blank 판정에만 쓰고 반환값 자체는 건드리지
+    않는다(최종 리뷰 IMPORTANT 2 — 이 가드는 Task 8 에서 certificate_api.py 에만
+    들어가고 이 파일에는 이관되지 않았다).
+    """
+    for ch in _ZERO_WIDTH_CHARS:
+        text = text.replace(ch, "")
+    return text
+
+
+def _default_llm_model() -> str:
+    """LLM_MODEL 환경변수를 매 호출 시점에 읽는다.
+
+    certificate_api.py 의 동일 함수와 같은 이유: import 시점 상수(구 DEFAULT_MODEL)와
+    호출 시점 재조회가 각각 따로 os.environ.get() 을 부르면, import 시점 값은
+    프로세스가 뜬 이후 환경변수가 바뀌어도 갱신되지 않아 /health 가 보고하는
+    default_model 이 실제로 게이트웨이에 실리는 model 과 어긋날 수 있다(최종 리뷰
+    IMPORTANT 2). 단일 함수로 합쳐 두 지점이 항상 같은 값을 보게 한다.
+    """
+    return os.environ.get("LLM_MODEL", "openai.gpt-5.6-luna")
 
 
 class PrescriptionRecommendRequest(BaseModel):
@@ -134,6 +158,10 @@ class PrescriptionRecommendResponse(BaseModel):
     cohort_rx_count: int = 0
     toolTrace: List[Dict[str, Any]] = Field(default_factory=list)
     engineStatus: str = "real"
+    # LLM 을 실제로 썼는지. engineStatus 와 달리 실행 경로에서 도출한다(spec §6.2).
+    # 기본값을 두지 않는다 — 생성 시 값을 빠뜨리면 "모델이 실제로 판단했다"는
+    # 거짓 신호를 조용히 내보내게 된다(MINOR 5).
+    llmStatus: Literal["real", "stub"]
 
 
 class PrescriptionFeedbackItem(BaseModel):
@@ -161,13 +189,13 @@ from env_check import require_env
 
 _required = ["ARANGO_PASSWORD"]
 if os.environ.get("LLM_PROVIDER", "real") != "stub":
-    _required.append("GOOGLE_API_KEY")
+    _required.append("LLM_GATEWAY_BASE_URL")
 require_env(_required)
 
 app = FastAPI(
     title="BitComputer Prescription Agent",
     version="0.1.0",
-    description="ArangoDB 그래프 + Gemini 기반 처방 추천 에이전트 (Spring Boot 연동용).",
+    description="ArangoDB 그래프 + LLM 게이트웨이 기반 처방 추천 에이전트 (Spring Boot 연동용).",
 )
 
 _ARANGO_HISTORY_VTX = "recommendation_histories"
@@ -196,10 +224,8 @@ def favicon() -> Response:
 def health() -> Dict[str, Any]:
     return {
         "status": "ok",
-        "google_api_key_set": bool(os.environ.get("GOOGLE_API_KEY")),
-        # 환경변수가 있어도 Google 에서 거절(API_KEY_INVALID)할 수 있음 — 유효성은 /health 로 판단 불가
-        "google_api_key_note": "non_empty env only; validity is checked on first /recommend (Gemini)",
-        "default_model": DEFAULT_MODEL,
+        "llm_gateway_configured": bool(os.environ.get("LLM_GATEWAY_BASE_URL")),
+        "default_model": _default_llm_model(),
         "arangodb_expected": (
             f"{os.environ.get('ARANGO_HOST', '127.0.0.1')}:"
             f"{os.environ.get('ARANGO_PORT', '8529')} "
@@ -279,57 +305,94 @@ def _get_arango_db():
     return connect_arango(cfg)
 
 
-def _is_openai_model(model_id: str) -> bool:
-    normalized = model_id.strip().lower()
-    return normalized.startswith("openai:") or normalized.startswith("gpt-")
+def _invoke_gateway_json(system_prompt: str, user_prompt: str, model: str) -> str:
+    """게이트웨이를 통해 JSON 응답을 받는다.
 
-
-def _openai_model_id(model_id: str) -> str:
-    return model_id.split(":", 1)[1] if model_id.lower().startswith("openai:") else model_id
-
-
-def _invoke_openai_json(
-    model_id: str,
-    temperature: float,
-    system_prompt: str,
-    user_prompt: str,
-) -> str:
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
+    자격증명은 게이트웨이가 갖는다(spec §3.1). temperature 는 보내지 않는다 —
+    luna 계약이며 게이트웨이가 어차피 제거한다(spec §5). ``model`` 은 호출자가
+    실제로 payload 에 실릴 값을 명시적으로 넘긴다 — 여기서 다시 환경변수를
+    읽으면 호출자의 trace 가 기록한 모델과 실제로 보낸 모델이 어긋날 수 있다.
+    """
+    base_url = os.environ.get("LLM_GATEWAY_BASE_URL")
+    if not base_url:
         raise HTTPException(
-            status_code=500,
-            detail="OPENAI_API_KEY 가 설정되지 않았습니다. 서버 환경변수 또는 .env 를 확인하세요.",
+            status_code=503,
+            detail="LLM_GATEWAY_BASE_URL 이 설정되지 않았습니다.",
         )
-
     payload = {
-        "model": _openai_model_id(model_id),
-        "temperature": temperature,
+        "model": model,
         "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
     }
-    timeout = float(os.environ.get("OPENAI_LLM_TIMEOUT", "180"))
+    # LLM_TIMEOUT_SECONDS 가 아니다 — 그 이름은 게이트웨이의 1회 시도당 타임아웃
+    # (services/llm-gateway/app/config.py) 이 이미 쓰고 있다. infra/.env 는 한
+    # 파일을 공유하고 이 파일은 override=True 로 로드하므로, 이름이 같으면
+    # 운영자가 "게이트웨이 타임아웃"을 의도해 값을 바꿔도 이 호출자의 총
+    # 대기시간까지 함께 바뀌어 재시도가 전부 무의미해진다(최종 리뷰 IMPORTANT).
+    timeout_raw = os.environ.get("LLM_GATEWAY_TIMEOUT_SECONDS", "180")
+    try:
+        timeout = float(timeout_raw)
+    except ValueError as exc:
+        # 최종 리뷰 IMPORTANT 2: try 밖에서 ValueError 가 그대로 터지면
+        # 트레이스백이 노출된 500 이 나간다. certificate_api.py 는 Task 8 에서
+        # 이 가드를 받았지만 이 파일은 복사 당시(같은 디렉터리, 같은 빌드
+        # 컨텍스트) 받지 못했다. 잘못된 설정값도 "실패 계약" 안에서 다뤄져야
+        # 한다(GC-2).
+        logger.exception("LLM_GATEWAY_TIMEOUT_SECONDS 파싱 실패: %r", timeout_raw)
+        raise HTTPException(
+            status_code=503,
+            detail=f"LLM_GATEWAY_TIMEOUT_SECONDS 설정이 올바르지 않습니다: {timeout_raw!r}",
+        ) from exc
     try:
         with httpx.Client(timeout=timeout) as client:
             response = client.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
+                f"{base_url.rstrip('/')}/chat/completions",
+                headers={"X-LLM-Caller": "prescription-api"},
                 json=payload,
             )
             response.raise_for_status()
-            return str(response.json()["choices"][0]["message"]["content"]).strip()
+            content = response.json()["choices"][0]["message"]["content"]
+            # 최종 리뷰 IMPORTANT 2: 200 이지만 형식이 깨진 본문(content: null/""/
+            # 비문자열)을 str() 로 뭉개서 반환하면 "None" 같은 지어낸 문자열이
+            # llmStatus="real" 인 진짜 처방 추천으로 통과한다(GC-2). certificate_api.py
+            # 는 Task 8 에서 이 가드를 받았다 — 여기서도 같은 검사를 적용한다.
+            # zero-width 문자만 있는 content 도 blank 판정 전에 걸러낸다.
+            if not isinstance(content, str) or not _strip_zero_width(content).strip():
+                raise ValueError(
+                    f"게이트웨이가 빈 본문을 돌려주었습니다: content={repr(content)[:200]}"
+                )
+            return content.strip()
     except httpx.HTTPStatusError as exc:
-        body = exc.response.text[:500] if exc.response is not None else ""
-        logger.exception("OpenAI 호출 실패: status=%s body=%s", exc.response.status_code, body)
-        raise HTTPException(
-            status_code=502,
-            detail=f"OpenAI 호출 실패: status={exc.response.status_code}",
-        ) from exc
+        # exc.response.text 는 게이트웨이가 GC-7 에 맞춰 이미 상류 응답을 걷어낸
+        # 구조화된 본문(예: {"error":{"type":"upstream_error","upstreamStatus":N,
+        # "attempts":N}})이므로 로그·detail 에 그대로 실어도 안전하다. 요청 헤더나
+        # Authorization 값은 여기서 절대 로그하지 않는다.
+        body = exc.response.text[:500]
+        logger.exception(
+            "게이트웨이 호출 실패: status=%s body=%s", exc.response.status_code, body
+        )
+        detail = f"LLM 게이트웨이 호출 실패: status={exc.response.status_code}"
+        try:
+            error_body = exc.response.json()
+        except ValueError:
+            error_body = None
+        upstream_info = error_body.get("error") if isinstance(error_body, dict) else None
+        if isinstance(upstream_info, dict) and (
+            "upstreamStatus" in upstream_info or "attempts" in upstream_info
+        ):
+            detail += (
+                f" upstreamStatus={upstream_info.get('upstreamStatus')}"
+                f" attempts={upstream_info.get('attempts')}"
+            )
+        else:
+            detail += f" body={body}"
+        raise HTTPException(status_code=502, detail=detail) from exc
     except Exception as exc:
-        logger.exception("OpenAI 호출 실패")
-        raise HTTPException(status_code=502, detail=f"OpenAI 호출 실패: {exc}") from exc
+        logger.exception("게이트웨이 호출 실패")
+        raise HTTPException(status_code=502, detail=f"LLM 게이트웨이 호출 실패: {exc}") from exc
 
 
 def _ensure_feedback_graph_collections(db: Any) -> None:
@@ -349,17 +412,6 @@ def recommend(
     req: PrescriptionRecommendRequest,
     x_prescription_eval_trace: Optional[str] = Header(default=None),
 ) -> PrescriptionRecommendResponse:
-    requested_model = req.model or DEFAULT_MODEL
-    if (
-        resolve_provider() != "stub"
-        and not _is_openai_model(requested_model)
-        and not os.environ.get("GOOGLE_API_KEY")
-    ):
-        raise HTTPException(
-            status_code=500,
-            detail="GOOGLE_API_KEY 가 설정되지 않았습니다. 서버 환경변수 또는 .env 를 확인하세요.",
-        )
-
     effective_top_rx: Any = req.top_rx
     used_arango = False
     arango_count = 0
@@ -579,57 +631,39 @@ def recommend(
         },
     )
 
-    model_id = requested_model
-    temperature = (
-        req.temperature if req.temperature is not None else DEFAULT_TEMPERATURE
-    )
-
-    try:
-        if resolve_provider() == "stub":
-            raw = stub_prescription_response(effective_top_rx)
-            trace_tool("llm_generate", True, status="success", model="stub", temperature=0.0)
-        else:
-            if _is_openai_model(model_id):
-                raw = _invoke_openai_json(model_id, temperature, SYSTEM_PRESCRIPTION, user_msg)
-            else:
-                llm = ChatGoogleGenerativeAI(model=model_id, temperature=temperature)
-                resp = llm.invoke(
-                    [
-                        ("system", SYSTEM_PRESCRIPTION),
-                        ("human", user_msg),
-                    ]
-                )
-                raw = (resp.content or "").strip() if hasattr(resp, "content") else str(resp).strip()
-            trace_tool(
-                "llm_generate",
-                True,
-                status="success",
-                model=model_id,
-                temperature=temperature,
-            )
-    except ChatGoogleGenerativeAIError as exc:
-        logger.exception("Gemini 호출 실패")
-        trace_tool(
-            "llm_generate",
-            True,
-            status="failed",
-            model=model_id,
-            temperature=temperature,
-            error=str(exc),
+    # 게이트웨이에 실제로 실릴 모델. req.model 은 게이트웨이 payload 에 실리지
+    # 않는다(luna 계약 — 서비스가 하나의 고정 모델만 사용). GC-2: req.model /
+    # req.temperature 가 채워져 있는데도 조용히 버려지면 안 되므로 흔적을 남긴다.
+    # 최종 리뷰 IMPORTANT 2: os.environ.get() 을 여기서 또 부르지 않는다 —
+    # /health(_default_llm_model()) 와 서로 다른 시점에 읽으면 두 값이 어긋날
+    # 수 있다. 단일 함수로 합쳐 항상 같은 값을 보게 한다.
+    wire_model = _default_llm_model()
+    ignored_kwargs: Dict[str, Any] = {}
+    if req.model and req.model != wire_model:
+        logger.warning(
+            "req.model=%r 은(는) 무시됩니다 — 게이트웨이에는 항상 LLM_MODEL=%r 로 전송됩니다.",
+            req.model,
+            wire_model,
         )
-        msg = str(exc)
-        if "PERMISSION_DENIED" in msg or "403" in msg:
-            # 키 유출(leaked) 신고로 차단되는 케이스가 실제로 자주 발생한다.
-            # 사용자에게 "키 재발급/교체"가 필요하다는 힌트를 주기 위해 상태코드를 구분한다.
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "Gemini 권한 오류(PERMISSION_DENIED)로 호출이 차단되었습니다. "
-                    "대부분 API 키가 만료/비활성화되었거나 '유출(leaked)로 신고'되어 폐기된 경우입니다. "
-                    "새 GOOGLE_API_KEY 로 교체한 뒤 다시 시도하세요."
-                ),
-            ) from exc
-        raise HTTPException(status_code=502, detail=f"Gemini 호출 실패: {exc}") from exc
+        ignored_kwargs["ignoredRequestModel"] = req.model
+    if req.temperature is not None:
+        logger.warning(
+            "req.temperature=%r 은(는) 무시됩니다 — 게이트웨이는 temperature 를 받지 않습니다(luna 계약).",
+            req.temperature,
+        )
+        ignored_kwargs["ignoredTemperature"] = req.temperature
+
+    provider = resolve_provider()
+    if provider == "stub":
+        raw = stub_prescription_response(effective_top_rx)
+        llm_status = "stub"
+        trace_tool(
+            "llm_generate", True, status="success", model="stub", temperature=0.0, **ignored_kwargs
+        )
+    else:
+        raw = _invoke_gateway_json(SYSTEM_PRESCRIPTION, user_msg, wire_model)
+        llm_status = "real"
+        trace_tool("llm_generate", True, status="success", model=wire_model, **ignored_kwargs)
 
     try:
         data = parse_prescriptions_llm_response(raw)
@@ -670,7 +704,13 @@ def recommend(
         used_cohort_rx=used_cohort,
         cohort_rx_count=cohort_count,
         toolTrace=tool_trace if eval_trace_enabled else [],
-        engineStatus=resolve_provider(),
+        # MINOR 6: 같은 요청 안에서 resolve_provider() 를 두 번 읽지 않는다 — 스레드풀에서
+        # LLM_PROVIDER(프로세스 전역)가 요청 도중 바뀌면 engineStatus 와 llmStatus 가
+        # 서로 다른 시점의 값을 가리켜 응답이 자기모순에 빠질 수 있다. 위에서 이미 읽은
+        # provider 를 그대로 재사용한다 — GC-5: engineStatus 의 관측 가능한 동작(값)은
+        # 바뀌지 않는다, resolve_provider() 를 몇 번 호출하는지만 바뀐다.
+        engineStatus=provider,
+        llmStatus=llm_status,
     )
 
 

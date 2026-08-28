@@ -126,8 +126,8 @@ ValidationAgent는 처방 추천 버튼을 계기로 실행되는 검증 에이�
 ```mermaid
 flowchart TD
   A[ValidationAgentRequest] --> B[초기 State 구성]
-  B --> C{OPENAI_API_KEY 존재?}
-  C -->|예| D[OpenAI tool_decider]
+  B --> C{LLM_GATEWAY_BASE_URL 존재?}
+  C -->|예| D[게이트웨이 경유 tool_decider]
   C -->|아니오| E[Fallback 순서 결정]
   D --> F[도구 1개 선택]
   E --> F
@@ -158,12 +158,12 @@ flowchart LR
   State[현재 state] --> Prompt[도구 선택 프롬프트]
   Trace[최근 reasoningTrace] --> Prompt
   Tools[availableTools 목록] --> Prompt
-  Prompt --> OpenAI[OpenAI gpt-5-nano]
-  OpenAI --> Decision["{ thought, action, actionInput }"]
+  Prompt --> Gateway[llm-gateway 경유 LLM_MODEL]
+  Gateway --> Decision["{ thought, action, actionInput }"]
   Decision --> Executor[도구 실행기]
 ```
 
-`OPENAI_MODEL` 기본값은 `gpt-5-nano`다. 비용과 속도를 우선하면서도 도구 선택, PubMed query 생성, 초록 요약 같은 경량 reasoning에 적합하도록 설정했다.
+`LLM_MODEL` 기본값은 `openai.gpt-5.6-luna`다. 비용과 속도를 우선하면서도 도구 선택, PubMed query 생성, 초록 요약 같은 경량 reasoning에 적합하도록 설정했다. 자격증명은 `services/llm-gateway` 가 갖고 있으며, ValidationAgent 는 게이트웨이 base URL(`LLM_GATEWAY_BASE_URL`)만 안다.
 
 ### 6.4 결과 구조
 
