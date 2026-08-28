@@ -73,9 +73,10 @@ def test_upstream_failure_is_logged_as_failed(client, caplog):
     def handler(_request):
         return httpx.Response(400, text="bad request")
 
-    # llm-gateway 로거는 명시적 레벨이 없어 effective level 이 이 로거의 레벨 미설정로
-    # 풀린다. caplog 만으로는 INFO 레코드가 애초에 발생하지 않으므로 로거
-    # 레벨도 함께 낮춰야 한다.
+    # 이 로거는 임포트 시점에 INFO 로 설정되므로 at_level 없이도 지금은 통과한다.
+    # 그래도 감싸는 이유는 LOG_LEVEL 환경변수가 그 레벨을 바꿀 수 있어서다 —
+    # 앰비언트 환경 때문에 테스트가 흔들리지 않게 레벨을 고정한다.
+    # (루트 레벨은 무관하다. 전파는 조상 로거의 레벨을 보지 않는다.)
     with caplog.at_level(logging.INFO, logger="llm-gateway"):
         with client(handler) as c:
             c.post("/v1/chat/completions", json={"model": "m", "messages": []})
