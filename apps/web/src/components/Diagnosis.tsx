@@ -70,7 +70,7 @@ function overallStatusTone(
 // "real" 이 아닌 모든 경우 — 값이 없는 경우 포함 — 를 드러낸다. 필드가 빠진 응답을
 // 조용히 "모델이 돌았다"로 읽으면 이 표시가 존재할 이유가 사라진다.
 export function llmStatusNotice(
-  llmStatus: string | undefined
+  llmStatus: string | null | undefined
 ): { label: string; tone: "warning" | "neutral" } | null {
   if (llmStatus === "real") return null;
   if (llmStatus === "stub") {
@@ -157,6 +157,10 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
   const [saving, setSaving] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [aiRecommendations, setAiRecommendations] = useState<RecommendedPrescriptionItem[]>([]);
+  // 검증 모달은 확인 클릭으로 사라지지만 "AI 추천 처방" 패널은 화면에 남는다.
+  // llmStatus 를 모달 state 에만 두면 모달을 닫는 순간 모델 미사용 여부를 알
+  // 방법이 사라진다 — aiRecommendations 와 생명주기를 맞춰 별도로 들고 있는다.
+  const [aiLlmStatus, setAiLlmStatus] = useState<string | null | undefined>(undefined);
   const [selectedRecommendationKeys, setSelectedRecommendationKeys] = useState<string[]>([]);
   const [validationModal, setValidationModal] = useState<ValidationJobResponse | null>(null);
   const [prescriptionPicker, setPrescriptionPicker] = useState<PrescriptionPickerState | null>(null);
@@ -175,6 +179,7 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
       clearDiagnoses();
       clearPrescriptionFeedback();
       setAiRecommendations([]);
+      setAiLlmStatus(undefined);
       setSelectedRecommendationKeys([]);
       setPrescriptionPicker(null);
       setAiSessionHistoryId(null);
@@ -185,6 +190,7 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
   useEffect(() => {
     clearPrescriptionFeedback();
     setAiRecommendations([]);
+    setAiLlmStatus(undefined);
     setSelectedRecommendationKeys([]);
     setPrescriptionPicker(null);
     setAiSessionHistoryId(null);
@@ -292,6 +298,7 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
       }
 
       setAiRecommendations(recommended);
+      setAiLlmStatus(result.llmStatus);
       setSelectedRecommendationKeys(recommended.map(recommendationKey));
       setAiSessionHistoryId(historyId);
       setAiSessionHistoryDiagnoseId(null);
@@ -494,7 +501,17 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
               </Badge>
               {(() => {
                 const notice = llmStatusNotice(validationModal.result?.llmStatus);
-                return notice ? <Badge tone={notice.tone}>{notice.label}</Badge> : null;
+                if (!notice) return null;
+                // overallStatus 배지(검증 결과)와 tone 이 같은 경우(WARNING/
+                // NEEDS_REVIEW + fallback)가 있어 색만으로는 어느 쪽이 검증
+                // 결과이고 어느 쪽이 모델 사용 여부인지 구분이 안 된다. 라벨
+                // 텍스트("모델 미사용" 등)는 그대로 두고 앞에 짧은 구분자만 붙인다.
+                return (
+                  <span className={styles.llmStatusGroup}>
+                    <span className={styles.llmStatusGroupLabel}>모델</span>
+                    <Badge tone={notice.tone}>{notice.label}</Badge>
+                  </span>
+                );
               })()}
             </div>
             <p className={styles.modalReason}>
@@ -641,7 +658,13 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
         {aiRecommendations.length > 0 ? (
           <div className={styles.aiPanel}>
             <div className={styles.aiPanelHeader}>
-              <strong>AI 추천 처방</strong>
+              <span className={styles.aiPanelTitle}>
+                <strong>AI 추천 처방</strong>
+                {(() => {
+                  const notice = llmStatusNotice(aiLlmStatus);
+                  return notice ? <Badge tone={notice.tone}>{notice.label}</Badge> : null;
+                })()}
+              </span>
               <Button type="button" variant="secondary" size="sm" onClick={handleApplySelectedRecommendations}>
                 선택 처방 반영
               </Button>

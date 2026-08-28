@@ -17,5 +17,9 @@ export default function Badge({
   tone?: Tone;
   children: React.ReactNode;
 }) {
-  return <span className={`${styles.badge} ${TONE_CLASS[tone]}`}>{children}</span>;
+  return (
+    <span className={`${styles.badge} ${TONE_CLASS[tone]}`} data-tone={tone}>
+      {children}
+    </span>
+  );
 }

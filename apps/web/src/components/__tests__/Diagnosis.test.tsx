@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import Diagnosis, { llmStatusNotice } from "../Diagnosis";
@@ -54,9 +54,23 @@ describe("llmStatusNotice", () => {
     expect(stub!.label).not.toBe(fallback!.label);
   });
 
+  // fallback 의 tone 만 확인하면 stub 분기의 tone 이 조용히 바뀌어도(예: neutral
+  // -> warning) 이 describe 블록 전체가 통과해버린다.
+  it("스텁의 tone 은 neutral 이다", () => {
+    expect(llmStatusNotice("stub")!.tone).toBe("neutral");
+  });
+
   // 필드가 없는 응답을 "모델이 돌았다"로 해석하면 이 태스크의 목적이 무너진다.
   it("필드가 없으면 모델이 돌았다고 가정하지 않는다", () => {
     expect(llmStatusNotice(undefined)).not.toBeNull();
+  });
+
+  // "real" 정확 일치만 통과시켜야 한다. 대소문자를 관대하게 받아주면(예:
+  // .toLowerCase() === "real") 오늘은 우연히 안전해도 계약을 느슨하게 만드는
+  // 변경이 조용히 들어올 수 있다. 대문자 "REAL" 은 계약 밖 값이므로 여전히
+  // fail-closed 여야 한다.
+  it("real 이 아닌 다른 대소문자 표기는 모델이 돌았다고 인정하지 않는다", () => {
+    expect(llmStatusNotice("REAL")).not.toBeNull();
   });
 });
 
@@ -65,6 +79,10 @@ describe("llmStatusNotice", () => {
 // 읽거나 하드코딩된 값을 넘겨도) 위 단위 테스트는 전부 통과한다. 그래서 실제 렌더
 // 경로(AI 처방 추천 클릭 -> 작업 폴링 -> 모달 오픈)를 통해 배지 문구가 실제로
 // 나타나는지 확인한다.
+//
+// 모달을 열면 같은 llmStatus 배지가 모달과 "AI 추천 처방" 패널 양쪽에 동시에
+// 뜬다(패널은 모달을 닫아도 남는다 — 아래 "모달을 닫아도" 테스트 참고). 그래서
+// 텍스트 매칭은 모달 안으로 범위를 좁혀 getByRole("dialog") 로 스코프한다.
 describe("검증 모달의 llmStatus 배선", () => {
   const clinicVisit = { patientId: 1, deptId: 1 };
 
@@ -76,16 +94,16 @@ describe("검증 모달의 llmStatus 배선", () => {
     );
   }
 
-  it("결과의 llmStatus 가 fallback 이면 모달에 모델 미사용 배지가 뜬다", async () => {
-    mockedRecommend.mockResolvedValue({ jobId: "job-1", historyId: 10, status: "RUNNING" });
+  function mockJobWithLlmStatus(jobId: string, llmStatus: string) {
+    mockedRecommend.mockResolvedValue({ jobId, historyId: 10, status: "RUNNING" });
     mockedGetJob.mockResolvedValue({
-      jobId: "job-1",
+      jobId,
       historyId: 10,
       status: "DONE",
       result: {
         overallStatus: "PASS",
         summary: "이상 없음",
-        llmStatus: "fallback",
+        llmStatus,
         recommendedPrescriptions: [
           {
             id: 1,
@@ -101,40 +119,23 @@ describe("검증 모달의 llmStatus 배선", () => {
         ],
       },
     } as ValidationJobResponse);
+  }
+
+  it("결과의 llmStatus 가 fallback 이면 모달에 모델 미사용 배지가 뜬다", async () => {
+    mockJobWithLlmStatus("job-1", "fallback");
 
     renderDiagnosis();
     fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
 
-    await waitFor(() => {
-      expect(screen.getByText("규칙 기반 결과 — 모델 미사용")).toBeInTheDocument();
-    });
+    const dialog = await screen.findByRole("dialog");
+    const noticeBadge = await within(dialog).findByText("규칙 기반 결과 — 모델 미사용");
+    // M5: tone 을 문구가 아니라 배지 자체(class/속성)로도 확인한다. 문구만
+    // 확인하면 warning -> neutral 로 tone 이 조용히 바뀌어도 못 잡는다.
+    expect(noticeBadge).toHaveAttribute("data-tone", "warning");
   });
 
   it("결과의 llmStatus 가 real 이면 모델 미사용 배지가 뜨지 않는다", async () => {
-    mockedRecommend.mockResolvedValue({ jobId: "job-2", historyId: 10, status: "RUNNING" });
-    mockedGetJob.mockResolvedValue({
-      jobId: "job-2",
-      historyId: 10,
-      status: "DONE",
-      result: {
-        overallStatus: "PASS",
-        summary: "이상 없음",
-        llmStatus: "real",
-        recommendedPrescriptions: [
-          {
-            id: 1,
-            rank: 1,
-            prescription_code: "C1",
-            prescription_name: "약1",
-            reason: "",
-            confidence_score: 0.9,
-            dose: 1,
-            time: 1,
-            days: 1,
-          },
-        ],
-      },
-    } as ValidationJobResponse);
+    mockJobWithLlmStatus("job-2", "real");
 
     renderDiagnosis();
     fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
@@ -143,5 +144,28 @@ describe("검증 모달의 llmStatus 배선", () => {
       expect(screen.getByText("이상 없음")).toBeInTheDocument();
     });
     expect(screen.queryByText(/모델 미사용/)).toBeNull();
+  });
+
+  // IMPORTANT 3: 모달은 확인 클릭으로 사라지지만, aiRecommendations 와 함께
+  // 화면에 남는 "AI 추천 처방" 패널에는 llmStatus 를 알려줄 방법이 없었다.
+  // 모달을 닫은 뒤에도 배지가 패널에 남아 있는지 실제 렌더 경로로 확인한다.
+  it("모달을 닫아도 AI 추천 처방 패널에 모델 미사용 배지가 남는다", async () => {
+    mockJobWithLlmStatus("job-3", "fallback");
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByText("규칙 기반 결과 — 모델 미사용");
+
+    fireEvent.click(screen.getByRole("button", { name: "확인" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    const panelBadge = screen.getByText("규칙 기반 결과 — 모델 미사용");
+    expect(panelBadge).toBeInTheDocument();
+    expect(panelBadge).toHaveAttribute("data-tone", "warning");
   });
 });

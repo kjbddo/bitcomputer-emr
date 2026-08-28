@@ -20,6 +20,23 @@
   margin-bottom: var(--space-2);
 }
 
+.aiPanelTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.llmStatusGroup {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.llmStatusGroupLabel {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+}
+
 .code {
   color: var(--warning-text);
   font-weight: 500;

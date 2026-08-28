@@ -32,9 +32,12 @@ class ValidationAgentResponseTest {
         assertThat(parsed.getLlmStatus()).isEqualTo("fallback");
         assertThat(roundTripped).contains("\"llmStatus\":\"fallback\"");
         assertThat(roundTripped).contains("\"source\":\"fallback\"");
-        assertThat(roundTripped).contains("recommendedPrescriptions");
-        assertThat(roundTripped).contains("\"reason\"");
-        assertThat(roundTripped).contains("\"validation\"");
+        // 필드가 "있다"가 아니라 상류가 준 "값"이 왕복에서 살아남는지를 본다.
+        // contains("recommendedPrescriptions") 같은 키 이름만 확인하는 단언은
+        // setter 가 값을 버려도(예: 항상 null 로 덮어써도) 통과해버린다.
+        assertThat(roundTripped).contains("\"reason\":\"규칙 통과\"");
+        assertThat(roundTripped).contains("\"recommendedPrescriptions\":[{\"name\":\"약\"}]");
+        assertThat(roundTripped).contains("\"validation\":{\"k\":\"v\"}");
     }
 
     /**
