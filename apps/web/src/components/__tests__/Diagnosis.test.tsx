@@ -132,6 +132,10 @@ describe("검증 모달의 llmStatus 배선", () => {
     // M5: tone 을 문구가 아니라 배지 자체(class/속성)로도 확인한다. 문구만
     // 확인하면 warning -> neutral 로 tone 이 조용히 바뀌어도 못 잡는다.
     expect(noticeBadge).toHaveAttribute("data-tone", "warning");
+    // overallStatus 가 WARNING/NEEDS_REVIEW 면 amber 배지가 둘 나란히 선다.
+    // 이 접두어가 둘 중 어느 쪽이 실행 경로 표시인지 구분해준다. 없으면
+    // 무라벨 amber 칩 두 개로 조용히 되돌아간다.
+    expect(within(dialog).getByText("모델")).toBeInTheDocument();
   });
 
   it("결과의 llmStatus 가 real 이면 모델 미사용 배지가 뜨지 않는다", async () => {
