@@ -889,13 +889,15 @@ def _configure_logging() -> None:
     설정하지 않으면 루트가 WARNING 이고 핸들러도 없다 — uvicorn 기본 설정에서도
     그렇다. 그러면 logger.info() 로 내보내는 계측 레코드가 통째로 유실된다.
     """
-    root = logging.getLogger()
-    root.setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
-    if not any(getattr(h, "_llm_gateway", False) for h in root.handlers):
+    # 루트가 아니라 이 로거에만 설정한다. 루트 레벨을 올리면 NOTSET 인 모든
+    # 서드파티 로거의 바닥이 함께 올라가고, httpx 가 상류 호출마다 INFO 로
+    # 평문 한 줄씩 찍어 "한 줄에 JSON 하나" 가 깨진다.
+    logger.setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
+    if not any(getattr(h, "_llm_gateway", False) for h in logger.handlers):
         handler = logging.StreamHandler(sys.stdout)
         handler.setFormatter(logging.Formatter("%(message)s"))
         handler._llm_gateway = True  # type: ignore[attr-defined]
-        root.addHandler(handler)
+        logger.addHandler(handler)
 
 
 _configure_logging()

@@ -28,23 +28,26 @@ logger = logging.getLogger("llm-gateway")
 def _configure_logging() -> None:
     """계측 로그가 실제로 나가게 만든다.
 
-    설정하지 않으면 루트 로거가 WARNING 이고 핸들러도 없다 — uvicorn 기본
-    설정에서도 그렇다. 그러면 logger.info() 로 내보내는 계측 레코드가 통째로
-    유실된다. logger.warning() 은 logging.lastResort 덕에 stderr 로 나가기
-    때문에 유실이 더 눈에 안 띈다.
+    설정하지 않으면 이 로거에 레벨이 없어 루트의 WARNING 을 물려받는다 —
+    uvicorn 기본 설정에서도 그렇다. 그러면 logger.info() 로 내보내는 계측
+    레코드가 통째로 유실된다. logger.warning() 은 logging.lastResort 덕에
+    stderr 로 나가기 때문에 유실이 더 눈에 안 띈다.
 
-    컨테이너는 stdout 을 수집하므로 루트에 StreamHandler 를 붙인다.
-    메시지 자체가 이미 JSON 이라 포매터는 메시지만 통과시킨다.
-    uvicorn 의 자체 로거들은 propagate=False 라 중복 출력되지 않는다.
+    **루트가 아니라 이 로거에만 설정한다.** 루트 레벨을 INFO 로 올리면 레벨이
+    NOTSET 인 모든 서드파티 로거의 바닥이 함께 올라간다. 특히 httpx 가 상류
+    호출마다 INFO 로 한 줄씩 찍어서, 한 줄에 JSON 하나여야 할 stdout 이
+    평문과 섞인다 — 계측을 내보내려는 설정이 계측 스트림을 오염시키는 셈이다.
+
+    propagate 는 켜 둔다. 프로덕션의 루트에는 핸들러가 없어 아무 일도 없고,
+    테스트의 caplog 는 루트 핸들러로 잡기 때문에 꺼 두면 안 잡힌다.
     """
-    root = logging.getLogger()
     level = os.environ.get("LOG_LEVEL", "INFO").upper()
-    root.setLevel(level)
-    if not any(getattr(h, "_llm_gateway", False) for h in root.handlers):
+    logger.setLevel(level)
+    if not any(getattr(h, "_llm_gateway", False) for h in logger.handlers):
         handler = logging.StreamHandler(sys.stdout)
         handler.setFormatter(logging.Formatter("%(message)s"))
         handler._llm_gateway = True  # type: ignore[attr-defined]
-        root.addHandler(handler)
+        logger.addHandler(handler)
 
 
 _configure_logging()
@@ -73,8 +76,13 @@ async def chat_completions(request: Request) -> JSONResponse:
         payload, default_reasoning_effort=SETTINGS.reasoning_effort
     )
     if param_notes:
+        # 이 스트림은 한 줄에 JSON 하나여야 한다. 평문으로 찍으면 계측 레코드를
+        # 파싱하는 쪽이 이 줄에서 깨진다.
         logger.warning(
-            "파라미터 정규화: caller=%s notes=%s", caller, ",".join(param_notes)
+            json.dumps(
+                {"event": "param_normalized", "caller": caller, "paramNotes": param_notes},
+                ensure_ascii=False,
+            )
         )
 
     url = f"{SETTINGS.upstream_base_url}/chat/completions"

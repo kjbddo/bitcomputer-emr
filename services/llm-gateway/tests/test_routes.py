@@ -73,7 +73,7 @@ def test_upstream_failure_is_logged_as_failed(client, caplog):
     def handler(_request):
         return httpx.Response(400, text="bad request")
 
-    # llm-gateway 로거는 명시적 레벨이 없어 effective level 이 root(WARNING)로
+    # llm-gateway 로거는 명시적 레벨이 없어 effective level 이 이 로거의 레벨 미설정로
     # 풀린다. caplog 만으로는 INFO 레코드가 애초에 발생하지 않으므로 로거
     # 레벨도 함께 낮춰야 한다.
     with caplog.at_level(logging.INFO, logger="llm-gateway"):
@@ -116,18 +116,71 @@ def test_param_notes_reach_log_record(client, caplog):
 # 설정 전에는 루트 로거가 WARNING 이고 핸들러가 없어서, uvicorn 기본 설정에서도
 # logger.info() 로 내보내는 계측 레코드가 통째로 유실됐다. warning 은 lastResort 로
 # stderr 에 나가기 때문에 유실이 눈에 안 띄는 종류의 결함이었다.
-def test_root_logger_configured_to_emit_info():
-    """루트가 INFO 이고 핸들러가 있어야 계측이 컨테이너 로그로 나간다.
+def test_gateway_logger_has_its_own_handler():
+    """계측이 나가려면 이 로거 자신이 INFO 이고 핸들러를 가져야 한다.
 
-    설정 전에는 루트가 WARNING 이고 핸들러가 0개였다 — uvicorn 기본 설정에서도.
-    capsys 로는 검증할 수 없다: 핸들러가 import 시점의 sys.stdout 을 붙들기 때문이고,
-    그건 컨테이너에서 옳은 동작이다. 그래서 속성 자체를 단언한다.
+    capsys 로는 검증할 수 없다 — 핸들러가 import 시점의 sys.stdout 을 붙들기
+    때문이고 그건 컨테이너에서 옳은 동작이다. 그래서 속성을 단언한다.
     """
     import logging
 
+    lg = logging.getLogger("llm-gateway")
+    assert lg.level <= logging.INFO
+    assert any(getattr(h, "_llm_gateway", False) for h in lg.handlers)
+
+
+def test_root_logger_is_not_touched():
+    """루트를 건드리면 NOTSET 인 모든 서드파티 로거의 바닥이 함께 올라간다."""
+    import logging
+
     root = logging.getLogger()
-    assert root.level <= logging.INFO
-    assert root.handlers, "루트에 핸들러가 없으면 INFO 는 아무 데도 안 나간다"
+    assert not any(getattr(h, "_llm_gateway", False) for h in root.handlers)
+
+
+def test_third_party_info_logs_stay_suppressed():
+    """httpx 는 상류 호출마다 INFO 로 한 줄씩 찍는다.
+
+    루트 레벨을 올렸을 때 이 줄들이 계측 JSON 사이에 평문으로 끼어들어
+    "한 줄에 JSON 하나" 가 깨졌다. 그 회귀를 고정한다.
+    """
+    import logging
+
+    assert not logging.getLogger("httpx").isEnabledFor(logging.INFO)
+
+
+def test_emitted_lines_are_all_json(client):
+    """이 로거가 내보내는 모든 줄은 JSON 으로 파싱돼야 한다.
+
+    계측 레코드와 파라미터 경고가 같은 스트림을 공유하므로, 한쪽이 평문이면
+    스트림을 파싱하는 쪽이 그 줄에서 깨진다.
+    """
+    import io
+    import json as json_mod
+    import logging
+
+    lg = logging.getLogger("llm-gateway")
+    buffer = io.StringIO()
+    probe = logging.StreamHandler(buffer)
+    probe.setFormatter(logging.Formatter("%(message)s"))
+    lg.addHandler(probe)
+    try:
+        def handler(_request):
+            return httpx.Response(
+                200, json={"ok": True, "usage": {"prompt_tokens": 3, "completion_tokens": 2}}
+            )
+
+        with client(handler) as c:
+            c.post(
+                "/v1/chat/completions",
+                json={"model": "m", "messages": [], "temperature": 0.7},
+            )
+    finally:
+        lg.removeHandler(probe)
+
+    lines = [line for line in buffer.getvalue().splitlines() if line.strip()]
+    assert len(lines) >= 2, "경고와 계측 레코드 둘 다 나와야 한다"
+    for line in lines:
+        json_mod.loads(line)  # 파싱 실패하면 그 자체가 실패다
 
 
 def test_metering_record_content_reaches_the_log(client, caplog):
