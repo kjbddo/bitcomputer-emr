@@ -97,6 +97,7 @@ export interface ValidationJobResponse {
     overallStatus?: string;
     summary?: string;
     reason?: string;
+    llmStatus?: "real" | "stub" | "fallback";
     recommendedPrescriptions?: RecommendedPrescriptionItem[];
     candidatePrescriptions?: RecommendedPrescriptionItem[];
     checks?: Array<Record<string, unknown>>;
