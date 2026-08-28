@@ -589,7 +589,14 @@ def test_prescription_finder_exception_fails_closed_not_llm(monkeypatch):
 
     finder_entries = [e for e in response.reasoningTrace if e["action"] == "Prescription Finder"]
     assert finder_entries, "Prescription Finder 스텝이 트레이스에 있어야 한다"
+    # 강등 목적지까지 고정한다. != "llm" 만 보면 "stub" 으로 바뀌어도 통과하는데,
+    # llmStatusNotice 기준으로 "stub" 은 neutral, "fallback" 은 warning 이라
+    # 트레이스를 화면에 렌더하기 시작하면 의미가 갈린다.
+    #
+    # 결정 루프 밖에서 항상 실행되는 후처리 항목은 "rule" 이고 강등 대상이 아니다
+    # (Task 6). 강등된 항목이 하나는 있어야 한다는 쪽으로 단언한다.
     assert all(e["source"] != "llm" for e in finder_entries)
+    assert any(e["source"] == "fallback" for e in finder_entries)
 
 
 def test_hallucinated_action_produces_trace_entry(monkeypatch):

@@ -163,7 +163,7 @@ function buildDummyEvaluateResponse(medicalCertificate: string): DocumentEvaluat
   };
 }
 
-function buildResultsCsv(results: BatchResult[]): string {
+export function buildResultsCsv(results: BatchResult[]): string {
   const header = [
     "rowNumber",
     "diseaseCode",
