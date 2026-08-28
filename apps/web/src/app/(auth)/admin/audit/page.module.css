@@ -1,0 +1,50 @@
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: flex-end;
+}
+
+.filterField {
+  min-width: 160px;
+}
+
+.detail {
+  color: var(--text-muted);
+  white-space: normal;
+}
+
+/*
+ * DENIED 행은 Badge 로 이미 상태를 텍스트로 전달하지만, 이 화면을 여는
+ * 주된 이유가 거부된 시도를 훑어보는 것이라 행 전체에도 시각적 단서를
+ * 더한다. 선택된 행에 쓰는 Table 의 accent 톤과 같은 방식(배경 + 왼쪽
+ * 인셋 스트라이프)을 danger 톤으로 재사용한다.
+ */
+.denied {
+  background: var(--danger-bg);
+  box-shadow: inset 2px 0 0 var(--danger-fill);
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+}
+
+.pagerStatus {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
