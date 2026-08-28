@@ -23,6 +23,8 @@ type BatchResult = {
   prescriptionName: string;
   status: "success" | "error";
   medicalCertificate?: string;
+  /** 소견이 실제로 모델에서 나왔는지: "real" | "stub" | "fallback". CSV로도 내보내진다. */
+  llmStatus?: string | null;
   generateRawResponse?: unknown;
   evaluateRawResponse?: DocumentEvaluateResponse;
   error?: string;
@@ -169,6 +171,7 @@ function buildResultsCsv(results: BatchResult[]): string {
     "prescriptionName",
     "status",
     "medicalCertificate",
+    "llmStatus",
     "score",
     "entailmentCount",
     "totalPairs",
@@ -186,6 +189,7 @@ function buildResultsCsv(results: BatchResult[]): string {
       item.prescriptionName,
       item.status,
       item.medicalCertificate ?? "",
+      item.llmStatus ?? "",
       evaluation?.score ?? "",
       evaluation?.entailmentCount ?? "",
       evaluation?.totalPairs ?? "",
@@ -440,6 +444,7 @@ export default function EvaluationPage() {
             prescriptionName,
             status: "success",
             medicalCertificate: generatedCertificate,
+            llmStatus: generated.llmStatus,
             generateRawResponse: generated,
             evaluateRawResponse: evaluated,
           };

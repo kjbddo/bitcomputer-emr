@@ -56,7 +56,20 @@ function renderWithAppliedDiagnosis() {
 }
 
 describe("진단서 AI 미리보기의 llmStatus 배선", () => {
+  // M8: 기본값이 fallback 이면 "필드 없음" 과 "fallback" 두 테스트가 같은
+  // mock 을 공유해 구분이 안 된다. 배지가 없는 real 을 기본값으로 두어
+  // 각 테스트가 자기 설정에만 의존하게 한다.
   beforeEach(() => {
+    vi.mocked(generateDocumentCertificateByHistory).mockResolvedValue({
+      grantType: "Bearer",
+      accessToken: "a",
+      refreshToken: "r",
+      medicalCertificate: "환자는 통원 치료가 필요합니다.",
+      llmStatus: "real",
+    });
+  });
+
+  it("llmStatus 가 fallback 이면 미리보기에 모델 미사용 배지가 뜬다", async () => {
     vi.mocked(generateDocumentCertificateByHistory).mockResolvedValue({
       grantType: "Bearer",
       accessToken: "a",
@@ -64,9 +77,6 @@ describe("진단서 AI 미리보기의 llmStatus 배선", () => {
       medicalCertificate: "환자는 통원 치료가 필요합니다.",
       llmStatus: "fallback",
     });
-  });
-
-  it("llmStatus 가 fallback 이면 미리보기에 모델 미사용 배지가 뜬다", async () => {
     renderWithAppliedDiagnosis();
 
     fireEvent.click(screen.getByRole("button", { name: /AI/ }));
@@ -74,6 +84,25 @@ describe("진단서 AI 미리보기의 llmStatus 배선", () => {
     const dialog = await screen.findByRole("dialog");
     const badge = await within(dialog).findByText("규칙 기반 결과 — 모델 미사용");
     expect(badge).toHaveAttribute("data-tone", "warning");
+  });
+
+  // M11: 프로젝트에 Bedrock 키가 없는 지금, 실제로 가장 자주 나오는 값은
+  // "stub" 인데도 이 컴포넌트에는 그 경로를 확인하는 테스트가 없었다.
+  it("llmStatus 가 stub 이면 미리보기에 스텁 배지가 뜬다", async () => {
+    vi.mocked(generateDocumentCertificateByHistory).mockResolvedValue({
+      grantType: "Bearer",
+      accessToken: "a",
+      refreshToken: "r",
+      medicalCertificate: "환자는 통원 치료가 필요합니다.",
+      llmStatus: "stub",
+    });
+    renderWithAppliedDiagnosis();
+
+    fireEvent.click(screen.getByRole("button", { name: /AI/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    const badge = await within(dialog).findByText("스텁 응답 (모델 미사용)");
+    expect(badge).toHaveAttribute("data-tone", "neutral");
   });
 
   it("llmStatus 가 real 이면 배지가 없다", async () => {
