@@ -46,6 +46,9 @@ class ValidationAgentResponseTest {
         ValidationAgentResponse parsed = objectMapper.readValue(
                 "{\"overallStatus\":\"PASS\",\"summary\":\"s\"}", ValidationAgentResponse.class);
 
-        assertThat(parsed.getLlmStatus()).isNotEqualTo("real");
+        // isNotEqualTo("real") 만으로는 부족하다: @Builder.Default 가 사라지면
+        // 필드는 "real" 이 아닌 null 로 떨어지는데, 그래도 이 단언은 통과해 버려서
+        // 기본값이 조용히 사라지는 걸 못 잡는다. 파이썬 쪽 기본값과 동일한 값까지 확인한다.
+        assertThat(parsed.getLlmStatus()).isEqualTo("fallback");
     }
 }
