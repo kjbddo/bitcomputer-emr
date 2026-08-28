@@ -738,10 +738,12 @@ git commit -m "feat(prescription): 응답에 verification 필드 배선"
 
 **Interfaces:**
 - Consumes: Task 1 의 계약
-- Produces: `verify_certificate(*, diseases: List[Any], prescription_names: List[str], text: str) -> VerificationResult`
+- Produces: `verify_certificate(*, diseases: List[Any], diagnoses: List[Any], text: str) -> VerificationResult`
 - Produces: `CertificateGenerateResponse.verification: Optional[Dict[str, Any]]`
 
-`diseases` 는 `CertificateGenerateRequest.diseases` — `DiseaseInfo{code, name, degree}` 목록이다.
+`diseases` 는 `CertificateGenerateRequest.diseases` — `DiseaseInfo{code, name, degree}` 목록이고,
+`diagnoses` 는 `CertificateGenerateRequest.diagnoses` — `DiagnoseInfo{code, name}` 목록이다.
+요청에는 처방 목록이 없다(확인함). premise 는 이 두 목록의 코드와 이름이 전부다.
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
@@ -758,6 +760,7 @@ def _disease(code, name):
 
 
 DISEASES = [_disease("J00", "급성 비인두염"), _disease("E11.9", "제2형 당뇨병")]
+DIAGNOSES = [SimpleNamespace(code="Z00", name="건강검진")]
 
 
 def _outcomes(result, check_id):
@@ -766,7 +769,7 @@ def _outcomes(result, check_id):
 
 def test_known_code_and_term_pass():
     text = "환자는 급성 비인두염(J00)으로 통원 치료가 필요합니다."
-    result = verify_certificate(diseases=DISEASES, prescription_names=["약가"], text=text)
+    result = verify_certificate(diseases=DISEASES, diagnoses=DIAGNOSES, text=text)
 
     assert result.status == "passed"
     assert _outcomes(result, "cited_code_known") == ["ok"]
@@ -775,7 +778,7 @@ def test_known_code_and_term_pass():
 
 def test_unknown_icd_code_is_flagged():
     text = "환자는 급성 비인두염(K52.9)으로 통원 치료가 필요합니다."
-    result = verify_certificate(diseases=DISEASES, prescription_names=[], text=text)
+    result = verify_certificate(diseases=DISEASES, diagnoses=[], text=text)
 
     assert result.status == "flagged"
     assert "flagged" in _outcomes(result, "cited_code_known")
@@ -783,14 +786,14 @@ def test_unknown_icd_code_is_flagged():
 
 def test_no_code_in_text_is_skipped():
     text = "환자는 통원 치료가 필요합니다."
-    result = verify_certificate(diseases=DISEASES, prescription_names=[], text=text)
+    result = verify_certificate(diseases=DISEASES, diagnoses=[], text=text)
 
     assert _outcomes(result, "cited_code_known") == ["skipped"]
 
 
 def test_premise_term_absent_is_flagged():
     text = "환자는 안정이 필요합니다."
-    result = verify_certificate(diseases=DISEASES, prescription_names=["약가"], text=text)
+    result = verify_certificate(diseases=DISEASES, diagnoses=DIAGNOSES, text=text)
 
     assert "flagged" in _outcomes(result, "premise_term_present")
 
@@ -798,7 +801,7 @@ def test_premise_term_absent_is_flagged():
 # GC-2. premise 가 비면 통과가 아니라 미확인이다.
 def test_empty_premise_never_passes():
     text = "환자는 급성 비인두염으로 통원 치료가 필요합니다."
-    result = verify_certificate(diseases=[], prescription_names=[], text=text)
+    result = verify_certificate(diseases=[], diagnoses=[], text=text)
 
     assert result.status == "skipped"
     assert result.skippedReason is not None
@@ -806,16 +809,24 @@ def test_empty_premise_never_passes():
 
 def test_dotted_icd_code_is_recognised():
     text = "제2형 당뇨병(E11.9) 소견입니다."
-    result = verify_certificate(diseases=DISEASES, prescription_names=[], text=text)
+    result = verify_certificate(diseases=DISEASES, diagnoses=[], text=text)
 
     assert _outcomes(result, "cited_code_known") == ["ok"]
 
 
-def test_prescription_name_counts_as_premise_term():
-    text = "약가 투여를 지속할 것을 권고합니다."
-    result = verify_certificate(diseases=DISEASES, prescription_names=["약가"], text=text)
+def test_diagnosis_name_counts_as_premise_term():
+    """premise 는 diseases 와 diagnoses 를 합친 것이다. 어느 쪽 이름이든 인정한다."""
+    text = "건강검진 목적의 소견입니다."
+    result = verify_certificate(diseases=DISEASES, diagnoses=DIAGNOSES, text=text)
 
     assert _outcomes(result, "premise_term_present") == ["ok"]
+
+
+def test_diagnosis_code_counts_as_known_code():
+    text = "건강검진(Z00) 소견입니다."
+    result = verify_certificate(diseases=DISEASES, diagnoses=DIAGNOSES, text=text)
+
+    assert _outcomes(result, "cited_code_known") == ["ok"]
 ```
 
 - [ ] **Step 2: 테스트가 실패하는지 확인**
@@ -853,13 +864,13 @@ def _text(value: Any) -> str:
 def verify_certificate(
     *,
     diseases: Sequence[Any],
-    prescription_names: Sequence[str],
+    diagnoses: Sequence[Any],
     text: str,
 ) -> VerificationResult:
-    known_codes = {_text(getattr(d, "code", "")) for d in diseases}
+    premise_entries = list(diseases) + list(diagnoses)
+    known_codes = {_text(getattr(e, "code", "")) for e in premise_entries}
     known_codes.discard("")
-    known_terms = {_text(getattr(d, "name", "")) for d in diseases}
-    known_terms |= {_text(n) for n in prescription_names}
+    known_terms = {_text(getattr(e, "name", "")) for e in premise_entries}
     known_terms.discard("")
 
     has_premise = bool(known_codes or known_terms)
@@ -938,13 +949,9 @@ from certificate_verification import verify_certificate
 def _safe_verify_certificate(req: Any, text: str) -> Dict[str, Any]:
     """검증을 돌리되 본 응답을 실패시키지 않는다(GC-4)."""
     try:
-        names = [
-            _text_or_empty(getattr(p, "name", ""))
-            for p in (getattr(req, "prescriptions", None) or [])
-        ]
         return verify_certificate(
             diseases=getattr(req, "diseases", None) or [],
-            prescription_names=[n for n in names if n],
+            diagnoses=getattr(req, "diagnoses", None) or [],
             text=text,
         ).to_dict()
     except Exception as exc:  # noqa: BLE001
@@ -960,8 +967,7 @@ def _text_or_empty(value: Any) -> str:
     return str(value).strip() if value is not None else ""
 ```
 
-`CertificateGenerateRequest` 에 `prescriptions` 필드가 없으면 `getattr` 이 빈 목록을
-돌려주므로 상병명만으로 판정한다 — 필드 존재 여부를 먼저 읽고 확인한다.
+`_text_or_empty` 는 더 이상 쓰이지 않으면 넣지 않는다.
 
 - [ ] **Step 6: 배선 테스트 추가**
 
