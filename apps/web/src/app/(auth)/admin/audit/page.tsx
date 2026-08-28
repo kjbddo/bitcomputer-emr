@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { getAuditLogs } from "@/services/admin";
 import { AuditFilter, AuditLog, Page } from "@/types/audit";
 import { Badge, Button, EmptyState, Field, Panel, Table } from "@/components/ui";
+import { formatLocalTimestamp, localDayEndToUtcParam, localDayStartToUtcParam } from "@/utils/auditTime";
 import styles from "./page.module.css";
 
 const PAGE_SIZE = 50;
@@ -56,14 +57,23 @@ function toAppliedFilter(draft: DraftFilter): AppliedFilter {
   if (action) filter.action = action;
 
   if (draft.outcome) filter.outcome = draft.outcome;
-  if (draft.from) filter.from = `${draft.from}T00:00:00`;
-  if (draft.to) filter.to = `${draft.to}T23:59:59`;
+  // I2: 서버는 occurredAt 을 UTC-naive LocalDateTime 으로 저장한다(UTC 벽시계
+  // 값). 여기서 그냥 "${draft.from}T00:00:00" 처럼 로컬 날짜를 문자열로만
+  // 이어붙이면, 서버는 그걸 UTC 00:00 으로 읽어 KST "오늘" 필터가 실제로는
+  // UTC 00:00~23:59 를 조회하게 된다 - KST 00:00~09:00 의 이벤트가 빠지고
+  // 어제 09:00~24:00 이 섞여 들어간다. 뷰어의 로컬 날짜 경계를 UTC 로 변환해
+  // 보낸다(auditTime.ts 에 계약을 적어 뒀다).
+  if (draft.from) filter.from = localDayStartToUtcParam(draft.from);
+  if (draft.to) filter.to = localDayEndToUtcParam(draft.to);
 
   return filter;
 }
 
+// I2: occurredAt 은 UTC-naive LocalDateTime 문자열이다 - "Z"를 붙여 UTC 로
+// 해석한 뒤 뷰어의 로컬 시간대로 포맷한다. 변환 없이 그대로 잘라 보여주면
+// 표시되는 시각이 실제보다 9시간(KST 기준) 이르게 보인다.
 function formatTimestamp(occurredAt: string): string {
-  return occurredAt.replace("T", " ").slice(0, 19);
+  return formatLocalTimestamp(occurredAt);
 }
 
 export default function AuditPage() {
