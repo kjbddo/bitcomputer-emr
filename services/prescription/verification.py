@@ -150,14 +150,25 @@ def verify_prescriptions(*, candidates: Sequence[Any], items: Sequence[Any]) -> 
                         id="dosage_verbatim", target=target, outcome="skipped",
                         evidence="출력에 용량이 없어 대조할 수 없음"))
                 else:
-                    # verbatim 은 "출력이 원본 용량 문구를 담고 있다"는 뜻이다.
-                    # 방향이 반대(원본이 출력을 담는 쪽)면 잘린 출력("1")이
-                    # 원본("1일 3회")의 부분 문자열이 되어 그대로 통과해버린다.
-                    # 원본이 출력에 포함돼야 한다 — 그 반대가 아니다.
+                    # verbatim 은 "출력이 원본 용량 문구와 정확히 같다"는 뜻이다.
+                    # 부분 문자열 포함은 양방향 모두 우회 가능했다 — 원본이
+                    # 출력에 포함되는 방향은 "1일 3회 대신 1일 1회"(치환),
+                    # "1일 3회 아님"(부정), "1일 3회 금지"(금지) 같은 의미가
+                    # 정반대인 문구를 그대로 통과시켰고, 그 반대 방향은 잘린
+                    # 출력("1")을 통과시켰다. 공백(연속 공백·양끝 공백)만
+                    # 정규화하고 그 외에는 완전 일치를 요구한다. 이 때문에
+                    # "…복용" 처럼 정당해 보이는 재서식도 지금은 flagged
+                    # 된다 — 모델이 용량 문구를 얼마나 자주/어떻게 정당하게
+                    # 재서식하는지 아직 측정된 바 없으므로, 느슨하게 시작해
+                    # 우회를 허용하기보다 엄격하게 시작해 데이터로 완화하는
+                    # 쪽을 택한 결과다.
+                    normalized_source = " ".join(source_dosage.split())
+                    normalized_dosage = " ".join(dosage.split())
                     checks.append(CheckResult(
                         id="dosage_verbatim", target=target,
-                        outcome="ok" if source_dosage in dosage else "flagged",
-                        evidence=f"후보 {source_dosage!r} vs 출력 {dosage!r}"))
+                        outcome="ok" if normalized_source == normalized_dosage else "flagged",
+                        evidence=f"후보 {normalized_source!r} vs 출력 {normalized_dosage!r} "
+                                 "(공백 정규화 후 완전 일치해야 함)"))
 
         if confidence is None:
             checks.append(CheckResult(

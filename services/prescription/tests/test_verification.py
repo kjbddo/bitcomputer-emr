@@ -69,6 +69,15 @@ def test_dosage_skipped_when_source_has_none():
     assert _outcomes(result, "dosage_verbatim") == ["skipped"]
 
 
+# 대칭 케이스: 원본에는 용량이 있지만 출력에 용량이 비어 있으면 마찬가지로
+# 대조할 수 없다 — flagged(가짜 불일치)도 ok(근거 없는 통과)도 아니다.
+def test_dosage_skipped_when_output_has_none():
+    items = [_item(1, "A01", "약가", dosage="")]
+    result = verify_prescriptions(candidates=CANDIDATES, items=items)
+
+    assert _outcomes(result, "dosage_verbatim") == ["skipped"]
+
+
 # GC-2. 후보가 비면 통과가 아니라 미확인이다.
 def test_empty_candidates_never_passes():
     items = [_item(1, "A01", "약가"), _item(2, "B02", "약나"), _item(3, "C03", "약다")]
@@ -126,12 +135,19 @@ def test_dosage_truncation_bypass_is_flagged():
     assert _outcomes(result, "dosage_verbatim")[0] == "flagged"
 
 
-def test_dosage_superset_output_is_ok():
-    """모델이 단어를 덧붙인 정당한 초과분은 통과해야 한다."""
+def test_dosage_reformat_superset_is_now_flagged():
+    """예전에는 이 케이스(모델이 '복용'을 덧붙인 정당한 재서식)를 통과시켰다.
+    하지만 포함 관계로는 이런 정당한 부가어와 '1일 3회 대신 1일 1회' 같은
+    치환 문구를 구별할 수 없다 — 둘 다 원본 문자열을 통째로 담고 있다.
+    프로젝트 오너의 결정: 검사 이름(verbatim)을 실제로 지키려면 공백 정규화
+    후 완전 일치만 인정해야 한다. 모델이 용량 문구를 얼마나 자주/어떻게
+    정당하게 재서식하는지는 아직 측정된 바 없으므로, 느슨하게 시작해
+    우회를 허용하기보다 엄격하게 시작해 데이터로 완화하는 쪽을 택했다.
+    그 결과 이 정당한 재서식도 지금은 flagged 된다 — 의도한 트레이드오프다."""
     items = [_item(1, "A01", "약가", dosage="1일 3회 복용")]
     result = verify_prescriptions(candidates=CANDIDATES, items=items)
 
-    assert _outcomes(result, "dosage_verbatim")[0] == "ok"
+    assert _outcomes(result, "dosage_verbatim")[0] == "flagged"
 
 
 def test_dosage_exact_match_is_ok():
@@ -139,6 +155,55 @@ def test_dosage_exact_match_is_ok():
     result = verify_prescriptions(candidates=CANDIDATES, items=items)
 
     assert _outcomes(result, "dosage_verbatim")[0] == "ok"
+
+
+def test_dosage_substitution_phrase_is_flagged():
+    """리뷰 라운드 2 재현: '1일 3회 대신 1일 1회' 는 원본 문구를 통째로
+    담고 있지만 의미는 정반대(대체 지시)다. 원본이 출력에 포함되는 방향의
+    포함 관계 검사는 이걸 그대로 통과시켰다."""
+    items = [_item(1, "A01", "약가", dosage="1일 3회 대신 1일 1회")]
+    result = verify_prescriptions(candidates=CANDIDATES, items=items)
+
+    assert _outcomes(result, "dosage_verbatim")[0] == "flagged"
+
+
+def test_dosage_negation_is_flagged():
+    """'1일 3회 아님' — 원본을 부정하는 문구도 포함 관계로는 통과했다."""
+    items = [_item(1, "A01", "약가", dosage="1일 3회 아님")]
+    result = verify_prescriptions(candidates=CANDIDATES, items=items)
+
+    assert _outcomes(result, "dosage_verbatim")[0] == "flagged"
+
+
+def test_dosage_prohibition_is_flagged():
+    """'1일 3회 금지' — 원본을 금지하는 문구도 포함 관계로는 통과했다."""
+    items = [_item(1, "A01", "약가", dosage="1일 3회 금지")]
+    result = verify_prescriptions(candidates=CANDIDATES, items=items)
+
+    assert _outcomes(result, "dosage_verbatim")[0] == "flagged"
+
+
+def test_dosage_internal_whitespace_run_is_ok():
+    """공백 정규화: 공백이 두 칸 이상이어도 한 칸으로 뭉쳐 비교해야 한다."""
+    candidates = [{"prescription_code": "A01", "prescription_name": "약가", "dosage": "1일  3회"}]
+    items = [_item(1, "A01", "약가", dosage="1일 3회")]
+    result = verify_prescriptions(candidates=candidates, items=items)
+
+    assert _outcomes(result, "dosage_verbatim") == ["ok"]
+
+
+def test_dosage_leading_trailing_whitespace_is_ok():
+    """공백 정규화: 양쪽 끝 공백은 원본 쪽이든 출력 쪽이든 무시돼야 한다."""
+    candidates = [{"prescription_code": "A01", "prescription_name": "약가", "dosage": "  1일 3회  "}]
+    items = [_item(1, "A01", "약가", dosage="1일 3회")]
+    result = verify_prescriptions(candidates=candidates, items=items)
+
+    assert _outcomes(result, "dosage_verbatim") == ["ok"]
+
+    items2 = [_item(1, "A01", "약가", dosage="  1일 3회  ")]
+    result2 = verify_prescriptions(candidates=CANDIDATES, items=items2)
+
+    assert _outcomes(result2, "dosage_verbatim") == ["ok"]
 
 
 # --- Important: GC-8 커버리지 공백 4건 --------------------------------------
