@@ -25,7 +25,7 @@ docker compose --env-file .env.docker up -d frontend
 | Front-End | `bit-frontend` | 3000 | Next.js UI |
 | Spring Boot | `bit-spring-boot` | 8080 | WAS / API |
 | Flask 영상판독 | `bit-flask-radiology` | 5000 | 기존 영상판독 엔진 |
-| LLM 게이트웨이 | `bit-llm-gateway` | 8003 | 모든 서비스의 단일 LLM 진입점 (Bedrock) |
+| LLM 게이트웨이 | `bit-llm-gateway` | 8003 | 모든 서비스의 단일 LLM 진입점 (OpenAI API) |
 | 진단서 의사소견 | `bit-certificate-api` | 5001 | LLM 게이트웨이 경유 진단서 문장 생성 |
 | 처방 추천 | `bit-prescription-api` | 8001 | ArangoDB + LLM 게이트웨이 경유 처방 추천 |
 | 진료 데이터 검증 | `bit-validation-agent` | 8002 | LangGraph 기반 처방 추천/검증 ReAct worker |

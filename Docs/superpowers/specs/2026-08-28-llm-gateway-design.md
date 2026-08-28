@@ -234,38 +234,51 @@ LLM 을 쓰는 응답에 `llmStatus` 필드를 추가한다.
 
 ## 10. 실측이 필요한 항목
 
-가정으로 두면 구현 중에 터진다. 실제 Bedrock mantle 을 한 번 호출해 확인하고 **결과를 이 문서에 덧붙인다.**
+가정으로 두면 구현 중에 터진다. 상류를 실제로 한 번 호출해 확인하고 **결과를 이 문서에 덧붙인다.**
 
-- [x] **계정이 이 모델을 실제로 호출할 수 있는가 — 2026-08-28 실호출 결과 아니오.**
-  이 항목은 원래 목록에 없었다. 가장 먼저 깨진 것이 목록에 없던 가정이었다.
+### 10.1 Bedrock 시도와 철회 (2026-08-28, 종결)
 
-  게이트웨이를 통해 `openai.gpt-5.6-luna` 를 치면 상류가 401 을 준다:
+원래 이 절은 Amazon Bedrock `bedrock-mantle` 을 전제로 작성됐다. 실호출로 확인한 결과:
 
-  ```json
-  {"error":{"code":"access_denied","type":"permission_denied_error",
-   "message":"openai.gpt-5.6-luna is not available for this account. ...",
-   "param":null}}
-  ```
+- 게이트웨이 배관은 끝까지 정상이었다. 키가 컨테이너까지 전달되고, 요청이 상류에
+  도달하고, 에러가 계약대로 전파되고, 계측 로그가 찍혔다.
+- 그러나 계정에 `openai.gpt-5.6-luna` 엔타이틀먼트가 없었다.
+  `{"code":"access_denied","message":"openai.gpt-5.6-luna is not available for this account"}`
+- `us.` / `global.` 추론 프로파일이 `ACTIVE` 로 조회되지만 그것만으로는 부족했다.
+  프로파일로 쳐도 같은 403 이었다. `get-foundation-model-availability` 가
+  `agreementAvailability: NOT_AVAILABLE` 을 반환했다 — 모델 계약(EULA) 미체결.
+- 계약 오퍼는 존재했으므로 수락하면 열렸을 것이다. **사용자가 Bedrock 을 쓰지 않고
+  OpenAI API 를 직접 호출하기로 결정했다.**
 
-  키·엔드포인트·라우트는 정상이다. 다른 모델 ID 를 치면 `validation_error`
-  (`isn't supported on this route`) 나 `not_found_error` 가 나오는데, luna 만
-  `access_denied` 다 — 즉 이 라우트에 모델은 존재하고 계정에 엔타이틀먼트가 없다.
+그 과정에서 얻은 사실 중 남길 가치가 있는 것:
 
-  해소 방법: Bedrock 콘솔 us-west-2 의 Model access 에서 활성화. 자가 승인이
-  안 되면 메시지가 AWS Sales 를 가리킨다. 그때는 계정이 가진 모델로 바꾼다
-  (`aws bedrock list-foundation-models --region us-west-2`).
+- Bedrock 에서 luna 는 `INFERENCE_PROFILE` 전용이다. 베어 모델 ID 로는 호출되지 않으며,
+  `bedrock-mantle` 은 베어 ID + In-Region 방식이므로 애초에 이 모델과 맞지 않았다.
+- 서울(ap-northeast-2)은 `bedrock-runtime` + `global.` 프로파일로만 가능했다.
+  APAC geo 프로파일이 luna 에 없다.
 
-  **이 항목이 미해소인 동안 아래 나머지 항목은 측정 자체가 불가능하다.**
-- [ ] luna 가 `temperature` 를 거부하는가, 아니면 무시하는가
-- [ ] `response_format: {"type": "json_object"}` 이 mantle 에서 동작하는가 (`prescription_api` 가 의존한다)
-- [ ] mantle 의 tool calling 이 LangChain `ChatOpenAI` 경유로 동작하는가 (`validation-agent` 의 ReAct 가 의존한다)
-- [x] **Bedrock TPM 기본 쿼터의 10배 출력 번다운 — 문서로 확인됨(2026-08-28).** luna 모델 카드: "On the `bedrock-runtime` endpoint, limits are managed as tokens per minute (TPM) with a 10x burndown rate, where 1 output token consumes 10 tokens." mantle 쪽 쿼터는 별도 문서(quotas-mantle)이므로 실호출로 재확인한다.
-- [ ] 단가가 컨텍스트 길이에 따라 두 단계다(Short 272K / Long 1M). 계측은 단일 단가만 쓴다 — 272K 를 넘는 프롬프트가 생기면 비용이 절반으로 과소 계상된다. 실제 워크로드가 그 경계에 얼마나 가까운지 측정하고, 필요하면 metering 을 두 단계로 나눈다.
-- [ ] Bedrock TPM 기본 쿼터가 이 워크로드에 충분한가 (mantle 쿼터는 대기열 기반이라 runtime 과 다르다)
-- [ ] 게이트웨이의 시도당 타임아웃 45초가 luna 의 실제 p95 대비 충분한가 — 낮게 잡았다면 정상 지연이 하드 실패로 바뀐다. 시도 1이 생성 도중 끊기고 부분 출력이 과금된 채 버려지며, 3회 반복 후 호출자는 136.5초 뒤 502 를 받는다. 이 값은 전체 타임아웃 사다리의 기준점이다(services/llm-gateway/app/config.py).
+### 10.2 OpenAI 직접 호출 기준 미확인 항목
+
+- [x] **모델 ID·컨텍스트·단가 — 공개 문서로 확인됨(2026-08-28).**
+  `gpt-5.6-luna`, 컨텍스트 1,050,000 토큰, 최대 출력 128,000 토큰,
+  입력 $0.20 / 출력 $1.20 per 1M. `reasoning_effort` 값 공간은
+  `none | low | medium(기본) | high | xhigh | max`.
+- [ ] luna 가 `temperature` 를 거부하는가, 아니면 무시하는가. 게이트웨이는 현재
+  `temperature` 와 `top_p` 를 드롭한다(`params.py`). 거부가 맞다면 드롭이 옳고,
+  무시라면 드롭은 불필요한 손실이다. 어느 쪽인지 아직 모른다.
+- [ ] `response_format: {"type": "json_object"}` 이 실제로 동작하는가
+  (`prescription_api` 와 `certificate_api` 가 의존한다). 공개 문서는
+  structured outputs 지원을 명시하지만 이 파라미터 형태까지는 확인하지 않았다.
+- [ ] tool calling 이 LangChain `ChatOpenAI` 경유로 동작하는가
+  (`validation-agent` 의 ReAct 루프가 의존한다).
+- [ ] 계정의 rate limit 티어가 이 워크로드에 충분한가. Bedrock 의 TPM 10배
+  출력 번다운은 더 이상 해당 없고, OpenAI 자체 티어 제한이 적용된다.
+- [ ] 게이트웨이의 시도당 타임아웃 45초가 luna 의 실제 p95 대비 충분한가 —
+  낮게 잡았다면 정상 지연이 하드 실패로 바뀐다. 시도 1이 생성 도중 끊기고 부분
+  출력이 과금된 채 버려지며, 3회 반복 후 호출자는 136.5초 뒤 502 를 받는다.
+  이 값은 전체 타임아웃 사다리의 기준점이다(`services/llm-gateway/app/config.py`).
 
 ---
-
 ## 11. 완료 조건
 
 1. 프로덕션 경로에 Gemini 호출이 남아 있지 않다.
@@ -274,5 +287,5 @@ LLM 을 쓰는 응답에 `llmStatus` 필드를 추가한다.
 4. `LLM_PROVIDER=stub` 에서 게이트웨이 없이 기존 테스트·E2E 가 그대로 통과한다.
 5. 게이트웨이가 `temperature` 를 제거하고 `max_tokens` 를 변환하며, 그 사실을 로그로 남긴다 — 테스트로 고정한다.
 6. LLM 을 쓸 수 없을 때 응답의 `llmStatus` 가 `fallback` 이고, 폴백 트레이스가 LLM 추론과 구분된다 — 테스트로 고정한다.
-7. §10 의 다섯 항목이 실측되고 결과가 이 문서에 기록됐다.
+7. §10.2 의 미확인 항목이 실측되고 결과가 이 문서에 기록됐다.
 8. 게이트웨이가 compose 스택에서 기동하고 헬스체크를 통과한다.

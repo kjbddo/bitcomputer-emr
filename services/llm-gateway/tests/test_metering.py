@@ -4,7 +4,7 @@ from app.metering import build_record
 SETTINGS = Settings(
     upstream_base_url="https://upstream.test/v1",
     api_key="secret",
-    model="openai.gpt-5.6-luna",
+    model="gpt-5.6-luna",
     reasoning_effort="low",
     timeout_seconds=120.0,
     max_retries=2,
@@ -15,7 +15,7 @@ SETTINGS = Settings(
 
 def test_record_contains_required_fields():
     record = build_record(
-        model="openai.gpt-5.6-luna",
+        model="gpt-5.6-luna",
         caller="validation-agent",
         usage={"prompt_tokens": 1000, "completion_tokens": 500},
         latency_ms=1234,

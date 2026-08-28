@@ -119,8 +119,8 @@ flowchart LR
 | `XRAY_ARANGO_DATABASE` | XrayGraphRAG | X-ray 그래프 DB |
 | `LLM_GATEWAY_BASE_URL` | Certificate API, Prescription API, ValidationAgent | 게이트웨이 경유 LLM base URL, 기본 `http://llm-gateway:8003/v1` |
 | `LLM_MODEL` | Certificate API, Prescription API, ValidationAgent, LLM Gateway | 게이트웨이에 실릴 모델, 기본 `openai.gpt-5.6-luna` |
-| `LLM_API_KEY` | LLM Gateway | Bedrock mantle 자격증명. 이 서비스에만 존재한다 |
-| `LLM_TIMEOUT_SECONDS` | LLM Gateway | 상류(Bedrock) 호출 1회 시도당 타임아웃(초), 기본 45 |
+| `LLM_API_KEY` | LLM Gateway | OpenAI API 키. 이 서비스에만 존재한다 |
+| `LLM_TIMEOUT_SECONDS` | LLM Gateway | 상류(OpenAI) 호출 1회 시도당 타임아웃(초), 기본 45 |
 | `LLM_GATEWAY_TIMEOUT_SECONDS` | Certificate API, Prescription API | 게이트웨이 응답을 기다리는 총 시간(초), 기본 180. `LLM_TIMEOUT_SECONDS`(게이트웨이 1회 시도당)와 이름이 다르다 |
 | `VALIDATION_LLM_TIMEOUT_SECONDS` | ValidationAgent | 게이트웨이 호출 타임아웃(초), 기본 180. RabbitMQ 컨슈머 스레드가 무기한 멈추지 않도록 명시한다 |
 | `PRESCRIPTION_AGENT_TIMEOUT_SECONDS` | ValidationAgent | Prescription API 호출(처방 RAG 조회) 타임아웃(초), 기본 180 |

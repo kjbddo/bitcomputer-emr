@@ -58,7 +58,7 @@ def test_create_llm_max_retries_is_zero(monkeypatch):
     """재시도는 게이트웨이가 소유한다(spec §6.1). SDK 가 자체적으로 재시도하면
     게이트웨이의 backoff 안에 SDK 의 backoff 가 중첩되어, 상류 429 상황에서
     호출 수가 곱으로 불어난다(4 ReAct iterations x 3 SDK attempts x 3 gateway
-    attempts = 36 Bedrock calls)."""
+    attempts = 36 상류 호출)."""
     _clear_llm_env(monkeypatch)
 
     llm = agent._create_llm()

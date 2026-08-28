@@ -86,7 +86,7 @@ describe("진단서 AI 미리보기의 llmStatus 배선", () => {
     expect(badge).toHaveAttribute("data-tone", "warning");
   });
 
-  // M11: 프로젝트에 Bedrock 키가 없는 지금, 실제로 가장 자주 나오는 값은
+  // M11: 프로젝트에 LLM API 키가 없는 지금, 실제로 가장 자주 나오는 값은
   // "stub" 인데도 이 컴포넌트에는 그 경로를 확인하는 테스트가 없었다.
   it("llmStatus 가 stub 이면 미리보기에 스텁 배지가 뜬다", async () => {
     vi.mocked(generateDocumentCertificateByHistory).mockResolvedValue({

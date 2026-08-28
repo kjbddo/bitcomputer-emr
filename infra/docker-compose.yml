@@ -114,7 +114,7 @@ services:
     environment:
       LLM_GATEWAY_BASE_URL: http://llm-gateway:8003/v1
       LLM_GATEWAY_TIMEOUT_SECONDS: ${LLM_GATEWAY_TIMEOUT_SECONDS:-180}
-      LLM_MODEL: ${LLM_MODEL:-openai.gpt-5.6-luna}
+      LLM_MODEL: ${LLM_MODEL:-gpt-5.6-luna}
       LLM_PROVIDER: ${LLM_PROVIDER:-real}
     ports:
       - "5001:5001"
@@ -135,7 +135,7 @@ services:
     environment:
       LLM_GATEWAY_BASE_URL: http://llm-gateway:8003/v1
       LLM_GATEWAY_TIMEOUT_SECONDS: ${LLM_GATEWAY_TIMEOUT_SECONDS:-180}
-      LLM_MODEL: ${LLM_MODEL:-openai.gpt-5.6-luna}
+      LLM_MODEL: ${LLM_MODEL:-gpt-5.6-luna}
       ARANGO_HOST: arangodb
       ARANGO_PORT: 8529
       ARANGO_USER: root
@@ -164,15 +164,15 @@ services:
     environment:
       # 자격증명은 이 서비스에만 존재한다(spec §3.1).
       LLM_API_KEY: ${LLM_API_KEY}
-      LLM_UPSTREAM_BASE_URL: ${LLM_UPSTREAM_BASE_URL:-https://bedrock-mantle.us-west-2.api.aws/openai/v1}
-      LLM_MODEL: ${LLM_MODEL:-openai.gpt-5.6-luna}
+      LLM_UPSTREAM_BASE_URL: ${LLM_UPSTREAM_BASE_URL:-https://api.openai.com/v1}
+      LLM_MODEL: ${LLM_MODEL:-gpt-5.6-luna}
       LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-low}
       # 1회 시도당 타임아웃. infra/.env.example 의 LLM_GATEWAY_TIMEOUT_SECONDS
       # 주석에 적힌 순서(게이트웨이 총 예산 < 호출자 타임아웃)를 어기지 않아야 한다.
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-45}
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
-      LLM_INPUT_PRICE_PER_1M: ${LLM_INPUT_PRICE_PER_1M:-0.22}
-      LLM_OUTPUT_PRICE_PER_1M: ${LLM_OUTPUT_PRICE_PER_1M:-1.32}
+      LLM_INPUT_PRICE_PER_1M: ${LLM_INPUT_PRICE_PER_1M:-0.20}
+      LLM_OUTPUT_PRICE_PER_1M: ${LLM_OUTPUT_PRICE_PER_1M:-1.20}
     ports:
       - "8003:8003"
     healthcheck:
@@ -188,7 +188,7 @@ services:
     environment:
       LLM_GATEWAY_BASE_URL: http://llm-gateway:8003/v1
       VALIDATION_LLM_TIMEOUT_SECONDS: ${VALIDATION_LLM_TIMEOUT_SECONDS:-180}
-      LLM_MODEL: ${LLM_MODEL:-openai.gpt-5.6-luna}
+      LLM_MODEL: ${LLM_MODEL:-gpt-5.6-luna}
       PRESCRIPTION_AGENT_BASE_URL: http://prescription-api:8001
       PRESCRIPTION_AGENT_PATH: /api/agent/prescription/recommend
       PRESCRIPTION_AGENT_TIMEOUT_SECONDS: ${PRESCRIPTION_AGENT_TIMEOUT_SECONDS:-180}

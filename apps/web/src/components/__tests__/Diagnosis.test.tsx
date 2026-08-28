@@ -55,7 +55,7 @@ describe("llmStatusNotice", () => {
     expect(stub!.label).not.toBe(fallback!.label);
     // 위 부등호 비교만으로는 두 문구가 어떤 값으로 바뀌어도(둘이 다르기만
     // 하면) 통과한다. 실제 사용자에게 보이는 문구를 고정한다 — 이 값이
-    // 실제로 가장 자주 나오는 값이다(현재 프로젝트에 Bedrock 키가 없어
+    // 실제로 가장 자주 나오는 값이다(현재 프로젝트에 LLM API 키가 없어
     // "real" 경로가 없으므로).
     expect(stub!.label).toBe("스텁 응답 (모델 미사용)");
   });

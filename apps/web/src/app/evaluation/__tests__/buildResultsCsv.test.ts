@@ -3,7 +3,7 @@ import { buildResultsCsv } from "../buildResultsCsv";
 
 // 헤더와 행이 두 개의 손으로 관리하는 목록이라, 한쪽에만 컬럼을 넣거나 빼면
 // 그 뒤 컬럼이 전부 한 칸씩 밀린 채 나간다. 파일은 여전히 정상으로 보인다.
-// Task 9(실 Bedrock 측정)가 이 CSV 를 소비하므로 밀림이 숫자를 조용히 오염시킨다.
+// Task 9(실 LLM 측정)가 이 CSV 를 소비하므로 밀림이 숫자를 조용히 오염시킨다.
 
 function parseRow(line: string): string[] {
   // escapeCsvCell 이 쓰는 최소 규칙만 되돌린다: 따옴표로 감싸고 "" 로 이스케이프.

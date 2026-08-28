@@ -1,11 +1,64 @@
 # LLM 제공 경로 선택 — 트레이드오프 정리
 
 **작성일:** 2026-08-28
-**상태:** **결정됨** — Bedrock `bedrock-mantle`, us-west-2, `openai.gpt-5.6-luna` 단일화
+**상태:** **철회됨 → 재결정** — OpenAI API 직접 호출, `gpt-5.6-luna` 단일화 (§0.2 참조)
 **맥락:** 부트캠프 인프라 구축 프로젝트로 완성도를 올리는 중. 평가 대상은 **"클라우드 아키텍처 설계·운영 전반"**이며 "LLM 직접 서빙 인프라"가 아니다.
 
 ---
 
+## 0.2 최종 결정 — Bedrock 철회, OpenAI 직접 호출 (2026-08-28)
+
+**채택:** OpenAI API 직접 호출. `https://api.openai.com/v1`, 모델 `gpt-5.6-luna`.
+Bedrock 은 쓰지 않는다.
+
+**왜 바뀌었는가 — 실호출이 전제를 깼다.**
+
+게이트웨이를 완성하고 실제 Bedrock 키로 호출해 본 결과, 계정에 `openai.gpt-5.6-luna`
+엔타이틀먼트가 없었다. 추론 프로파일(`us.` / `global.`)이 `ACTIVE` 로 조회되는데도
+403 이었고, `get-foundation-model-availability` 가 `agreementAvailability:
+NOT_AVAILABLE` 을 반환했다 — 모델 계약(EULA) 미체결 상태였다.
+
+계약 오퍼는 존재했으므로 수락하면 열렸을 것이다. 그러나 그 시점에 드러난 것은
+이 문서 §6 의 트레이드오프 축 대부분이 **잘못된 사실 위에 세워져 있었다**는 점이다:
+
+- 축 1(structured outputs vs 서울 리전): mantle 이어야 OpenAI 호환 API 를 쓴다는
+  전제가 틀렸다. `bedrock-runtime` 도 `/openai/v1` 경로로 지원한다.
+- Bedrock 에서 luna 는 `INFERENCE_PROFILE` 전용이라 mantle(베어 ID + In-Region)과
+  애초에 맞지 않았다. §7 의 B2 선택지는 성립하지 않는 조합이었다.
+- 서울 리전은 `bedrock-runtime` + `global.` 프로파일로만 가능했고, 그것은 전 세계
+  라우팅이라 §6 축 3(데이터 레지던시)의 이점이 사라진다.
+
+**포기한 것과 그 대가.**
+
+Bedrock 을 쓰면 LLM 호출이 AWS 경계 안에 남고 IAM·CloudWatch·VPC 엔드포인트로
+다룰 수 있다. 이 프로젝트의 평가 대상이 "클라우드 아키텍처 설계·운영 전반"이므로
+그 점은 실제 이점이었다(§6 축 4). OpenAI 직접 호출은 그것을 외부 SaaS 의존으로
+바꾼다 — 자격증명이 AWS IAM 이 아닌 정적 키가 되고, 사용량·비용 관측이 AWS 밖에
+생기며, VPC 밖으로 나가는 트래픽이 된다.
+
+그 대가를 감수하는 이유는 지금이 **테스트 단계**이고 Bedrock 계약·엔타이틀먼트
+절차가 진행을 막고 있기 때문이다. 실제 배포 시점에 다시 판단한다.
+
+**설계에 미친 영향은 작다.** 게이트웨이가 처음부터 OpenAI 형태로 만들어져 있었다
+(`/v1/chat/completions`, `Authorization: Bearer`, `max_completion_tokens` 정규화,
+`reasoning_effort` 주입). 상류 URL·모델 ID·단가 기본값만 바뀌었고 호출자 세 서비스와
+재시도·계측·폴백 로직은 손대지 않았다. 자격증명이 게이트웨이에만 존재한다는 성질도
+그대로다(spec §3.1).
+
+**이번에 고정한 것:** 상류 기본값(URL·모델)과 단가 기본값을 테스트로 못 박았다
+(`services/llm-gateway/tests/test_config.py`). 그 전에는 기본값만 바꾸면 전체
+시스템이 조용히 다른 회사의 API 를 치게 되는데 아무 테스트도 잡지 못했다.
+
+**따라오는 후속 작업:** 배포 시 자격증명 전략 재검토. 정적 OpenAI 키를 `.env` 에
+두는 대신 시크릿 매니저를 쓰거나, Bedrock 계약을 체결하고 IAM 역할(IRSA) 기반으로
+되돌리는 선택지가 있다. §10 의 미확인 항목도 이 결정 위에서 다시 측정한다.
+
+---
+
+> **아래 §0 ~ §10 은 Bedrock 을 전제로 쓰인 원본이다. 위 §0.2 가 이를 대체한다.**
+> 판단 과정을 남기기 위해 지우지 않는다.
+
+---
 ## 0. 결정 기록 (2026-08-28)
 
 **채택:** 아래 §7의 선택지 **B2** — Bedrock `bedrock-mantle` 엔드포인트, us-west-2, 모델 `openai.gpt-5.6-luna` 단일화. Gemini 제거.
