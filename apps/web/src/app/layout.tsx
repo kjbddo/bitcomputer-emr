@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Global EMR",
+  title: "BitComputer EMR",
   description: "AI 보조 진료 기록 시스템",
 };
 
