@@ -32,7 +32,12 @@
    - 주요 테이블과 큐
    - 실행, 종료, 재빌드, 로그 확인
 
-6. [AWS Architecture](./AWS%20Architecture.md)
+6. [런북: 데이터 적재와 검증](./07-runbook-data-loading.md)
+   - 빈 볼륨에서 화면이 동작하는 상태까지의 절차
+   - MySQL 마스터 코드, 처방 추천 그래프, X-ray(CheXpert) 적재
+   - 적재 후 검증 명령과 결과 읽는 법
+
+7. [AWS Architecture](./AWS%20Architecture.md)
    - CloudFront/S3, ALB, ECS, Auto Scaling 기반 운영 배포 구조
    - RDS, DynamoDB, ElastiCache Redis, Amazon MQ RabbitMQ 배치
    - WAS/AI 서비스별 부하 특성과 고가용성 설계
@@ -71,4 +76,4 @@ flowchart LR
 
 ## 읽는 순서
 
-처음 보는 사람은 `01-system-architecture.md` → `02-user-flows.md` → `04-ai-services-and-agents.md` 순서로 읽는 것을 권장한다. API 연동이나 디버깅이 목적이면 `03-api-endpoints.md`와 `05-data-and-deployment.md`를 먼저 보면 된다.
+처음 보는 사람은 `01-system-architecture.md` → `02-user-flows.md` → `04-ai-services-and-agents.md` 순서로 읽는 것을 권장한다. API 연동이나 디버깅이 목적이면 `03-api-endpoints.md`와 `05-data-and-deployment.md`를 먼저 보면 된다. 처음 실행하거나 DB 가 비어 보이면 `07-runbook-data-loading.md` 를 본다.
