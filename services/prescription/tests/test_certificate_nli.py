@@ -480,3 +480,18 @@ def test_nli_enabled_llm_failure_still_skipped_through_safe_verify(monkeypatch):
     nli_checks = [c for c in result["checks"] if c["id"] == "nli_entailment"]
     assert nli_checks
     assert all(c["outcome"] == "skipped" for c in nli_checks)
+
+
+# 프로덕션 호출부(_safe_verify_certificate)는 budget_seconds 는 명시적으로
+# 넘기지만 clock 은 안 넘긴다 — 기본값에 전적으로 의존한다. 그런데 시간을
+# 다루는 모든 테스트가 자기 가짜 clock 을 주입하므로, 정작 프로덕션이 쓰는
+# 그 기본값을 아무도 안 본다. 여기가 망가지면 매 문장이 다시 온전한 예산을
+# 받아 사다리 역전이 되돌아오는데 테스트 신호가 전혀 없다.
+def test_default_clock_is_monotonic():
+    import inspect
+    import time
+
+    from certificate_verification import verify_certificate_nli
+
+    default = inspect.signature(verify_certificate_nli).parameters["clock"].default
+    assert default is time.monotonic
