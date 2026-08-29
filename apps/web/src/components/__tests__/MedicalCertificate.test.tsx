@@ -219,6 +219,31 @@ describe("진단서 AI 미리보기의 근거 검증 표시", () => {
     expect(await within(dialog).findByText("근거")).toBeInTheDocument();
   });
 
+  // 리뷰에서 지적된 갭: 모델 배지와 근거 배지가 하나의 컨테이너로 합쳐져도
+  // 텍스트("모델", "근거")는 둘 다 여전히 존재하므로 문구 검사만으로는 못
+  // 잡는다. 두 표시가 서로 다른 블록 컨테이너(div)에 있는지 구조로 확인한다.
+  it("모델 표시와 근거 표시는 서로 다른 블록에 따로 선다", async () => {
+    vi.mocked(generateDocumentCertificateByHistory).mockResolvedValue({
+      grantType: "Bearer", accessToken: "a", refreshToken: "r",
+      medicalCertificate: "소견",
+      llmStatus: "fallback",
+      verification: { status: "flagged", checks: [] },
+    });
+    renderWithAppliedDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: /AI/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    const modelLabel = await within(dialog).findByText("모델");
+    const evidenceLabel = within(dialog).getByText("근거");
+
+    const modelContainer = modelLabel.closest("div");
+    const evidenceContainer = evidenceLabel.closest("div");
+
+    expect(modelContainer).not.toBeNull();
+    expect(evidenceContainer).not.toBeNull();
+    expect(modelContainer).not.toBe(evidenceContainer);
+  });
+
   // 생명주기: 미리보기 모달의 근거 표시는 그 미리보기가 담은 정확히 그 텍스트를
   // 설명한다. 수락하면 모달은 사라지고 텍스트는 편집 가능한 opinion 필드로
   // 옮겨간다 — 그 시점부터 의사가 자유롭게 고칠 수 있는 텍스트이므로, 검증

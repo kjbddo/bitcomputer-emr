@@ -443,6 +443,55 @@ describe("처방 표의 항목 단위 검증 표시", () => {
     expect(await within(dialog).findByText("근거")).toBeInTheDocument();
     expect(within(dialog).getByText("근거 불일치")).toBeInTheDocument();
   });
+
+  // 리뷰에서 지적된 갭: 근거 표시 텍스트가 어딘가에 있다는 것만으로는 그게
+  // modalCardHead 안(overallStatus 배지, 모델 배지와 한 줄)으로 옮겨져도 안
+  // 잡힌다 — 이 저장소가 이미 겪은 "세 배지가 한 줄"(spec §7.1 위반) 실패를
+  // 그대로 재현해도 통과해버린다. 텍스트 존재가 아니라 컨테이너 소속을 검사한다.
+  it("근거 표시는 modalCardHead 배지 줄에 속하지 않는다", async () => {
+    // 모델 배지도 함께 떠야 modalCardHead 를 "모델" 라벨로 특정할 수 있다
+    // (mockJobWithVerification 은 llmStatus 를 "real" 로 고정해 모델 배지가
+    // 안 뜬다).
+    mockedRecommend.mockResolvedValue({ jobId: "job-v-7", historyId: 10, status: "RUNNING" });
+    mockedGetJob.mockResolvedValue({
+      jobId: "job-v-7",
+      historyId: 10,
+      status: "DONE",
+      result: {
+        overallStatus: "PASS",
+        summary: "이상 없음",
+        llmStatus: "fallback",
+        verification: { status: "flagged", checks: [] },
+        recommendedPrescriptions: [
+          {
+            id: 1,
+            rank: 1,
+            prescription_code: "C1",
+            prescription_name: "약1",
+            reason: "",
+            confidence_score: 0.9,
+            dose: 1,
+            time: 1,
+            days: 1,
+          },
+        ],
+      },
+    } as unknown as ValidationJobResponse);
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog");
+    const modelLabel = await within(dialog).findByText("모델");
+    // modelLabel 은 <span class=llmStatusGroupLabel> 이고 그 부모가
+    // <span class=llmStatusGroup>, 그 부모가 modalCardHead div 다. 클래스
+    // 이름에 의존하지 않고 가장 가까운 div 조상을 찾으면 modalCardHead 다.
+    const badgeRow = modelLabel.closest("div");
+    expect(badgeRow).not.toBeNull();
+
+    const evidenceLabel = within(dialog).getByText("근거");
+    expect(badgeRow!.contains(evidenceLabel)).toBe(false);
+  });
 });
 
 // CRITICAL: 배지는 rank 로 조회하지만(`prescription[${rank}]`), 의사는 "처방
