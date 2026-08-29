@@ -242,6 +242,12 @@ describe("진단서 AI 미리보기의 근거 검증 표시", () => {
     expect(modelContainer).not.toBeNull();
     expect(evidenceContainer).not.toBeNull();
     expect(modelContainer).not.toBe(evidenceContainer);
+    // 노드가 다르다는 것만으로는 부족하다. 한쪽을 다른 쪽 안에 중첩시켜도
+    // closest("div") 가 서로 다른 노드를 돌려줘서 위 단언은 통과한다.
+    // 두 표시는 나란히 선 형제여야 한다.
+    expect(modelContainer!.parentElement).toBe(evidenceContainer!.parentElement);
+    expect(modelContainer!.contains(evidenceContainer)).toBe(false);
+    expect(evidenceContainer!.contains(modelContainer)).toBe(false);
   });
 
   // 생명주기: 미리보기 모달의 근거 표시는 그 미리보기가 담은 정확히 그 텍스트를

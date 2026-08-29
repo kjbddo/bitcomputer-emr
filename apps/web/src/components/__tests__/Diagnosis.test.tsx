@@ -491,6 +491,16 @@ describe("처방 표의 항목 단위 검증 표시", () => {
 
     const evidenceLabel = within(dialog).getByText("근거");
     expect(badgeRow!.contains(evidenceLabel)).toBe(false);
+
+    // modalCardHead 밖이라는 것만으로는 부족하다. 배지 줄 바로 아래이면서
+    // 요약 문단보다 위여도 이 단언은 통과한다. 브리프가 지정한 자리는
+    // "요약 문단 아래, 검증 이유 목록 위" 다.
+    const summary = within(dialog).getByText("이상 없음");
+    // DOCUMENT_POSITION_FOLLOWING = 4. 근거 표시가 요약보다 뒤에 와야 한다.
+    expect(
+      summary.compareDocumentPosition(evidenceLabel) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
   });
 });
 
