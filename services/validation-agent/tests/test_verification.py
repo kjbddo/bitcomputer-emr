@@ -98,12 +98,18 @@ def test_candidates_from_finder_alone_never_passes():
     assert result.status == "skipped"
 
 
-# --- 최종 리뷰 C2(b): 코드가 빈 후보가 대조 없이 "모두 검증됨"에 섞여 든다 ---
+# --- 최종 리뷰 C2(b)/IMP-1: 코드가 빈 후보의 취급 ---
 #
 # _code() 는 dict 행에 코드 키가 없거나 비어 있으면 "" 를 반환한다. 예전 구현은
 # outside 계산에서 `- {""}` 로 그 행을 조용히 빼 버려, 대조되지 않은 행이
 # "후보 N건이 모두 finder 관측값에서 옴" 이라는 evidence 에 그대로 포함됐다.
 # 검사보다 evidence 가 더 많이 주장하는 이 브랜치의 반복 결함이다(GC-2).
+#
+# C2(b) 는 이를 flagged 로 드러냈으나, flagged 의 화면 문구는 "근거 불일치" 다
+# — 출력이 근거와 어긋난다는 뜻이다. 코드가 없는 행은 근거와 어긋나는 것이
+# 아니라 대조할 대상이 없는 것이고, 그건 skipped 의 정의다(IMP-1). 같은 행을
+# prescription 검증기는 이미 skipped 로 분류하고 있어 두 서비스가 갈려 있었다.
+# 진짜 불일치(관측값 밖의 코드)와 형식 파손은 그대로 flagged 로 남는다.
 def test_candidates_with_empty_code_are_not_silently_counted_as_verified():
     response = {"pubmedEvidenceSummary": "", "checks": [],
                 "candidatePrescriptions": [
@@ -118,8 +124,10 @@ def test_candidates_with_empty_code_are_not_silently_counted_as_verified():
 
     outcomes = _outcomes(result, "candidates_from_finder")
     evidence = _evidence(result, "candidates_from_finder")
-    assert outcomes == ["flagged"]
+    assert outcomes == ["skipped"]
     assert "3건이 모두 finder 관측값에서 옴" not in evidence[0]
+    # 근거 검사가 ok 를 못 냈으므로 응답 전체는 passed 가 될 수 없다(GC-2).
+    assert result.status != "passed"
 
 
 def test_candidate_with_mixed_coded_and_uncoded_rows_reports_uncoded_indices():
@@ -135,8 +143,40 @@ def test_candidate_with_mixed_coded_and_uncoded_rows_reports_uncoded_indices():
 
     outcomes = _outcomes(result, "candidates_from_finder")
     evidence = _evidence(result, "candidates_from_finder")
-    assert outcomes == ["flagged"]
+    assert outcomes == ["skipped"]
     assert "[1]" in evidence[0]
+
+
+def test_code_outside_finder_observation_is_still_flagged_beside_uncoded_row():
+    """진짜 불일치는 코드 없는 행과 섞여 있어도 skipped 로 묻히지 않는다."""
+    response = {"pubmedEvidenceSummary": "", "checks": [],
+                "candidatePrescriptions": [
+                    {"prescription_code": "ZZ99"},
+                    {"prescription_name": "코드없는후보", "prescription_code": ""},
+                ],
+                "reasoningTrace": []}
+    result = verify_validation(
+        pubmed_articles=[], finder_candidates=[{"prescription_code": "A01"}],
+        response_dict=response)
+
+    assert _outcomes(result, "candidates_from_finder") == ["flagged"]
+    assert "ZZ99" in _evidence(result, "candidates_from_finder")[0]
+
+
+def test_malformed_row_is_still_flagged_beside_uncoded_row():
+    """형식 파손도 마찬가지다 — dict 가 아닌 행은 여전히 flagged 다."""
+    response = {"pubmedEvidenceSummary": "", "checks": [],
+                "candidatePrescriptions": [
+                    {"prescription_code": "A01"},
+                    "문자열행",
+                    {"prescription_name": "코드없는후보", "prescription_code": ""},
+                ],
+                "reasoningTrace": []}
+    result = verify_validation(
+        pubmed_articles=[], finder_candidates=[{"prescription_code": "A01"}],
+        response_dict=response)
+
+    assert _outcomes(result, "candidates_from_finder") == ["flagged"]
 
 
 def test_trace_step_without_observation_is_flagged():
