@@ -275,13 +275,64 @@ LLM_VERIFICATION_NLI=off        # off | on, 기본 off
 
 필드 누락 / `null` / 계약 밖 값 / 대소문자 불일치 네 가지 shape 를 렌더 경로로 구동해, 어느 것도 "검증됨"으로 렌더되지 않는지 확인한다.
 
-## 11. 실측이 필요한 항목
+## 11. 실측
 
-- [ ] `code_in_candidates` 의 실제 flagged 비율. 0% 면 검사가 무의미하거나(모델이 절대 지어내지 않음) 후보 집합이 너무 넓다는 뜻이다. 100% 에 가까우면 후보 집합 구성이 틀렸다.
-- [ ] `skipped` 비율. 높으면 검증층이 이름만 있고 실제로는 대부분 판정하지 못한다는 뜻이다. 그 경우 조회 데이터를 더 확보하는 것이 먼저다.
-- [ ] NLI 2차 호출의 요청당 추가 비용과 지연. `X-LLM-Caller` 분리로 계측된다. 이 숫자 없이 B 를 기본으로 켜지 않는다.
-- [ ] 30초 NLI 예산이 실제 응답 시간 대비 충분한가. B0 spec §10.2 의 45초 항목과 같이 측정한다.
+### 11.1 1차 측정 (2026-08-29, stub 모드)
 
+`services/prescription/scripts/measure_verification.py` 로 시나리오 10건을
+`LLM_PROVIDER=stub` + 실제 prescription-api 에 태워 측정했다.
+
+**이 숫자는 스텁의 출력을 설명한다.** 모델이 얼마나 자주 지어내는지는 말해주지
+않는다. 유효한 LLM 키가 없어 real 경로를 돌릴 수 없었다. 그 구분을 지우지 않는다.
+
+```
+verification.status:  flagged 6 (60%)   passed 4 (40%)
+
+code_in_candidates    flagged=4  ok=14  skipped=12   (총 30)
+name_matches_code                ok=14  skipped=16   (총 30)
+dosage_verbatim                         skipped=30   (총 30)
+confidence_in_range                     skipped=30   (총 30)
+schema_top3           flagged=6  ok=4                (총 10)
+```
+
+### 11.2 확인된 것
+
+- [x] **`code_in_candidates` 는 공허하지 않다.** 양방향으로 발화한다
+  (flagged 4, ok 14). 후보 집합이 너무 넓지도, 검사가 무의미하지도 않다.
+  세 서비스 통틀어 가장 중요한 검사가 실제로 일한다는 뜻이다.
+
+- [x] **`dosage_verbatim` 은 프로덕션 경로에서 절대 발화할 수 없다.**
+  30건 전부 `skipped` 였고, 원인은 데이터 형태다. 실제 Arango 조회
+  (`run_prescription_agent.py` 의 AQL `RETURN {...}`)가 돌려주는 후보 행의
+  키는 `처방코드`·`처방명`·`prescription_code`·`canonical_name`·`visit_id`·
+  `내원번호`·`처방시퀀스`·`order_line_id` 다 — **용량에 해당하는 필드가 없다.**
+  평가 시나리오는 `dose`/`frequency` 를 싣지만 검증기가 찾는 `dosage`/`용법` 과
+  다르고, 애초에 시나리오가 아니라 Arango 가 프로덕션의 후보 출처다.
+
+  즉 이 검사는 대조할 원본이 존재하지 않는다. `skipped` 를 내므로 거짓말은
+  하지 않지만(GC-2 유지), 리뷰 세 라운드를 소모해 비교 의미론을 다듬은
+  검사가 실제로는 한 번도 판정하지 못한다. **후속 결정 필요:** 후보 출처에
+  용량을 실어 검사를 살릴지, 검사를 제거할지.
+
+- [x] **`confidence_in_range` 도 30건 전부 `skipped`.** 스텁이
+  `confidence_score` 를 채우지 않기 때문이다. 실제 모델은 채울 수 있으므로
+  이 항목은 real 경로 측정 전까지 결론을 낼 수 없다. `dosage_verbatim` 과
+  달리 데이터 형태의 문제가 아니다.
+
+- [x] **`schema_top3` 가 60% flagged 인 것은 스텁 산물이다.** 스텁이
+  rank 집합을 {1,2,3} 으로 맞추지 않는다. 모델 품질과 무관하다.
+
+### 11.3 아직 미확인
+
+- [ ] real 경로에서의 `code_in_candidates` flagged 비율. 즉 실제 모델이
+  조회 결과 밖의 처방을 얼마나 자주 내놓는가. 이 프로젝트가 답하려던 질문이고,
+  유효한 LLM 키가 생겨야 측정된다.
+- [ ] real 경로에서의 `confidence_in_range` 판정 비율.
+- [ ] NLI 2차 호출의 요청당 추가 비용과 지연. `X-LLM-Caller: certificate-api-nli`
+  로 분리 계측된다. 이 숫자 없이 `LLM_VERIFICATION_NLI=on` 을 기본으로 켜지 않는다.
+- [ ] NLI 예산 30초가 실제 응답 시간 대비 충분한가.
+
+---
 ## 12. 완료 조건
 
 1. 세 서비스가 각각 `verification` 을 응답에 싣는다.
