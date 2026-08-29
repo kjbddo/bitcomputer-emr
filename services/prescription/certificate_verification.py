@@ -52,7 +52,8 @@ def _normalize(value: str) -> str:
     """한글 NFC 정규화. NFC 와 NFD 는 화면상 같지만 코드포인트가 다르고,
     Arango 적재 경로나 입력기에 따라 어느 쪽으로도 premise 값이 들어올 수
     있어 정규화 없이 부분 문자열 비교하면 같은 용어가 불일치로 잡힌다
-    (verification.py 의 _normalize_dosage 와 동일한 근거)."""
+    (verification.py 의 용량 대조도 같은 근거로 정규화했었다 — 그 검사는
+    후보 출처에 용량이 없어 제거됐고, 근거는 spec §11.2 에 남아 있다)."""
     return unicodedata.normalize("NFC", value)
 
 

@@ -13,12 +13,12 @@ def _check(check_id: str, outcome: str) -> CheckResult:
 
 
 def test_flagged_wins_over_everything():
-    checks = [_check("code_in_candidates", "ok"), _check("dosage_verbatim", "flagged")]
+    checks = [_check("code_in_candidates", "ok"), _check("name_matches_code", "flagged")]
     assert aggregate_status(checks) == "flagged"
 
 
 def test_grounding_ok_yields_passed():
-    checks = [_check("code_in_candidates", "ok"), _check("dosage_verbatim", "skipped")]
+    checks = [_check("code_in_candidates", "ok"), _check("name_matches_code", "skipped")]
     assert aggregate_status(checks) == "passed"
 
 
@@ -85,7 +85,7 @@ def test_verificationresult_is_immutable():
 def test_mutating_source_list_does_not_change_result():
     source = [_check("code_in_candidates", "ok")]
     result = VerificationResult(status="passed", checks=source, skippedReason=None)
-    source.append(_check("dosage_verbatim", "flagged"))
+    source.append(_check("name_matches_code", "flagged"))
     assert result.status == "passed"
     assert len(result.checks) == 1
     assert result.to_dict()["checks"] == [

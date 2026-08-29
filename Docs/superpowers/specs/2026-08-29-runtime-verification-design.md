@@ -103,7 +103,7 @@ CheckOutcome = Literal["ok", "flagged", "skipped"]
 
 @dataclass(frozen=True)
 class CheckResult:
-    id: str            # "code_in_candidates", "dosage_verbatim", ...
+    id: str            # "code_in_candidates", "cited_pmid_in_evidence", ...
     target: str        # 어느 항목인지: "prescription[1]", "sentence[3]"
     outcome: CheckOutcome
     evidence: str      # 왜 그렇게 판정했는지, 사람이 읽는 한 줄
