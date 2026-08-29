@@ -39,8 +39,9 @@ except ImportError:
     load_dotenv = None
 
 from certificate_agent import SYSTEM_CERTIFICATE, build_certificate_agent_prompt
-from certificate_verification import verify_certificate
+from certificate_verification import verify_certificate, verify_certificate_nli
 from llm_provider import resolve_provider, stub_certificate_response
+from verification_contract import VerificationResult, aggregate_status
 
 logger = logging.getLogger("certificate_api")
 logging.basicConfig(
@@ -61,6 +62,15 @@ def _load_dotenv_if_present() -> None:
 
 
 _load_dotenv_if_present()
+
+
+# B(NLI) 플래그. 기본 off — spec §8, Task 11. 켜지 않으면 모든 요청에
+# 게이트웨이 호출이 하나씩 더 붙는 비용·지연이 조용히 생기지 않는다.
+# off | on
+NLI_ENABLED = os.environ.get("LLM_VERIFICATION_NLI", "off").strip().lower() == "on"
+# NLI 2차 호출 단독 예산. 재시도 없음. 게이트웨이 자체 예산(136.5s)에
+# 이 값이 더해져도 호출자 타임아웃(180s)을 넘지 않아야 한다(spec §8.4).
+NLI_TIMEOUT_SECONDS = float(os.environ.get("LLM_VERIFICATION_NLI_TIMEOUT_SECONDS", "30"))
 
 
 _ZERO_WIDTH_CHARS = "\u200b\u200c\u200d\ufeff"
@@ -243,13 +253,93 @@ def _invoke_gateway_text(system_prompt: str, user_prompt: str, model: str) -> st
         raise HTTPException(status_code=502, detail=f"LLM 게이트웨이 호출 실패: {exc}") from exc
 
 
+NLI_SYSTEM_PROMPT = (
+    "당신은 자연어추론(NLI) 판정기입니다. 전제(premise)와 가설(hypothesis)이 "
+    "주어지면 가설이 전제로부터 함의되는지 판단해, 다음 세 단어 중 정확히 "
+    "하나만 출력하세요: ENTAILMENT, CONTRADICTION, NEUTRAL. 다른 말은 절대 "
+    "덧붙이지 마세요."
+)
+
+
+def _certificate_premise(req: Any) -> str:
+    """NLI 판정에 쓸 premise 문자열을 diseases + diagnoses 에서 만든다.
+
+    certificate_verification.verify_certificate() 가 known_codes/known_terms 를
+    뽑는 것과 같은 소스(diseases + diagnoses)에서 만든다 — 두 검사가 서로
+    다른 premise 를 보면, 결정론적 검사는 "근거 있음"이라 하는데 NLI 는
+    "근거 없음"이라 하는 모순이 생긴다.
+    """
+    entries = list(getattr(req, "diseases", None) or []) + list(getattr(req, "diagnoses", None) or [])
+    parts: list[str] = []
+    for entry in entries:
+        code = str(getattr(entry, "code", "") or "").strip()
+        name = str(getattr(entry, "name", "") or "").strip()
+        if code and name:
+            parts.append(f"{name}({code})")
+        elif name or code:
+            parts.append(name or code)
+    return ", ".join(parts)
+
+
+def _call_certificate_nli(premise: str, hypothesis: str) -> str:
+    """NLI 2차 호출. `_invoke_gateway_text` 와 의도적으로 분리한 별도 함수다.
+
+    - 헤더가 다르다: X-LLM-Caller: certificate-api-nli. 계측이 본 기능 호출
+      (certificate-api)과 섞이지 않아야 B 를 기본으로 켤지 판단할 비용·지연
+      숫자를 얻을 수 있다(spec §8.2, §11).
+    - 재시도하지 않는다: 게이트웨이 자체 예산(3회 시도+backoff ≈ 136.5s)에
+      NLI 호출까지 재시도로 늘어나면 호출자 타임아웃(180s) 사다리가
+      뒤집힌다(spec §8.4). 그래서 httpx.Client 로 한 번만 호출하고 재시도
+      루프를 두지 않는다 — 실패하면 그대로 예외를 던진다.
+    - `_invoke_gateway_text` 를 재사용하지 않는 이유: 그 함수는 실패를
+      HTTPException(502/503) 으로 바꿔 본 요청(진단서 생성) 흐름을 끊는
+      용도로 설계됐다. NLI 호출은 부가 검증일 뿐이라 그 실패가 본 응답을
+      끊으면 GC-4 를 어긴다. 그래서 여기서는 예외를 그대로 전파시키고,
+      그걸 skipped 로 접수하는 책임은 verify_certificate_nli 의 try/except
+      쪽에 맡긴다(GC-1: I/O 는 주입, 판정 로직은 순수 함수).
+    """
+    base_url = os.environ.get("LLM_GATEWAY_BASE_URL")
+    if not base_url:
+        raise RuntimeError("LLM_GATEWAY_BASE_URL 이 설정되지 않았습니다.")
+    payload = {
+        "model": _default_llm_model(),
+        "messages": [
+            {"role": "system", "content": NLI_SYSTEM_PROMPT},
+            {"role": "user", "content": f"전제: {premise}\n가설: {hypothesis}"},
+        ],
+    }
+    with httpx.Client(timeout=NLI_TIMEOUT_SECONDS) as client:
+        response = client.post(
+            f"{base_url.rstrip('/')}/chat/completions",
+            headers={"X-LLM-Caller": "certificate-api-nli"},
+            json=payload,
+        )
+        response.raise_for_status()
+        return str(response.json()["choices"][0]["message"]["content"])
+
+
 def _safe_verify_certificate(req: Any, text: str) -> Dict[str, Any]:
     """검증을 돌리되 본 응답을 실패시키지 않는다(GC-4)."""
     try:
-        return verify_certificate(
+        result = verify_certificate(
             diseases=getattr(req, "diseases", None) or [],
             diagnoses=getattr(req, "diagnoses", None) or [],
             text=text,
+        )
+        checks = list(result.checks)
+        if NLI_ENABLED:
+            # NLI_ENABLED 는 이 검사가 도는지만 결정한다 — outcome 은 항상
+            # call_llm(=_call_certificate_nli) 의 실행 결과에서만 나온다
+            # (GC-5: 상태는 실행 경로에서 나오지 설정에서 도출되지 않는다).
+            checks.extend(verify_certificate_nli(
+                premise=_certificate_premise(req),
+                text=text,
+                call_llm=_call_certificate_nli,
+            ))
+        return VerificationResult(
+            status=aggregate_status(checks),
+            checks=checks,
+            skippedReason=result.skippedReason,
         ).to_dict()
     except Exception as exc:  # noqa: BLE001
         logger.exception("진단서 검증 실패, skipped 로 처리")

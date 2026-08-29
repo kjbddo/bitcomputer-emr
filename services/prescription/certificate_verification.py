@@ -55,6 +55,51 @@ def _normalize(value: str) -> str:
     return unicodedata.normalize("NFC", value)
 
 
+SENTENCE_SPLIT = re.compile(r"(?<=[.!?。])|\n+")
+
+# 모델이 돌려주는 판정 문자열. 이 셋 밖의 값은 판정 실패로 본다 —
+# 알 수 없는 응답을 통과로 읽으면 검증층이 스스로를 무력화한다.
+_VERDICT_OK = "ENTAILMENT"
+_VERDICT_BAD = {"CONTRADICTION", "NEUTRAL"}
+
+
+def verify_certificate_nli(*, premise: str, text: str, call_llm) -> List[CheckResult]:
+    """소견 각 문장이 premise 에서 함의되는지 모델에게 묻는다(B(NLI), spec §6.2).
+
+    검증기는 순수 함수로 남는다 — I/O 는 `call_llm` 으로 주입받는다(GC-1).
+    호출 실패·타임아웃·알 수 없는 판정은 전부 skipped 다. 절대 ok 가 아니다
+    (GC-2). `nli_entailment` 는 근거 검사다 — STRUCTURAL_CHECK_IDS 에 넣지
+    않는다.
+    """
+    if not premise.strip():
+        return []
+
+    sentences = [s.strip() for s in SENTENCE_SPLIT.split(text or "") if s and s.strip()]
+    checks: List[CheckResult] = []
+    for index, sentence in enumerate(sentences):
+        target = f"sentence[{index}]"
+        try:
+            verdict = str(call_llm(premise, sentence)).strip().upper()
+        except Exception as exc:  # noqa: BLE001
+            checks.append(CheckResult(
+                id="nli_entailment", target=target, outcome="skipped",
+                evidence=f"NLI 호출 실패: {type(exc).__name__}"))
+            continue
+
+        if verdict == _VERDICT_OK:
+            outcome = "ok"
+            evidence = "premise 에서 함의됨"
+        elif verdict in _VERDICT_BAD:
+            outcome = "flagged"
+            evidence = f"판정: {verdict}"
+        else:
+            outcome = "skipped"
+            evidence = f"알 수 없는 판정: {verdict!r}"
+        checks.append(CheckResult(
+            id="nli_entailment", target=target, outcome=outcome, evidence=evidence))
+    return checks
+
+
 def verify_certificate(
     *,
     diseases: Sequence[Any],
