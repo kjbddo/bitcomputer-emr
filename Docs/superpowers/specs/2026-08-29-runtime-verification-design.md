@@ -160,12 +160,11 @@ B0 의 Task 10·11 에서 확인된 함정이다. `@JsonIgnoreProperties(ignoreU
 | `schema_top3` | 항목 3개, rank 가 정확히 {1,2,3}, 코드 중복 없음 | — (항상 판정 가능) |
 | `code_in_candidates` | 각 `prescription_code` 가 조회된 후보 집합에 있는가 | `skipped` |
 | `name_matches_code` | 후보 집합에서 그 코드에 붙은 이름과 반환된 `name` 이 같은가 | `skipped` |
-| `dosage_verbatim` | `dosage` 가 해당 코드의 원본 처방 라인에 문자 그대로 나오는가 | `skipped` |
 | `confidence_in_range` | `confidence_score` 가 0..1 범위인가 | — |
 
 **`reason` 검사는 A 에서 뺀다.** §2.1 의 `reason_supported` 를 이식하지 않는다. 산문으로 쓰인 이유의 타당성은 결정론적으로 판정할 수 없고, 단어 존재로 대신하는 순간 이 프로젝트가 고치려는 문제를 반복한다. 이유의 근거성은 B(NLI)가 할 일이고, 그때까지는 검증하지 않는다고 정직하게 둔다.
 
-`dosage_verbatim` 이 §2.2 의 조용한 누락을 고치는 지점이다. 원본 라인에 용량 정보가 없으면 `skipped` 로 남긴다.
+`dosage_verbatim`(`dosage` 가 원본 처방 라인에 문자 그대로 나오는지 대조하는 검사)은 §11.2 의 실측에서 절대 발화하지 않는 것으로 확인되어 제거했다 — 원본 후보 출처에 용량 필드 자체가 없다. 근거는 §11.2 를 보라.
 
 ### 6.2 certificate
 
@@ -311,8 +310,14 @@ schema_top3           flagged=6  ok=4                (총 10)
 
   즉 이 검사는 대조할 원본이 존재하지 않는다. `skipped` 를 내므로 거짓말은
   하지 않지만(GC-2 유지), 리뷰 세 라운드를 소모해 비교 의미론을 다듬은
-  검사가 실제로는 한 번도 판정하지 못한다. **후속 결정 필요:** 후보 출처에
-  용량을 실어 검사를 살릴지, 검사를 제거할지.
+  검사가 실제로는 한 번도 판정하지 못한다.
+
+  **결론(해결됨):** 쿼리나 키 조회를 넓혀서 고칠 수 있는 문제가 아니다 —
+  `graph_normalize.py` 의 `CANONICAL_COLS` 와 그 원본인
+  `20260406_상병별 처방코드 추출_특이사항 추가.xlsx` 에도 용량 개념이 없어,
+  상류 데이터 자체가 없다. 프로젝트 오너 결정으로 `dosage_verbatim` 검사와
+  전용 헬퍼(`_row_dosage`, `_normalize_dosage`)를 제거했다. 용량 데이터가
+  확보되면 새로 설계해 다시 추가한다.
 
 - [x] **`confidence_in_range` 도 30건 전부 `skipped`.** 스텁이
   `confidence_score` 를 채우지 않기 때문이다. 실제 모델은 채울 수 있으므로

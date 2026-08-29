@@ -3,11 +3,19 @@
 순수 함수만 둔다(GC-1). 출력을 변형하지 않는다(GC-3).
 근거가 없으면 통과가 아니라 미확인이다(GC-2).
 
+용량(dosage) 대조 검사는 제거되었다. 실측(spec §11.1,
+scripts/measure_verification.py) 결과 10개 시나리오 30건 전부
+skipped 였고, 원인은 상류에 용량 데이터 자체가 없기 때문이다:
+run_prescription_agent.py 의 후보 조회 AQL RETURN 절, 이 파일이
+읽는 packages/graph-etl/graph_normalize.py 의 CANONICAL_COLS,
+그리고 그 원본인 packages/graph-etl 의
+20260406_상병별 처방코드 추출_특이사항 추가.xlsx 세 곳 모두 용량
+개념이 없다. 쿼리나 키 조회를 넓혀서 고칠 수 있는 문제가 아니라서
+제거했다. 용량 데이터가 확보되면 새로 설계해 다시 추가할 것.
+
 spec: Docs/superpowers/specs/2026-08-29-runtime-verification-design.md §6.1
 """
 from __future__ import annotations
-
-import unicodedata
 
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -33,32 +41,14 @@ def _row_name(row: Any) -> str:
     return str(value).strip() if value is not None else ""
 
 
-def _row_dosage(row: Any) -> str:
-    if not isinstance(row, dict):
-        return ""
-    value = row.get("dosage")
-    if value is None:
-        value = row.get("용법")
-    return str(value).strip() if value is not None else ""
-
-
 def _index_candidates(candidates: Sequence[Any]) -> Dict[str, Dict[str, str]]:
     index: Dict[str, Dict[str, str]] = {}
     for row in candidates:
         code = _row_code(row)
         if not code:
             continue
-        index.setdefault(code, {"name": _row_name(row), "dosage": _row_dosage(row)})
+        index.setdefault(code, {"name": _row_name(row)})
     return index
-
-
-def _normalize_dosage(value: str) -> str:
-    """용량 비교용 정규화: 유니코드 NFC + 공백 축약.
-
-    NFC 를 먼저 한다. 한글 NFD(자모 분해형)는 NFC 와 화면상 같지만
-    코드포인트가 달라, 정규화 없이 비교하면 같은 용량이 불일치로 잡힌다.
-    """
-    return " ".join(unicodedata.normalize("NFC", value).split())
 
 
 def _text(value: Any) -> str:
@@ -110,7 +100,6 @@ def verify_prescriptions(*, candidates: Sequence[Any], items: Sequence[Any]) -> 
         target = f"prescription[{rank}]"
         code = _text(getattr(item, "prescription_code", ""))
         name = _text(getattr(item, "name", ""))
-        dosage = _text(getattr(item, "dosage", ""))
         confidence = getattr(item, "confidence_score", None)
 
         if not has_candidates:
@@ -119,9 +108,6 @@ def verify_prescriptions(*, candidates: Sequence[Any], items: Sequence[Any]) -> 
                 evidence="조회된 후보가 없어 대조할 수 없음"))
             checks.append(CheckResult(
                 id="name_matches_code", target=target, outcome="skipped",
-                evidence="조회된 후보가 없어 대조할 수 없음"))
-            checks.append(CheckResult(
-                id="dosage_verbatim", target=target, outcome="skipped",
                 evidence="조회된 후보가 없어 대조할 수 없음"))
         else:
             matched = index.get(code)
@@ -135,9 +121,6 @@ def verify_prescriptions(*, candidates: Sequence[Any], items: Sequence[Any]) -> 
                 checks.append(CheckResult(
                     id="name_matches_code", target=target, outcome="skipped",
                     evidence="코드가 후보에 없어 이름을 대조할 수 없음"))
-                checks.append(CheckResult(
-                    id="dosage_verbatim", target=target, outcome="skipped",
-                    evidence="코드가 후보에 없어 용량을 대조할 수 없음"))
             else:
                 expected_name = matched["name"]
                 if not expected_name:
@@ -149,42 +132,6 @@ def verify_prescriptions(*, candidates: Sequence[Any], items: Sequence[Any]) -> 
                         id="name_matches_code", target=target,
                         outcome="ok" if expected_name == name else "flagged",
                         evidence=f"후보 {expected_name!r} vs 출력 {name!r}"))
-
-                source_dosage = matched["dosage"]
-                if not source_dosage:
-                    # §2.2 의 조용한 누락을 고치는 지점.
-                    checks.append(CheckResult(
-                        id="dosage_verbatim", target=target, outcome="skipped",
-                        evidence="후보 행에 용량 정보가 없어 대조할 수 없음"))
-                elif not dosage:
-                    checks.append(CheckResult(
-                        id="dosage_verbatim", target=target, outcome="skipped",
-                        evidence="출력에 용량이 없어 대조할 수 없음"))
-                else:
-                    # verbatim 은 "출력이 원본 용량 문구와 정확히 같다"는 뜻이다.
-                    # 부분 문자열 포함은 양방향 모두 우회 가능했다 — 원본이
-                    # 출력에 포함되는 방향은 "1일 3회 대신 1일 1회"(치환),
-                    # "1일 3회 아님"(부정), "1일 3회 금지"(금지) 같은 의미가
-                    # 정반대인 문구를 그대로 통과시켰고, 그 반대 방향은 잘린
-                    # 출력("1")을 통과시켰다. 공백(연속 공백·양끝 공백)만
-                    # 정규화하고 그 외에는 완전 일치를 요구한다. 이 때문에
-                    # "…복용" 처럼 정당해 보이는 재서식도 지금은 flagged
-                    # 된다 — 모델이 용량 문구를 얼마나 자주/어떻게 정당하게
-                    # 재서식하는지 아직 측정된 바 없으므로, 느슨하게 시작해
-                    # 우회를 허용하기보다 엄격하게 시작해 데이터로 완화하는
-                    # 쪽을 택한 결과다.
-                    # 유니코드 정규화도 함께 한다. 한글은 NFC(완성형)와
-                    # NFD(자모 분해형)가 화면상 같은 글자인데 코드포인트가
-                    # 다르다. Arango 적재 경로나 입력기에 따라 어느 쪽으로도
-                    # 들어올 수 있어, 이것 없이는 글자 그대로 같은 용량이
-                    # flagged 로 뜬다 — 없는 불일치를 만들어내는 오탐이다.
-                    normalized_source = _normalize_dosage(source_dosage)
-                    normalized_dosage = _normalize_dosage(dosage)
-                    checks.append(CheckResult(
-                        id="dosage_verbatim", target=target,
-                        outcome="ok" if normalized_source == normalized_dosage else "flagged",
-                        evidence=f"후보 {normalized_source!r} vs 출력 {normalized_dosage!r} "
-                                 "(공백 정규화 후 완전 일치해야 함)"))
 
         if confidence is None:
             checks.append(CheckResult(
