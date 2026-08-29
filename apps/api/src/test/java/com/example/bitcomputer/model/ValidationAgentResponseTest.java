@@ -57,9 +57,13 @@ class ValidationAgentResponseTest {
 
     @Test
     void roundTripPreservesVerification() throws Exception {
+        // 중첩 checks 를 비워 두면 껍데기만 살아남아도 통과한다. 실제로 잃기
+        // 쉬운 것은 배열 안의 원소이므로 원소의 필드 값까지 단언한다.
         String upstream = "{"
                 + "\"overallStatus\":\"PASS\",\"summary\":\"ok\","
-                + "\"verification\":{\"status\":\"flagged\",\"checks\":[],"
+                + "\"verification\":{\"status\":\"flagged\",\"checks\":["
+                + "{\"id\":\"cited_pmid_in_evidence\",\"target\":\"response\","
+                + "\"outcome\":\"flagged\",\"evidence\":\"조회 결과에 없는 PMID: 99999999\"}],"
                 + "\"skippedReason\":null}"
                 + "}";
 
@@ -69,6 +73,9 @@ class ValidationAgentResponseTest {
 
         assertThat(parsed.getVerification()).isNotNull();
         assertThat(roundTripped).contains("\"status\":\"flagged\"");
+        assertThat(roundTripped).contains("\"id\":\"cited_pmid_in_evidence\"");
+        assertThat(roundTripped).contains("\"outcome\":\"flagged\"");
+        assertThat(roundTripped).contains("99999999");
     }
 
     @Test
