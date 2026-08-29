@@ -171,6 +171,12 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
   // verification 은 llmStatus 와 다른 축("출력이 조회 결과로 추적되나")이므로
   // 별도 state 로 들고 있는다. 생명주기는 aiRecommendations/aiLlmStatus 와
   // 정확히 같아야 한다 — 다르면 배지가 자기가 설명하는 데이터와 어긋난다.
+  // 불변식: aiVerification 은 `aiRecommendations.length > 0` 로 게이트된 패널
+  // 안에서만 읽는다. 이 불변식 때문에 리셋 지점에서 이 상태를 지우는 것은
+  // 방어적 조치일 뿐이다 — 패널을 다시 띄우는 유일한 경로(생성 성공)가 같은
+  // 블록에서 이 값을 새 결과로 덮으므로 낡은 값이 화면에 닿을 수 없다.
+  // 이 파일 밖이나 게이트 밖에서 aiVerification 을 읽기 시작하면 그 논증이
+  // 깨지고, 검증된 적 없는 추천이 검증된 것처럼 보이는 결함이 되돌아온다.
   const [aiVerification, setAiVerification] = useState<Verification | null | undefined>(undefined);
   // 처방 상세 선택으로 스왑된 랭크의 집합. rank 는 표의 "행 위치"고, aiVerification
   // 은 그 위치에 원래 앉아있던 처방을 검사한 결과다. 스왑 후에도 rank 는 그대로라
