@@ -8,6 +8,7 @@ import { MedicalSelectionProvider } from "@store/medicalSelection";
 import {
   getValidationJob,
   recommendPrescriptions,
+  searchPrescriptions,
   type ValidationJobResponse,
 } from "@/services/history";
 
@@ -31,11 +32,13 @@ vi.mock("@/services/history", async () => {
     ...actual,
     recommendPrescriptions: vi.fn(),
     getValidationJob: vi.fn(),
+    searchPrescriptions: vi.fn(),
   };
 });
 
 const mockedRecommend = vi.mocked(recommendPrescriptions);
 const mockedGetJob = vi.mocked(getValidationJob);
+const mockedSearch = vi.mocked(searchPrescriptions);
 
 describe("llmStatusNotice", () => {
   it("모델이 실제로 돌았으면 아무것도 표시하지 않는다", () => {
@@ -421,5 +424,252 @@ describe("처방 표의 항목 단위 검증 표시", () => {
 
     expect(await screen.findByText(/근거 불일치 1건/)).toBeInTheDocument();
     expect(screen.getByText(/미검증 1건/)).toBeInTheDocument();
+  });
+});
+
+// CRITICAL: 배지는 rank 로 조회하지만(`prescription[${rank}]`), 의사는 "처방
+// 상세 선택" 피커로 그 rank 에 앉은 처방 자체를 바꿀 수 있다. rank 는 그대로라
+// 바뀐 뒤에도 옛 처방을 검사한 결과가 계속 표시된다 — 한 번도 검사 안 된
+// 처방이 "검증됨"(무배지)으로 보이는, 이 기능이 막으려던 정확히 그 반전이다.
+// 스왑된 rank 만 미검증으로 무효화되고 손대지 않은 다른 rank 는 원래 검증을
+// 유지해야 한다(전체를 지우면 유효한 신호까지 파괴한다).
+describe("처방 상세 선택으로 처방을 바꾸면 그 rank 의 검증이 무효화된다", () => {
+  const clinicVisit = { patientId: 1, deptId: 1 };
+
+  function renderDiagnosis() {
+    return render(
+      <MedicalSelectionProvider>
+        <Diagnosis clinicVisit={clinicVisit} ensureHistory={async () => 10} employeeId={1} />
+      </MedicalSelectionProvider>
+    );
+  }
+
+  function mockJobWithTwoItems(jobId: string) {
+    mockedRecommend.mockResolvedValue({ jobId, historyId: 10, status: "RUNNING" });
+    mockedGetJob.mockResolvedValue({
+      jobId,
+      historyId: 10,
+      status: "DONE",
+      result: {
+        overallStatus: "PASS",
+        summary: "이상 없음",
+        llmStatus: "real",
+        verification: {
+          status: "flagged",
+          checks: [
+            { id: "code_in_candidates", target: "prescription[1]", outcome: "ok", evidence: "" },
+            { id: "code_in_candidates", target: "prescription[2]", outcome: "flagged", evidence: "" },
+          ],
+        },
+        recommendedPrescriptions: [
+          { id: 1, rank: 1, prescription_code: "C1", prescription_name: "약1", reason: "", confidence_score: 0.9, dose: 1, time: 1, days: 1 },
+          { id: 2, rank: 2, prescription_code: "C2", prescription_name: "약2", reason: "", confidence_score: 0.9, dose: 1, time: 1, days: 1 },
+        ],
+      },
+    } as unknown as ValidationJobResponse);
+  }
+
+  it("검증이 ok 였던 rank 를 스왑하면 그 행은 미검증으로 바뀌고 다른 rank 는 유지된다", async () => {
+    mockJobWithTwoItems("job-swap-1");
+    mockedSearch.mockResolvedValue({
+      items: [{ id: 99, code: "C9", name: "약9", dose: 2, time: 2, days: 2 }],
+      total: 1,
+      page: 0,
+      pageSize: 20,
+    });
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "검증 완료" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "확인" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "검증 완료" })).not.toBeInTheDocument());
+
+    // 스왑 전: rank1(ok) 는 무배지, rank2(flagged) 만 "근거 불일치"
+    expect(screen.queryByText("미검증")).not.toBeInTheDocument();
+    expect(screen.getByText("근거 불일치")).toBeInTheDocument();
+    expect(screen.getByText(/검증: 2건 중 근거 불일치 1건/)).toBeInTheDocument();
+
+    // rank1("약1") 행의 "처방 상세 선택" 버튼으로 스왑
+    const detailButtons = screen.getAllByRole("button", { name: "처방 상세 선택" });
+    fireEvent.click(detailButtons[0]);
+
+    const pickerDialog = await screen.findByRole("dialog", { name: "처방 상세 선택" });
+    fireEvent.click(await within(pickerDialog).findByRole("button", { name: "선택" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "처방 상세 선택" })).not.toBeInTheDocument());
+
+    // 스왑 후: 새 처방이 앉은 rank1 은 미검증, 손대지 않은 rank2 는 여전히 근거 불일치
+    expect(screen.getByText(/약9/)).toBeInTheDocument();
+    expect(await screen.findByText("미검증")).toBeInTheDocument();
+    expect(screen.getByText("근거 불일치")).toBeInTheDocument();
+    // flagged 와 skipped 를 따로 세는 요약도 스왑을 반영해 이동한다
+    expect(screen.getByText(/검증: 2건 중 근거 불일치 1건, 미검증 1건/)).toBeInTheDocument();
+  });
+
+  // 스왑 집합은 그것이 무효화하는 aiVerification 과 정확히 같은 생명주기를 가져야
+  // 한다. 새 세대(재생성)가 시작되면 이전 세대에서 쌓인 스왑 기록은 더 이상
+  // 의미가 없다 — 지우지 않으면 새로 생성된, 실제로는 한 번도 스왑되지 않은
+  // rank 가 옛 스왑 이력 때문에 미검증으로 잘못 표시된다.
+  it("재생성하면 이전 세대의 스왑 이력이 초기화되어 새 검증 결과를 그대로 보여준다", async () => {
+    mockJobWithTwoItems("job-swap-2");
+    mockedSearch.mockResolvedValue({
+      items: [{ id: 99, code: "C9", name: "약9", dose: 2, time: 2, days: 2 }],
+      total: 1,
+      page: 0,
+      pageSize: 20,
+    });
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "검증 완료" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "확인" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "검증 완료" })).not.toBeInTheDocument());
+
+    const detailButtons = screen.getAllByRole("button", { name: "처방 상세 선택" });
+    fireEvent.click(detailButtons[0]);
+    const pickerDialog = await screen.findByRole("dialog", { name: "처방 상세 선택" });
+    fireEvent.click(await within(pickerDialog).findByRole("button", { name: "선택" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "처방 상세 선택" })).not.toBeInTheDocument());
+
+    expect(await screen.findByText("미검증")).toBeInTheDocument();
+
+    // 재생성: 새 세대는 rank1 이 ok 로 검증됐다고 알려준다(이번엔 스왑한 적 없다)
+    mockedRecommend.mockResolvedValue({ jobId: "job-swap-2b", historyId: 10, status: "RUNNING" });
+    mockedGetJob.mockResolvedValue({
+      jobId: "job-swap-2b",
+      historyId: 10,
+      status: "DONE",
+      result: {
+        overallStatus: "PASS",
+        summary: "이상 없음",
+        llmStatus: "real",
+        verification: {
+          status: "passed",
+          checks: [
+            { id: "code_in_candidates", target: "prescription[1]", outcome: "ok", evidence: "" },
+          ],
+        },
+        recommendedPrescriptions: [
+          { id: 1, rank: 1, prescription_code: "C1", prescription_name: "약1", reason: "", confidence_score: 0.9, dose: 1, time: 1, days: 1 },
+        ],
+      },
+    } as unknown as ValidationJobResponse);
+
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+    const dialog2 = await screen.findByRole("dialog", { name: "검증 완료" });
+    fireEvent.click(within(dialog2).getByRole("button", { name: "확인" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "검증 완료" })).not.toBeInTheDocument());
+
+    // 이전 세대의 스왑 이력이 새 세대까지 이어지면 안 된다 — rank1 은 ok 이므로 무배지
+    expect(screen.queryByText("미검증")).not.toBeInTheDocument();
+    expect(screen.queryByText("근거 불일치")).not.toBeInTheDocument();
+  });
+});
+
+// IMPORTANT: aiRecommendations 가 clear 되는 두 리셋 지점(환자 전환, 진료/이력
+// 전환)에서 aiLlmStatus·aiVerification 도 함께 clear 된다. 셋 다 이 패널
+// 안에서만(aiRecommendations.length > 0 게이트 안에서만) 보이므로, 패널이
+// 사라지는지를 렌더 경로로 확인하는 것이 이 세 state 가 실제로 초기화됐는지
+// 확인하는 유일한 방법이다 — 게이트 자체가 사라지면(예: setAiRecommendations([])
+// 호출이 지워지면) 이전 환자/진료의 배지가 새 화면에 그대로 남는다.
+describe("환자·진료 전환 시 AI 추천/검증 상태가 초기화된다", () => {
+  function mockJobWithBadges(jobId: string, historyId: number) {
+    mockedRecommend.mockResolvedValue({ jobId, historyId, status: "RUNNING" });
+    mockedGetJob.mockResolvedValue({
+      jobId,
+      historyId,
+      status: "DONE",
+      result: {
+        overallStatus: "PASS",
+        summary: "이상 없음",
+        llmStatus: "fallback",
+        verification: {
+          status: "flagged",
+          checks: [
+            { id: "code_in_candidates", target: "prescription[1]", outcome: "flagged", evidence: "" },
+          ],
+        },
+        recommendedPrescriptions: [
+          { id: 1, rank: 1, prescription_code: "C1", prescription_name: "약1", reason: "", confidence_score: 0.9, dose: 1, time: 1, days: 1 },
+        ],
+      },
+    } as unknown as ValidationJobResponse);
+  }
+
+  it("환자가 바뀌면 이전 환자의 AI 추천 패널·배지가 사라진다", async () => {
+    mockJobWithBadges("job-reset-patient", 10);
+
+    const { rerender } = render(
+      <MedicalSelectionProvider>
+        <Diagnosis
+          clinicVisit={{ patientId: 1, deptId: 1 }}
+          ensureHistory={async () => 10}
+          employeeId={1}
+        />
+      </MedicalSelectionProvider>
+    );
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    await screen.findByRole("dialog");
+    fireEvent.click(screen.getByRole("button", { name: "확인" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    expect(screen.getByText("근거 불일치")).toBeInTheDocument();
+    expect(screen.getByText("규칙 기반 결과 — 모델 미사용")).toBeInTheDocument();
+    expect(screen.getByText("AI 추천 처방")).toBeInTheDocument();
+
+    rerender(
+      <MedicalSelectionProvider>
+        <Diagnosis
+          clinicVisit={{ patientId: 2, deptId: 1 }}
+          ensureHistory={async () => 10}
+          employeeId={1}
+        />
+      </MedicalSelectionProvider>
+    );
+
+    // aiRecommendations 가 clear 되어 패널 전체가 사라져야 한다. 패널이 남아있으면
+    // aiLlmStatus/aiVerification 도 이전 환자 값을 그대로 들고 있다는 뜻이다.
+    expect(screen.queryByText("AI 추천 처방")).not.toBeInTheDocument();
+    expect(screen.queryByText("근거 불일치")).not.toBeInTheDocument();
+    expect(screen.queryByText("규칙 기반 결과 — 모델 미사용")).not.toBeInTheDocument();
+  });
+
+  it("진료(이력)가 바뀌면 이전 진료의 AI 추천 패널·배지가 사라진다", async () => {
+    mockJobWithBadges("job-reset-history", 10);
+
+    const { rerender } = render(
+      <MedicalSelectionProvider>
+        <Diagnosis
+          clinicVisit={{ patientId: 1, deptId: 1, historyId: 10 }}
+          ensureHistory={async () => 10}
+          employeeId={1}
+        />
+      </MedicalSelectionProvider>
+    );
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    await screen.findByRole("dialog");
+    fireEvent.click(screen.getByRole("button", { name: "확인" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    expect(screen.getByText("근거 불일치")).toBeInTheDocument();
+    expect(screen.getByText("규칙 기반 결과 — 모델 미사용")).toBeInTheDocument();
+    expect(screen.getByText("AI 추천 처방")).toBeInTheDocument();
+
+    rerender(
+      <MedicalSelectionProvider>
+        <Diagnosis
+          clinicVisit={{ patientId: 1, deptId: 1, historyId: 20 }}
+          ensureHistory={async () => 10}
+          employeeId={1}
+        />
+      </MedicalSelectionProvider>
+    );
+
+    expect(screen.queryByText("AI 추천 처방")).not.toBeInTheDocument();
+    expect(screen.queryByText("근거 불일치")).not.toBeInTheDocument();
+    expect(screen.queryByText("규칙 기반 결과 — 모델 미사용")).not.toBeInTheDocument();
   });
 });

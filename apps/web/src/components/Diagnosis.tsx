@@ -172,6 +172,15 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
   // 별도 state 로 들고 있는다. 생명주기는 aiRecommendations/aiLlmStatus 와
   // 정확히 같아야 한다 — 다르면 배지가 자기가 설명하는 데이터와 어긋난다.
   const [aiVerification, setAiVerification] = useState<Verification | null | undefined>(undefined);
+  // 처방 상세 선택으로 스왑된 랭크의 집합. rank 는 표의 "행 위치"고, aiVerification
+  // 은 그 위치에 원래 앉아있던 처방을 검사한 결과다. 스왑 후에도 rank 는 그대로라
+  // `prescription[${rank}]` 로 조회하면 새 처방이 옛 검사 결과를 뒤집어쓴다 —
+  // 한 번도 검사 안 된 처방이 "검증됨"으로 보이는 정확히 그 반전이다. 그래서
+  // 스왑된 rank 는 별도로 추적해 무조건 미검증으로 렌더한다. aiVerification 과
+  // 생명주기를 정확히 같이 가야 한다(새 세대가 시작되면 이 집합도 깨끗해져야
+  // 한다) — 다르면 이 브랜치가 이미 한 번 걸린 함정(Task 10 리뷰)을 새 state 로
+  // 재현하는 꼴이다.
+  const [swappedRanks, setSwappedRanks] = useState<Set<number>>(new Set());
   const [selectedRecommendationKeys, setSelectedRecommendationKeys] = useState<string[]>([]);
   const [validationModal, setValidationModal] = useState<ValidationJobResponse | null>(null);
   const [prescriptionPicker, setPrescriptionPicker] = useState<PrescriptionPickerState | null>(null);
@@ -192,6 +201,7 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
       setAiRecommendations([]);
       setAiLlmStatus(undefined);
       setAiVerification(undefined);
+      setSwappedRanks(new Set());
       setSelectedRecommendationKeys([]);
       setPrescriptionPicker(null);
       setAiSessionHistoryId(null);
@@ -204,6 +214,7 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
     setAiRecommendations([]);
     setAiLlmStatus(undefined);
     setAiVerification(undefined);
+    setSwappedRanks(new Set());
     setSelectedRecommendationKeys([]);
     setPrescriptionPicker(null);
     setAiSessionHistoryId(null);
@@ -313,6 +324,7 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
       setAiRecommendations(recommended);
       setAiLlmStatus(result.llmStatus);
       setAiVerification(result.verification);
+      setSwappedRanks(new Set());
       setSelectedRecommendationKeys(recommended.map(recommendationKey));
       setAiSessionHistoryId(historyId);
       setAiSessionHistoryDiagnoseId(null);
@@ -407,8 +419,26 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
         ? prev.map((key) => key === prescriptionPicker.key ? nextKey : key)
         : prev
     );
+    // rank 는 유지되지만 그 자리의 처방이 바뀌었다 — aiVerification 은 옛 처방을
+    // 검사한 결과이므로 더 이상 화면의 처방을 설명하지 않는다. 다른 rank 의
+    // 검증은 여전히 유효하므로 전체를 지우지 않고 이 rank 만 무효화한다.
+    setSwappedRanks((prev) => {
+      const next = new Set(prev);
+      next.add(prescriptionPicker.item.rank);
+      return next;
+    });
     setPrescriptionPicker(null);
   }, [prescriptionPicker]);
+
+  // 스왑된 rank 는 aiVerification 에 무엇이 담겨 있든 무조건 미검증으로 본다 —
+  // 그 rank 의 검사는 지금 화면의 처방이 아니라 스왑되기 전 처방을 대상으로 했다.
+  const getVerificationOutcome = useCallback(
+    (rank: number) => {
+      if (swappedRanks.has(rank)) return "skipped" as const;
+      return itemVerificationOutcome(aiVerification, `prescription[${rank}]`);
+    },
+    [aiVerification, swappedRanks]
+  );
 
   const handleApplySelectedRecommendations = useCallback(async () => {
     if (aiRecommendations.length === 0) {
@@ -678,10 +708,8 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
                   const notice = llmStatusNotice(aiLlmStatus);
                   return notice ? <Badge tone={notice.tone}>{notice.label}</Badge> : null;
                 })()}
-                {aiRecommendations.length > 0 && (() => {
-                  const outcomes = aiRecommendations.map((r) =>
-                    itemVerificationOutcome(aiVerification, `prescription[${r.rank}]`)
-                  );
+                {(() => {
+                  const outcomes = aiRecommendations.map((r) => getVerificationOutcome(r.rank));
                   const flagged = outcomes.filter((o) => o === "flagged").length;
                   const skipped = outcomes.filter((o) => o === "skipped").length;
                   if (flagged === 0 && skipped === 0) return null;
@@ -725,10 +753,7 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
                       <td>
                         [{item.rank}] {item.prescription_name} ({item.prescription_code})
                         {(() => {
-                          const outcome = itemVerificationOutcome(
-                            aiVerification,
-                            `prescription[${item.rank}]`
-                          );
+                          const outcome = getVerificationOutcome(item.rank);
                           if (outcome === "ok") return null;
                           const notice = verificationNotice(
                             outcome === "flagged" ? "flagged" : "skipped"
