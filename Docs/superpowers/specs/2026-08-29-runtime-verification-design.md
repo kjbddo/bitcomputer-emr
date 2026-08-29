@@ -158,13 +158,16 @@ B0 의 Task 10·11 에서 확인된 함정이다. `@JsonIgnoreProperties(ignoreU
 | id | 무엇을 대조하나 | 근거 없으면 |
 |---|---|---|
 | `schema_top3` | 항목 3개, rank 가 정확히 {1,2,3}, 코드 중복 없음 | — (항상 판정 가능) |
-| `code_in_candidates` | 각 `prescription_code` 가 조회된 후보 집합에 있는가 | `skipped` |
-| `name_matches_code` | 후보 집합에서 그 코드에 붙은 이름과 반환된 `name` 이 같은가 | `skipped` |
-| `confidence_in_range` | `confidence_score` 가 0..1 범위인가 | — |
+| `code_in_candidates` | 각 `prescription_code` 가 조회된 후보 집합에 있는가(플레이스홀더 코드는 `skipped`) | `skipped` |
+| `name_matches_code` | 후보 집합에서 그 코드에 붙은 이름과 반환된 `name` 이 같은가(플레이스홀더 이름은 `skipped`) | `skipped` |
 
 **`reason` 검사는 A 에서 뺀다.** §2.1 의 `reason_supported` 를 이식하지 않는다. 산문으로 쓰인 이유의 타당성은 결정론적으로 판정할 수 없고, 단어 존재로 대신하는 순간 이 프로젝트가 고치려는 문제를 반복한다. 이유의 근거성은 B(NLI)가 할 일이고, 그때까지는 검증하지 않는다고 정직하게 둔다.
 
 `dosage_verbatim`(`dosage` 가 원본 처방 라인에 문자 그대로 나오는지 대조하는 검사)은 §11.2 의 실측에서 절대 발화하지 않는 것으로 확인되어 제거했다 — 원본 후보 출처에 용량 필드 자체가 없다. 근거는 §11.2 를 보라.
+
+`confidence_in_range`(`confidence_score` 가 0..1 범위인지 대조하는 검사)는 60 시나리오 실측(실제 모델)에서 180건(60×3) 전부 `skipped` 로 확인되어 제거했다 — `prescription_agent.py` 의 프롬프트가 애초에 `confidence_score` 를 요구하지 않아 값이 항상 `None` 으로 온다. `dosage_verbatim` 과 같은 모양의 결함이다. 근거는 §11.2 를 보라. `PrescriptionItem.confidence_score` 필드 자체는 응답 모델에 남아 있다 — 프롬프트가 그 필드를 요구하게 되면 새로 설계해 다시 추가한다.
+
+`code_in_candidates`·`name_matches_code` 는 모델이 근거 없음을 정직하게 신고한 경우(`"미기재"`, `"데이터 부족"`, `"데이터에 용량 없음"`, 빈 문자열 — `prescription_agent.py` 프롬프트가 실제로 지시하는 값)를 `flagged` 가 아니라 `skipped` 로 다룬다. 근거는 §11.2 를 보라.
 
 ### 6.2 certificate
 
@@ -327,12 +330,34 @@ schema_top3           flagged=6  ok=4                (총 10)
 - [x] **`schema_top3` 가 60% flagged 인 것은 스텁 산물이다.** 스텁이
   rank 집합을 {1,2,3} 으로 맞추지 않는다. 모델 품질과 무관하다.
 
-### 11.3 아직 미확인
+### 11.3 2차 측정 (실제 모델, 60 시나리오)
 
-- [ ] real 경로에서의 `code_in_candidates` flagged 비율. 즉 실제 모델이
-  조회 결과 밖의 처방을 얼마나 자주 내놓는가. 이 프로젝트가 답하려던 질문이고,
-  유효한 LLM 키가 생겨야 측정된다.
-- [ ] real 경로에서의 `confidence_in_range` 판정 비율.
+`scripts/measure_verification.py` 로 시나리오 60건을 실제 모델 경로에 태워 측정했다.
+
+- [x] **`confidence_in_range` — 결론(해결됨).** 180건(60×3) 전부 `skipped`.
+  스텁뿐 아니라 실제 모델도 `confidence_score` 를 채우지 않는다 — 원인은
+  데이터 부재가 아니라 `prescription_agent.py` 의 JSON 템플릿이 애초에
+  그 필드를 요구하지 않는다는 점이다. `dosage_verbatim` 과 같은 부류의
+  결함이라 같은 결정(제거)을 내렸다.
+
+- [x] **`code_in_candidates` 의 flagged 22건 — 전부 `"미기재"`, 지어낸 코드는
+  0건.** `prescription_agent.py` 는 코드가 없으면 지어내지 말고 `"미기재"`
+  를 쓰라고 명시적으로 지시하고, 모델이 그 지시를 따른 결과가 그대로
+  flagged(근거 불일치)로 잘못 보고되고 있었다. 근거 없음을 정직하게
+  신고한 출력을 근거 불일치로 표시하면, 이 프로젝트가 이미 겪은
+  "완벽한 출력도 매번 경고가 뜨는" 패턴(B0 Task 6 의 `fallback` 항목)이
+  검증층에서 재발한다. **결론(해결됨):** `code_in_candidates`·
+  `name_matches_code` 가 프롬프트가 실제로 지시하는 플레이스홀더 값
+  (`"미기재"`, `"데이터 부족"`, `"데이터에 용량 없음"`, 빈 문자열)을
+  `flagged` 대신 `skipped` 로 다루도록 바꿨다. 지어낸 것처럼 보이지만
+  후보에 없는 코드는 이 실측에서 0건이었지만 여전히 `flagged` 다 —
+  회귀 테스트(`test_invented_code_is_flagged`)로 고정했다.
+
+### 11.4 아직 미확인
+
+- [ ] real 경로에서 실제로 지어낸 코드(플레이스홀더가 아니면서 후보에
+  없는 코드)가 나오는 비율. §11.3 의 60 시나리오에는 0건이었으나
+  표본이 늘면 나올 수 있다.
 - [ ] NLI 2차 호출의 요청당 추가 비용과 지연. `X-LLM-Caller: certificate-api-nli`
   로 분리 계측된다. 이 숫자 없이 `LLM_VERIFICATION_NLI=on` 을 기본으로 켜지 않는다.
 - [ ] NLI 예산 30초가 실제 응답 시간 대비 충분한가.
