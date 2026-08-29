@@ -62,6 +62,52 @@ describe("itemVerificationOutcome", () => {
     expect(itemVerificationOutcome(undefined, "prescription[1]")).toBe("skipped");
   });
 
+  // IMP-2 — confidence_in_range 는 구조 검사(STRUCTURAL_CHECK_IDS)라 조회 데이터와
+  // 대조하지 않는다. code_in_candidates·name_matches_code 가 실제 후보와 대조해
+  // 둘 다 ok 인데, confidence_score 가 주입되지 않아 confidence_in_range 만
+  // skipped 인 경우 — 구조 검사 하나가 이미 성립한 grounding 을 혼자 뒤집으면
+  // 안 된다. 상병코드를 고르기 전에 "AI 처방 추천"을 누르는 흔한 조작
+  // 순서에서 실제로 발생한다(prescription_api.py:474 의 `if dx_codes:` 가드).
+  it("구조 검사만 skipped 이고 근거 검사가 전부 ok 면 ok(구조 검사가 grounding 을 혼자 뒤집지 못한다)", () => {
+    const verification = {
+      status: "passed",
+      checks: [
+        { id: "code_in_candidates", target: "prescription[1]", outcome: "ok", evidence: "" },
+        { id: "name_matches_code", target: "prescription[1]", outcome: "ok", evidence: "" },
+        { id: "confidence_in_range", target: "prescription[1]", outcome: "skipped", evidence: "confidence_score 없음" },
+      ],
+    };
+    expect(itemVerificationOutcome(verification, "prescription[1]")).toBe("ok");
+  });
+
+  // GC-3 는 그대로 지킨다 — 그 항목에 구조 검사만 있고 근거 검사가 하나도
+  // 없으면 여전히 skipped(미검증)다. 구조 검사는 grounding 을 확립하지
+  // 못한다(GC-2) — 거부권만 없앴을 뿐 발언권을 준 것이 아니다.
+  it("근거 검사 없이 구조 검사만 있으면 여전히 skipped", () => {
+    const verification = {
+      status: "skipped",
+      checks: [
+        { id: "confidence_in_range", target: "prescription[1]", outcome: "ok", evidence: "confidence_score=0.5" },
+      ],
+    };
+    expect(itemVerificationOutcome(verification, "prescription[1]")).toBe("skipped");
+  });
+
+  // 구조 검사가 진짜로 flagged(예: 범위 밖 confidence_score)면 근거 검사가
+  // 전부 ok 여도 여전히 눈에 띄어야 한다 — 거부권만 없앴을 뿐 진짜 결함까지
+  // 숨기면 안 된다(M1 이 응답 단위에서 지킨 것과 같은 원칙).
+  it("구조 검사가 실제로 flagged 면 근거 검사가 전부 ok 여도 flagged", () => {
+    const verification = {
+      status: "flagged",
+      checks: [
+        { id: "code_in_candidates", target: "prescription[1]", outcome: "ok", evidence: "" },
+        { id: "name_matches_code", target: "prescription[1]", outcome: "ok", evidence: "" },
+        { id: "confidence_in_range", target: "prescription[1]", outcome: "flagged", evidence: "confidence_score=1.5 가 범위 밖" },
+      ],
+    };
+    expect(itemVerificationOutcome(verification, "prescription[1]")).toBe("flagged");
+  });
+
   // M2 — fail-closed 는 verificationNotice.ts:43 에서 이미 맞게 동작하지만
   // 계약 밖 outcome 값(대소문자 오탈자 등)에 대한 고정 테스트가 없었다.
   // "ok"/"flagged" 정확 일치가 아니면 통과로 새지 않아야 한다(GC-3).
