@@ -34,7 +34,13 @@ from verification_contract import CheckResult, VerificationResult, aggregate_sta
 # 반대로 `비타민 B12` 같은 정상적인 의학 약어를 코드로 오인해 flag 한다
 # (spec §6.2). 괄호 한정은 이 두 오탐/누락을 모두 피하는 대신, 괄호 없는
 # 인용은 이 검사의 범위 밖으로 명시적으로 둔다.
-BRACKETED_ICD10_PATTERN = re.compile(r"[\[(]([A-Z]\d{2}(?:\.\d+)?)[\])]")
+# 대소문자를 가리지 않고, 괄호 안 여백과 전각 괄호도 받는다.
+# 대문자만 받으면 `[e21.9]` 같은 소문자 인용이 findall 에서 조용히 빠지고,
+# 그러면 `[J00]` 하나만 걸린 채 "인용한 코드가 모두 premise 안에 있음" 이라는
+# 적극적 거짓 진술이 나간다. 못 본 것을 봤다고 말하는 것이 가장 나쁘다.
+BRACKETED_ICD10_PATTERN = re.compile(
+    r"[\[(［（]\s*([A-Za-z]\d{2}(?:\.\d+)?)\s*[\])］）]"
+)
 
 
 def _text(value: Any) -> str:
@@ -84,7 +90,10 @@ def verify_certificate(
             evidence="소견에 괄호로 감싼 ICD-10 형태 코드가 없음"
                       "(괄호 없는 인라인 코드는 이 검사의 범위 밖)"))
     else:
-        unknown = [c for c in cited if c not in known_codes]
+        # 코드는 대문자로 비교한다. 상병코드의 대소문자는 표기 차이일 뿐이라
+        # `[j00]` 을 premise 의 `J00` 과 다른 코드로 취급하면 오탐이 된다.
+        upper_known = {c.upper() for c in known_codes}
+        unknown = [c for c in cited if c.upper() not in upper_known]
         checks.append(CheckResult(
             id="cited_code_known", target="certificate",
             outcome="flagged" if unknown else "ok",

@@ -169,3 +169,37 @@ def test_premise_term_present_is_substring_containment_not_aboutness():
     result = verify_certificate(diseases=diseases, diagnoses=[], text=text)
 
     assert _outcomes(result, "premise_term_present") == ["ok"]
+
+
+# 리뷰어가 잡은 회귀. 대문자만 받으면 소문자 인용이 findall 에서 조용히 빠져,
+# 진짜 코드 하나만 걸린 채 "모두 premise 안에 있음" 이라는 적극적 거짓 진술이
+# 나간다. 못 본 것을 못 봤다고 하는 것(skipped)보다 봤다고 하는 것이 나쁘다.
+def test_mixed_case_citation_does_not_silently_drop_the_fabricated_one():
+    text = "환자는 급성 비인두염[J00] 및 심근경색[e21.9] 의증입니다."
+    result = verify_certificate(diseases=DISEASES, diagnoses=[], text=text)
+
+    assert _outcomes(result, "cited_code_known") == ["flagged"]
+    assert result.status == "flagged"
+
+
+def test_lowercase_citation_of_premise_code_is_ok():
+    """대소문자는 표기 차이다. [j00] 을 J00 과 다른 코드로 보면 오탐이 된다."""
+    text = "환자는 급성 비인두염[j00] 소견입니다."
+    result = verify_certificate(diseases=DISEASES, diagnoses=[], text=text)
+
+    assert _outcomes(result, "cited_code_known") == ["ok"]
+
+
+def test_whitespace_inside_brackets_is_still_a_citation():
+    text = "환자는 급성 비인두염[ J00 ] 소견입니다."
+    result = verify_certificate(diseases=DISEASES, diagnoses=[], text=text)
+
+    assert _outcomes(result, "cited_code_known") == ["ok"]
+
+
+def test_fullwidth_brackets_are_still_a_citation():
+    """한글 입력기·LLM 출력에서 전각 괄호가 실제로 나온다."""
+    text = "환자는 심근경색［K52.9］ 의증입니다."
+    result = verify_certificate(diseases=DISEASES, diagnoses=[], text=text)
+
+    assert _outcomes(result, "cited_code_known") == ["flagged"]
