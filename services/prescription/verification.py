@@ -30,6 +30,15 @@ confidence_in_range 는 구조 검사다(STRUCTURAL_CHECK_IDS). 0..1 범위만
 보고 조회된 어떤 데이터와도 대조하지 않으므로, 이 검사의 ok 하나로
 passed 가 나가면 안 된다(GC-2).
 
+한계(M-4): prescription_api.py:719 는
+`it.confidence_score = confidence_by_code.get(code, 0.0)` 로 주입한다.
+모델이 고른 코드가 co-occurrence 조회 결과에 없을 때도 정확히 0.0 이
+주입되므로, 이 검사는 "실제로 조회돼 0.0 이 나온 값"과 "조회 결과에
+없어서 폴백된 0.0"을 구분하지 못하고 둘 다 ok 로 판정한다. 값 자체를
+바꾸는 수정이 아니라 이 한계를 기록만 해 둔다 — 이 검사의 ok 가
+"co-occurrence 결과 안에 실제로 있었다"는 뜻까지는 보증하지 않는다는
+점을 후속 독자가 과대 해석하지 않도록.
+
 code_in_candidates·name_matches_code 는 모델이 "미기재" 류 플레이스홀더로
 근거 없음을 정직하게 신고한 경우를 flagged 가 아니라 skipped 로 다룬다.
 60 시나리오 실측에서 code_in_candidates 의 flagged 22건 전부가 리터럴

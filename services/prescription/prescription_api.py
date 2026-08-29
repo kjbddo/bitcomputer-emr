@@ -717,6 +717,9 @@ def recommend(
         if not code or code == "미기재":
             continue
         if confidence_by_code:
+            # M-4(verification.py 의 confidence_in_range 문서화 참조): 코드가
+            # confidence_by_code 에 없어도 여기서 0.0 이 주입된다 — 조회된 0.0 과
+            # 폴백된 0.0 이 구분되지 않는다. 동작은 그대로 두고 한계만 기록한다.
             it.confidence_score = confidence_by_code.get(code, 0.0)
 
     return PrescriptionRecommendResponse(

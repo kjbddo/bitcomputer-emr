@@ -2,6 +2,13 @@
 
 순수 함수만 둔다 — I/O 도 LLM 도 전역 상태도 쓰지 않는다(GC-1).
 spec: Docs/superpowers/specs/2026-08-29-runtime-verification-design.md §5
+
+이 모듈 docstring 바로 다음부터 파일 끝까지의 본문(계약 규칙 코드)이
+services/validation-agent/app/verification_contract.py 와 동일해야 한다 —
+이 docstring 자체는 사본마다 다르게 써도 된다. 별도 Docker 빌드 컨텍스트라
+공유 패키지 대신 복제한다. 본문 동일성은
+services/validation-agent/tests/test_verification.py::test_contract_copy_matches_prescription
+이 테스트로 고정한다.
 """
 from __future__ import annotations
 
