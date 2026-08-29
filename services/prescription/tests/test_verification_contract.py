@@ -42,8 +42,21 @@ def test_all_skipped_is_skipped():
 # 구조 검사 집합이 비면 위 방어가 통째로 사라진다. 상수 자체를 고정한다.
 def test_structural_ids_are_pinned():
     assert STRUCTURAL_CHECK_IDS == frozenset(
-        {"schema_top3", "trace_step_has_observation", "candidates_from_finder"}
+        {
+            "schema_top3",
+            "confidence_in_range",
+            "trace_step_has_observation",
+            "candidates_from_finder",
+        }
     )
+
+
+# confidence_in_range 는 0..1 범위만 본다 — 조회된 어떤 데이터와도 대조하지
+# 않는다. 근거 검사로 집계되면 Arango 조회가 전부 실패해 code/name 이 전부
+# skipped 인 응답도 "검증됨" 으로 나간다.
+def test_confidence_in_range_alone_never_passes():
+    checks = [_check("confidence_in_range", "ok"), _check("code_in_candidates", "skipped")]
+    assert aggregate_status(checks) == "skipped"
 
 
 def test_to_dict_shape():

@@ -13,13 +13,22 @@ run_prescription_agent.py 의 후보 조회 AQL RETURN 절, 이 파일이
 개념이 없다. 쿼리나 키 조회를 넓혀서 고칠 수 있는 문제가 아니라서
 제거했다. 용량 데이터가 확보되면 새로 설계해 다시 추가할 것.
 
-confidence_in_range 검사도 제거되었다. 실측(60 시나리오, 실제 모델)
-결과 180건 전부 skipped 였다 — prescription_agent.py 의 프롬프트가
-confidence_score 를 요구하지 않아 PrescriptionItem.confidence_score 가
-항상 None 으로 온다. dosage_verbatim 과 같은 모양의 결함이라 같은
-결정으로 제거했다. 필드 자체(PrescriptionItem.confidence_score)는
-응답 모델에 남는다 — 프롬프트가 그 필드를 요구하게 되면 새로 설계해
-다시 추가할 것.
+confidence_in_range 검사는 커밋 9289321 에서 한 번 제거됐다가 복구됐다.
+제거 사유("prescription_agent.py 프롬프트가 confidence_score 를 요구하지
+않아 값이 항상 None")는 **사실이 아니었다**. 이 값을 채우는 것은 LLM 이
+아니라 prescription_api.py 다 — Arango co-occurrence 조회
+(fetch_confidence_scores_by_diagnosis_codes -> confidence_by_code, :473-489)
+결과를 처방코드로 매칭해 it.confidence_score 에 주입하고(:710-719), 그
+주입은 _safe_verify 호출(:736)보다 먼저 실행된다. 180건 전부 skipped 로
+나온 실측은 ArangoDB 에 컬렉션이 하나도 없고 시나리오의 유일한
+상병코드(M2556)가 그래프에 존재하지도 않던 환경에서 돌았기 때문이다
+(spec §11.3 의 [환경 조건]). 그래프를 적재하고 그래프에 실재하는
+상병코드로 부르면 값이 실제로 채워진다. dosage_verbatim(상류 데이터
+자체가 없어 발화 불가)과 같은 부류가 아니다 — 그 판단이 틀렸다.
+
+confidence_in_range 는 구조 검사다(STRUCTURAL_CHECK_IDS). 0..1 범위만
+보고 조회된 어떤 데이터와도 대조하지 않으므로, 이 검사의 ok 하나로
+passed 가 나가면 안 된다(GC-2).
 
 code_in_candidates·name_matches_code 는 모델이 "미기재" 류 플레이스홀더로
 근거 없음을 정직하게 신고한 경우를 flagged 가 아니라 skipped 로 다룬다.
@@ -97,6 +106,14 @@ def _safe_int(value: Any) -> Optional[int]:
         return None
 
 
+def _safe_float(value: Any) -> Optional[float]:
+    """숫자로 변환할 수 없으면 예외 대신 None 을 반환한다(GC-4)."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def verify_prescriptions(*, candidates: Sequence[Any], items: Sequence[Any]) -> VerificationResult:
     index = _index_candidates(candidates)
     has_candidates = bool(index)
@@ -135,6 +152,7 @@ def verify_prescriptions(*, candidates: Sequence[Any], items: Sequence[Any]) -> 
         target = f"prescription[{rank}]"
         code = _text(getattr(item, "prescription_code", ""))
         name = _text(getattr(item, "name", ""))
+        confidence = getattr(item, "confidence_score", None)
 
         if not has_candidates:
             checks.append(CheckResult(
@@ -183,6 +201,29 @@ def verify_prescriptions(*, candidates: Sequence[Any], items: Sequence[Any]) -> 
                         id="name_matches_code", target=target,
                         outcome="ok" if expected_name == name else "flagged",
                         evidence=f"후보 {expected_name!r} vs 출력 {name!r}"))
+
+        if confidence is None:
+            # Arango co-occurrence 주입이 일어나지 않았다(그래프가 비었거나
+            # 이 상병코드에 co-occurrence 가 없다). 대조할 것이 없으므로
+            # 통과가 아니라 미검증이다(GC-2).
+            checks.append(CheckResult(
+                id="confidence_in_range", target=target, outcome="skipped",
+                evidence="confidence_score 없음"))
+        else:
+            safe_confidence = _safe_float(confidence)
+            if safe_confidence is None:
+                # 값이 아예 숫자로 변환되지 않는 경우는 "근거가 없어 판정 불가"
+                # (skipped) 가 아니라 "출력 형식 자체가 잘못됨" (flagged) 이다 —
+                # 범위를 벗어난 숫자와 같은 취급이다(GC-4: 예외 대신 판정으로).
+                checks.append(CheckResult(
+                    id="confidence_in_range", target=target, outcome="flagged",
+                    evidence=f"confidence_score={confidence!r} 가 숫자가 아님"))
+            else:
+                in_range = 0.0 <= safe_confidence <= 1.0
+                checks.append(CheckResult(
+                    id="confidence_in_range", target=target,
+                    outcome="ok" if in_range else "flagged",
+                    evidence=f"confidence_score={safe_confidence}"))
 
     skipped_reason: Optional[str] = None
     if not has_candidates:

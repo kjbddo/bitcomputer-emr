@@ -160,12 +160,13 @@ B0 의 Task 10·11 에서 확인된 함정이다. `@JsonIgnoreProperties(ignoreU
 | `schema_top3` | 항목 3개, rank 가 정확히 {1,2,3}, 코드 중복 없음 | — (항상 판정 가능) |
 | `code_in_candidates` | 각 `prescription_code` 가 조회된 후보 집합에 있는가(플레이스홀더 코드는 `skipped`) | `skipped` |
 | `name_matches_code` | 후보 집합에서 그 코드에 붙은 이름과 반환된 `name` 이 같은가(플레이스홀더 이름은 `skipped`) | `skipped` |
+| `confidence_in_range` | `confidence_score` 가 0..1 범위인가 (구조 검사 — 조회 데이터와 대조하지 않는다) | `skipped` |
 
 **`reason` 검사는 A 에서 뺀다.** §2.1 의 `reason_supported` 를 이식하지 않는다. 산문으로 쓰인 이유의 타당성은 결정론적으로 판정할 수 없고, 단어 존재로 대신하는 순간 이 프로젝트가 고치려는 문제를 반복한다. 이유의 근거성은 B(NLI)가 할 일이고, 그때까지는 검증하지 않는다고 정직하게 둔다.
 
 `dosage_verbatim`(`dosage` 가 원본 처방 라인에 문자 그대로 나오는지 대조하는 검사)은 §11.2 의 실측에서 절대 발화하지 않는 것으로 확인되어 제거했다 — 원본 후보 출처에 용량 필드 자체가 없다. 근거는 §11.2 를 보라.
 
-`confidence_in_range`(`confidence_score` 가 0..1 범위인지 대조하는 검사)는 60 시나리오 실측(실제 모델)에서 180건(60×3) 전부 `skipped` 로 확인되어 제거했다 — `prescription_agent.py` 의 프롬프트가 애초에 `confidence_score` 를 요구하지 않아 값이 항상 `None` 으로 온다. `dosage_verbatim` 과 같은 모양의 결함이다. 근거는 §11.2 를 보라. `PrescriptionItem.confidence_score` 필드 자체는 응답 모델에 남아 있다 — 프롬프트가 그 필드를 요구하게 되면 새로 설계해 다시 추가한다.
+**`confidence_in_range` 는 한 번 제거됐다가 복구됐다(§11.7).** 제거 당시 기록한 사유 — "`prescription_agent.py` 의 프롬프트가 애초에 `confidence_score` 를 요구하지 않아 값이 항상 `None` 으로 온다" — 는 **사실이 아니었다.** 이 값을 채우는 것은 LLM 이 아니라 `prescription_api.py` 다: Arango co-occurrence 조회(`fetch_confidence_scores_by_diagnosis_codes` → `confidence_by_code`, :473-489)의 결과를 처방코드로 매칭해 `it.confidence_score` 에 주입하고(:710-719), 그 주입은 `_safe_verify` 호출(:736)보다 먼저 실행된다. 180건 전부 `skipped` 였던 것은 그 실측이 **컬렉션이 하나도 없는 빈 ArangoDB** 에서, 그리고 시나리오의 유일한 상병코드 `M2556` 이 **그래프에 존재하지도 않는** 상태로 돌았기 때문이다(§11.3 [환경 조건]). 그래프를 적재하고 그래프에 실재하는 상병코드로 부르면 값이 실제로 채워진다 — §11.7 에서 실측으로 확인했다. `dosage_verbatim`(상류 데이터 자체가 없어 어떤 환경에서도 발화할 수 없는 검사)과 같은 부류가 아니다.
 
 `code_in_candidates`·`name_matches_code` 는 모델이 근거 없음을 정직하게 신고한 경우(`"미기재"`, `"데이터 부족"`, `"데이터에 용량 없음"`, 빈 문자열 — `prescription_agent.py` 프롬프트가 실제로 지시하는 값)를 `flagged` 가 아니라 `skipped` 로 다룬다. 근거는 §11.2 를 보라.
 
@@ -330,10 +331,16 @@ schema_top3           flagged=6  ok=4                (총 10)
   전용 헬퍼(`_row_dosage`, `_normalize_dosage`)를 제거했다. 용량 데이터가
   확보되면 새로 설계해 다시 추가한다.
 
-- [x] **`confidence_in_range` 도 30건 전부 `skipped`.** 스텁이
-  `confidence_score` 를 채우지 않기 때문이다. 실제 모델은 채울 수 있으므로
-  이 항목은 real 경로 측정 전까지 결론을 낼 수 없다. `dosage_verbatim` 과
+- [x] **`confidence_in_range` 도 30건 전부 `skipped`.** `dosage_verbatim` 과
   달리 데이터 형태의 문제가 아니다.
+
+  **[정정, 2026-08-29]** 원래 여기 적힌 사유는 "스텁이 `confidence_score` 를
+  채우지 않기 때문"이었다. 그것도 정확하지 않다 — `confidence_score` 를
+  채우는 것은 스텁도 모델도 아니라 `prescription_api.py` 의 Arango
+  co-occurrence 주입(:710-719)이고, 그 주입은 스텁 경로에서도 똑같이
+  실행된다. 이 30건이 `skipped` 인 실제 이유는 **그래프가 비어 있어
+  `confidence_by_code` 가 채워지지 않은 것**이다(§11.3 [환경 조건],
+  §11.7). 이 항목의 결론은 그래프를 적재한 실측(§11.7)에서 났다.
 
 - [x] **`schema_top3` 가 60% flagged 인 것은 스텁 산물이다.** 스텁이
   rank 집합을 {1,2,3} 으로 맞추지 않는다. 모델 품질과 무관하다.
@@ -354,11 +361,31 @@ Arango co-occurrence 기반 `confidence_score` 주입도 `confidence_by_code` �
 
 `scripts/measure_verification.py` 로 시나리오 60건을 실제 모델 경로에 태워 측정했다.
 
-- [x] **`confidence_in_range` — 결론(해결됨).** 180건(60×3) 전부 `skipped`.
-  스텁뿐 아니라 실제 모델도 `confidence_score` 를 채우지 않는다 — 원인은
-  데이터 부재가 아니라 `prescription_agent.py` 의 JSON 템플릿이 애초에
-  그 필드를 요구하지 않는다는 점이다. `dosage_verbatim` 과 같은 부류의
-  결함이라 같은 결정(제거)을 내렸다.
+- [x] **`confidence_in_range` — 180건(60×3) 전부 `skipped`.**
+
+  **[정정, 2026-08-29 — 이 항목의 결론은 철회됐다]** 원래 여기 적힌 결론은
+  "원인은 데이터 부재가 아니라 `prescription_agent.py` 의 JSON 템플릿이
+  애초에 그 필드를 요구하지 않는다는 점이다. `dosage_verbatim` 과 같은
+  부류의 결함이라 같은 결정(제거)을 내렸다" 였다. **그 사유는 사실이
+  아니었다.** `confidence_score` 를 채우는 것은 LLM 이 아니라
+  `prescription_api.py` 다 — Arango co-occurrence 조회 결과
+  (`confidence_by_code`, :473-489)를 처방코드로 매칭해 `it.confidence_score`
+  에 주입하고(:710-719), 그 주입은 `_safe_verify` 호출(:736)보다 **먼저**
+  실행된다. 프롬프트가 그 필드를 요구하지 않는 것은 맞지만, 그것이 값이
+  항상 `None` 인 이유는 아니다.
+
+  180건이 전부 `skipped` 였던 실제 이유는 위 [환경 조건] 그대로다:
+  ArangoDB 에 컬렉션이 하나도 없었고, 게다가 이 60 시나리오의 유일한
+  상병코드 `M2556` 은 그래프가 적재된 뒤에도 존재하지 않는 코드다(그래프의
+  상병코드는 `A15, C34, D50, E03, E11, E78, I10, J18, J90` 아홉 개뿐).
+  `dx_codes` 가 그래프에 없으면 co-occurrence 조회가 0행을 돌려주고
+  `confidence_by_code` 가 비어 주입이 일어나지 않는다. 즉 이 실측은
+  이 검사가 발화할 수 없다는 것을 보여주지 못한다 — 발화할 수 있는
+  조건 자체가 갖춰지지 않은 환경이었다.
+
+  **결론(정정 후):** 검사와 전용 헬퍼(`_safe_float`)를 복구했고,
+  `STRUCTURAL_CHECK_IDS` 항목도 되돌렸다. 그래프를 적재하고 그래프에
+  실재하는 상병코드로 부른 실측 결과는 §11.7 에 있다.
 
 - [x] **`code_in_candidates` 의 flagged 22건 — 전부 `"미기재"`, 지어낸 코드는
   0건.** `prescription_agent.py` 는 코드가 없으면 지어내지 말고 `"미기재"`

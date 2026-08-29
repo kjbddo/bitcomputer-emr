@@ -3,17 +3,19 @@ from types import SimpleNamespace
 from verification import verify_prescriptions, _row_code, _row_name
 
 
-def _item(rank, code, name, dosage="1일 3회"):
+def _item(rank, code, name, dosage="1일 3회", confidence=0.8):
     return SimpleNamespace(
         rank=rank,
         name=name,
         prescription_code=code,
         dosage=dosage,
         reason="근거",
-        # confidence_score 는 PrescriptionItem 모델에 남아 있지만 프롬프트가
-        # 채우라고 요구하지 않는 필드다(confidence_in_range 검사 제거 사유).
-        # 검증기가 더 이상 읽지 않으므로 고정값으로 존재만 시킨다.
-        confidence_score=None,
+        # confidence_score 는 LLM 이 채우는 값이 아니라 prescription_api.py 가
+        # Arango co-occurrence 결과(confidence_by_code)로 주입하는 값이다
+        # (:473-489 계산, :710-719 주입, :736 의 _safe_verify 보다 먼저 실행).
+        # 그래프가 비어 있으면 주입이 없어 None 으로 남는다 — 그때는 검사가
+        # skipped 다(GC-2).
+        confidence_score=confidence,
     )
 
 
@@ -254,7 +256,79 @@ def test_first_candidate_with_duplicate_code_wins():
     assert _outcomes(result, "name_matches_code") == ["ok"]
 
 
+# --- confidence_in_range ----------------------------------------------------
+#
+# 이 검사는 커밋 9289321 에서 "프롬프트가 confidence_score 를 요구하지 않아 값이
+# 구조적으로 항상 None" 이라는 이유로 제거됐다. 그 이유는 사실이 아니었다 —
+# 값을 채우는 것은 LLM 이 아니라 prescription_api.py 의 Arango co-occurrence
+# 주입(:473-489 계산, :710-719 주입)이고, 그 주입은 _safe_verify(:736)보다 먼저
+# 실행된다. 180건 전부 skipped 였던 실측은 ArangoDB 가 완전히 비어 있고
+# 시나리오의 유일한 상병코드(M2556)가 그래프에 없던 환경에서 돌았기 때문이다.
+# 그래프를 적재하고 그래프에 있는 상병코드로 다시 부르면 값이 실제로 채워진다.
+
+def test_confidence_in_range_is_ok():
+    items = [_item(1, "A01", "약가", confidence=0.149)]
+    result = verify_prescriptions(candidates=CANDIDATES, items=items)
+
+    assert _outcomes(result, "confidence_in_range") == ["ok"]
+
+
+def test_confidence_out_of_range_is_flagged():
+    items = [_item(1, "A01", "약가", confidence=1.7), _item(2, "B02", "약나", "1일 1회"),
+             _item(3, "C03", "약다", "2정")]
+    result = verify_prescriptions(candidates=CANDIDATES, items=items)
+
+    assert "flagged" in _outcomes(result, "confidence_in_range")
+
+
+def test_missing_confidence_is_skipped_not_ok():
+    """주입이 일어나지 않은(그래프가 비었거나 코드가 그래프에 없는) 경우.
+
+    없는 값을 "범위 안"으로 읽으면 GC-2 위반이다 — 대조할 것이 없으면 skipped.
+    """
+    items = [_item(1, "A01", "약가", confidence=None)]
+    result = verify_prescriptions(candidates=CANDIDATES, items=items)
+
+    assert _outcomes(result, "confidence_in_range") == ["skipped"]
+
+
+def test_confidence_boundaries_are_in_range():
+    """0.0 과 1.0 은 범위 안이다. confidence_by_code.get(code, 0.0) 폴백이
+    코드가 co-occurrence 결과에 없을 때 정확히 0.0 을 넣는다."""
+    items = [_item(1, "A01", "약가", confidence=0.0), _item(2, "B02", "약나", "1일 1회", confidence=1.0)]
+    result = verify_prescriptions(candidates=CANDIDATES, items=items)
+
+    assert _outcomes(result, "confidence_in_range") == ["ok", "ok"]
+
+
+# (b) 변이 표: confidence_in_range 를 STRUCTURAL_CHECK_IDS 에서 빼면 빨개진다.
+# 이 검사는 0..1 범위만 본다 — 조회된 어떤 데이터와도 대조하지 않는다. 근거
+# 검사로 집계되면 Arango 조회가 전부 실패해 code/name 이 모두 skipped 인
+# 응답도 "검증됨(passed)" 으로 나간다. GC-2 가 금지하는 바로 그 신호다.
+def test_confidence_ok_alone_never_passes():
+    # schema_top3 도 통과하도록 rank 를 {1,2,3} 으로 맞춘다 — 그래야 "구조
+    # 검사는 전부 ok 인데 근거 검사는 전부 skipped" 라는 정확한 상황이 된다.
+    items = [_item(1, "A01", "약가", confidence=0.5),
+             _item(2, "B02", "약나", "1일 1회", confidence=0.5),
+             _item(3, "C03", "약다", "2정", confidence=0.5)]
+    result = verify_prescriptions(candidates=[], items=items)
+
+    assert _outcomes(result, "confidence_in_range") == ["ok", "ok", "ok"]
+    assert _outcomes(result, "code_in_candidates") == ["skipped", "skipped", "skipped"]
+    assert _outcomes(result, "schema_top3") == ["ok"]
+    assert result.status == "skipped"
+
+
 # --- Minor: 숫자 변환 방어 --------------------------------------------------
+
+def test_non_numeric_confidence_is_flagged():
+    """숫자로 변환되지 않는 값은 "판정 불가(skipped)" 가 아니라 "출력 형식이
+    잘못됨(flagged)" 이다 — 범위를 벗어난 숫자와 같은 취급(GC-4)."""
+    items = [_item(1, "A01", "약가", confidence="high")]
+    result = verify_prescriptions(candidates=CANDIDATES, items=items)
+
+    assert _outcomes(result, "confidence_in_range")[0] == "flagged"
+
 
 def test_non_numeric_rank_is_flagged_not_crashed():
     items = [_item("first", "A01", "약가"), _item(2, "B02", "약나", "1일 1회"),

@@ -35,12 +35,24 @@ VerificationStatus = Literal["passed", "flagged", "skipped"]
 # 통과해서는 passed 가 되지 않게 한다. 다시 근거 검사로 되돌리면 C2 가
 # 재발한다 — 되돌리지 말 것.
 #
-# confidence_in_range 는 여기 없다: 그 검사 자체가 삭제됐다(spec §11.3,
-# prescription_agent.py 프롬프트가 confidence_score 를 요구하지 않아 항상
-# None 으로만 왔다). 존재하지 않는 검사 id 를 이 집합에 남겨 두면 다음
-# 사람이 "이 검사가 아직 있나" 헷갈리게 만든다.
+# confidence_in_range 가 여기 든 이유: 그것은 값이 0..1 범위 안인지만 보고
+# 조회된 어떤 데이터와도 대조하지 않는다. 근거 검사로 집계하면, Arango 조회가
+# 전부 실패해 code_in_candidates·name_matches_code 가 모두 skipped 인 응답도
+# 이 ok 하나로 "passed" 가 나간다.
+#
+# 이 항목은 커밋 000c725 에서 "검사 자체가 삭제됐으므로 낡은 id" 라는 이유로
+# 한 번 제거됐다가 되돌아왔다. 삭제의 근거였던 "프롬프트가 confidence_score 를
+# 요구하지 않아 값이 항상 None" 은 사실이 아니었다 — 값을 채우는 것은 LLM 이
+# 아니라 prescription_api.py 의 Arango co-occurrence 주입이고, 그 주입은
+# 검증 호출보다 먼저 실행된다(spec §11.3 [환경 조건], §11.7). 검사가 복구된
+# 이상 이 집합의 항목도 함께 있어야 한다.
 STRUCTURAL_CHECK_IDS = frozenset(
-    {"schema_top3", "trace_step_has_observation", "candidates_from_finder"}
+    {
+        "schema_top3",
+        "confidence_in_range",
+        "trace_step_has_observation",
+        "candidates_from_finder",
+    }
 )
 
 
