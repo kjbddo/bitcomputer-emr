@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Collections;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -238,6 +239,37 @@ class AgentDocumentServiceImplCertificateTest {
             assertThat(response.getLlmStatus()).isEqualTo("fallback");
             assertThat(response.getMedicalCertificate())
                     .contains("보존적 치료와 증상 조절을 위한 약물치료를 시행하였습니다.");
+        }
+
+        @Test
+        @DisplayName("에이전트가 verification 을 돌려주면 응답에도 그대로 실린다")
+        void generateCertificatePassesVerificationThrough() {
+            AgentDocumentServiceImpl service = newServiceForGenerateTestCertificate();
+            Map<String, Object> verification = Map.of("status", "flagged");
+            CertificateAgentResponse agentResponse = CertificateAgentResponse.builder()
+                    .medicalCertificate("소견")
+                    .llmStatus("real")
+                    .verification(verification)
+                    .build();
+            when(certificateAgentClient.generate(any())).thenReturn(Optional.of(agentResponse));
+
+            GenerateCertificateResponseDTO result = service.generateTestCertificate(
+                    "J00", "P001", "감기약", "GENERAL", "FINAL", "제출용", "doctor1");
+
+            assertThat(result.getVerification()).isEqualTo(verification);
+        }
+
+        /** 에이전트 문장을 못 써서 템플릿으로 떨어지면 검증 결과도 없어야 한다. */
+        @Test
+        @DisplayName("에이전트 호출이 실패하면(Optional.empty) verification 도 없다")
+        void templateFallbackHasNoVerification() {
+            AgentDocumentServiceImpl service = newServiceForGenerateTestCertificate();
+            when(certificateAgentClient.generate(any())).thenReturn(Optional.empty());
+
+            GenerateCertificateResponseDTO result = service.generateTestCertificate(
+                    "J00", "P001", "감기약", "GENERAL", "FINAL", "제출용", "doctor1");
+
+            assertThat(result.getVerification()).isNull();
         }
     }
 }

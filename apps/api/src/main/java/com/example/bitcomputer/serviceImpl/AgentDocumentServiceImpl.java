@@ -319,8 +319,11 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
         String llmStatus = resolveCertificateLlmStatus(
                 agentResponse.map(CertificateAgentResponse::getLlmStatus).orElse(null),
                 agentTextUsed);
+        Map<String, Object> verification = agentResponse
+                .map(CertificateAgentResponse::getVerification)
+                .orElse(null);
 
-        return buildGenerateResponse(username, medicalCertificate, llmStatus);
+        return buildGenerateResponse(username, medicalCertificate, llmStatus, verification);
     }
 
     @Override
@@ -377,8 +380,11 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
         String llmStatus = resolveCertificateLlmStatus(
                 agentResponse.map(CertificateAgentResponse::getLlmStatus).orElse(null),
                 agentTextUsed);
+        Map<String, Object> verification = agentResponse
+                .map(CertificateAgentResponse::getVerification)
+                .orElse(null);
 
-        return buildGenerateResponse(username, medicalCertificate, llmStatus);
+        return buildGenerateResponse(username, medicalCertificate, llmStatus, verification);
     }
 
     @Override
@@ -478,7 +484,10 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
     }
 
     private GenerateCertificateResponseDTO buildGenerateResponse(
-            String username, String medicalCertificate, String llmStatus) {
+            String username,
+            String medicalCertificate,
+            String llmStatus,
+            Map<String, Object> verification) {
         Employee employee = employeeRepository.findByUsername(username);
         Role role = employee != null ? employee.getRole() : Role.DEFAULT;
         String accessToken = jwtTokenProvider.generateAccessToken(username, role);
@@ -490,6 +499,7 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
         response.setRefreshToken(refreshToken);
         response.setMedicalCertificate(medicalCertificate);
         response.setLlmStatus(llmStatus);
+        response.setVerification(verification);
         return response;
     }
 
