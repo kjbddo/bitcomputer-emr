@@ -329,7 +329,12 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
 
       setAiRecommendations(recommended);
       setAiLlmStatus(result.llmStatus);
-      setAiVerification(result.verification);
+      // 처방 항목 배지(getVerificationOutcome)는 `prescription[N]` 타깃을 조회한다.
+      // result.verification 은 validation-agent 자기 자신의 검증이고 검사 전부
+      // target="response" 다 — 그 값을 읽으면 조회가 영원히 0건이 되어 배지가
+      // 항상 미검증으로 굳는다(최종 리뷰 C1). prescription_api 자신의 항목 단위
+      // 검증인 result.prescriptionVerification 을 읽어야 한다.
+      setAiVerification(result.prescriptionVerification);
       setSwappedRanks(new Set());
       setSelectedRecommendationKeys(recommended.map(recommendationKey));
       setAiSessionHistoryId(historyId);

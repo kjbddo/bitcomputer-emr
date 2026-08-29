@@ -85,4 +85,46 @@ class ValidationAgentResponseTest {
 
         assertThat(parsed.getVerification()).isNull();
     }
+
+    /**
+     * 최종 리뷰 C1: prescription_api 자신의 항목 단위 검증(target="prescription[N]")
+     * 이 이 DTO 를 거치며 사라지면 웹의 처방 항목 배지가 영구히 미검증으로 남는다.
+     * DTO 가 모르는 필드는 왕복에서 조용히 사라지므로(@JsonIgnoreProperties), 필드
+     * 존재가 아니라 값이 왕복에서 살아남는지를 단언한다.
+     */
+    @Test
+    void roundTripPreservesPrescriptionVerification() throws Exception {
+        String upstream = "{"
+                + "\"overallStatus\":\"PASS\",\"summary\":\"ok\","
+                + "\"verification\":{\"status\":\"passed\",\"checks\":["
+                + "{\"id\":\"trace_step_has_observation\",\"target\":\"response\","
+                + "\"outcome\":\"ok\",\"evidence\":\"4개 스텝 모두 관측값 있음\"}],"
+                + "\"skippedReason\":null},"
+                + "\"prescriptionVerification\":{\"status\":\"flagged\",\"checks\":["
+                + "{\"id\":\"code_in_candidates\",\"target\":\"prescription[1]\","
+                + "\"outcome\":\"flagged\",\"evidence\":\"코드 'Z99' 가 후보 3건 중 없음\"}],"
+                + "\"skippedReason\":null}"
+                + "}";
+
+        ValidationAgentResponse parsed =
+                objectMapper.readValue(upstream, ValidationAgentResponse.class);
+        String roundTripped = objectMapper.writeValueAsString(parsed);
+
+        assertThat(parsed.getPrescriptionVerification()).isNotNull();
+        assertThat(roundTripped).contains("\"prescriptionVerification\"");
+        assertThat(roundTripped).contains("\"target\":\"prescription[1]\"");
+        assertThat(roundTripped).contains("\"id\":\"code_in_candidates\"");
+        assertThat(roundTripped).contains("Z99");
+        // 두 검증이 서로 다른 값을 유지해야 한다 — 병합/혼선이 없어야 한다.
+        assertThat(roundTripped).contains("\"id\":\"trace_step_has_observation\"");
+        assertThat(roundTripped).contains("\"target\":\"response\"");
+    }
+
+    @Test
+    void missingPrescriptionVerificationIsNull() throws Exception {
+        ValidationAgentResponse parsed = objectMapper.readValue(
+                "{\"overallStatus\":\"PASS\",\"summary\":\"s\"}", ValidationAgentResponse.class);
+
+        assertThat(parsed.getPrescriptionVerification()).isNull();
+    }
 }

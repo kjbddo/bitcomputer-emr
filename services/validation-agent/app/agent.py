@@ -61,6 +61,11 @@ class ValidationState(TypedDict, total=False):
     # 정규화된 값을 넘기면 응답이 자기 자신과 비교돼 항상 통과한다(spec §4.1).
     pubmed_articles: List[Dict[str, Any]]
     finder_candidates: List[Dict[str, Any]]
+    # prescription_api 자신의 항목 단위 검증(target="prescription[N]") 원본.
+    # validation-agent 자신의 verification 과는 다른 서비스, 다른 판정이라
+    # 응답 최상위에 별도 필드(prescriptionVerification)로만 얹는다 — 섞지
+    # 않는다(최종 리뷰 C1, tools.py:205-211).
+    prescription_verification: Optional[Dict[str, Any]]
     final_result: Dict[str, Any]
 
 
@@ -97,6 +102,7 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
         "candidate_prescriptions": [],
         "pubmed_articles": [],
         "finder_candidates": [],
+        "prescription_verification": None,
     }
     reasoning_trace: List[Dict[str, Any]] = []
     pubmed_evidence: List[Dict[str, Any]] = []
@@ -222,6 +228,12 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
     # (임의 키를 그대로 통과시키지 않는다), verification 은 정규화 이후에 얹는다.
     response_payload = _normalize_final_result(final_result)
     response_payload["verification"] = _safe_verify(state, response_payload)
+    # prescription_api 자신의 항목 단위 검증. validation-agent 자신의 verification
+    # (바로 위)과는 다른 서비스, 다른 판정이라 별도 필드로만 얹는다 — 병합하지
+    # 않는다(최종 리뷰 C1, tools.py:205-211). 후보 조회 자체가 없었으면(예: 이미
+    # candidate_prescriptions 가 채워져 있어 finder 를 다시 부를 필요가 없던 경우)
+    # None 그대로 두어 GC-2/GC-3(미검증 fail-closed)를 지킨다.
+    response_payload["prescriptionVerification"] = state.get("prescription_verification")
     return ValidationAgentResponse(**response_payload)
 
 
@@ -343,6 +355,11 @@ def _invoke_prescription_finder(
         raw_candidates = observation.get("candidatePrescriptions") or []
         if isinstance(raw_candidates, list):
             state.setdefault("finder_candidates", []).extend(raw_candidates)
+        # prescription_api 자신의 항목 단위 검증(target="prescription[N]") 원본을
+        # 그대로 들고 있는다 — 최상위 응답의 prescriptionVerification 이 이 값을
+        # 읽는다(최종 리뷰 C1). 여러 번 호출되면 가장 최근 관측값이 이긴다 —
+        # state["candidate_prescriptions"] 를 덮어쓰는 것과 같은 규칙이다.
+        state["prescription_verification"] = observation.get("recommendationVerification")
     return observation if isinstance(observation, dict) else {"status": "UNKNOWN", "raw": observation}
 
 

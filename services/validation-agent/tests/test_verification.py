@@ -577,6 +577,77 @@ def test_response_actually_carries_verification(monkeypatch):
     assert response.verification["status"] in {"passed", "flagged", "skipped"}
 
 
+# --- 최종 리뷰 C1: prescription_api 자신의 항목 단위 검증(target="prescription[N]")이
+# validation-agent 응답까지 도달해야 한다. validation-agent 자신의 verification
+# (app/verification.py) 은 세 검사 전부 target="response" 라 절대 "prescription[N]"
+# 을 만들 수 없다 — 그 값 위에서 처방 항목 배지를 찾으면 영구히 미검증이다.
+# 두 verification 은 서로 다른 서비스의 다른 판정이라 섞으면 안 된다(tools.py:205-211).
+
+def test_response_model_has_prescription_verification_field():
+    assert "prescriptionVerification" in ValidationAgentResponse.model_fields
+
+
+def test_prescription_verification_defaults_to_none():
+    """기본값을 만들면 검증하지 않은 것이 검증된 것처럼 보인다."""
+    assert ValidationAgentResponse.model_fields["prescriptionVerification"].default is None
+
+
+class _FakePrescriptionFinderWithVerification:
+    """prescription_api 가 자신의 항목 단위 verification(target="prescription[N]")
+    을 함께 돌려주는 상황을 재현하는 대역."""
+
+    def invoke(self, payload=None):
+        return {
+            "status": "LOADED",
+            "evidence": ["기존 처방 RAG에서 참고 처방 후보를 조회했습니다."],
+            "candidatePrescriptions": [
+                {
+                    "id": 1,
+                    "rank": 1,
+                    "prescription_code": "C1",
+                    "prescription_name": "약1",
+                    "reason": "",
+                    "confidence_score": 0.9,
+                }
+            ],
+            "recommendationLlmStatus": "real",
+            "recommendationVerification": {
+                "status": "passed",
+                "checks": [
+                    {
+                        "id": "code_in_candidates",
+                        "target": "prescription[1]",
+                        "outcome": "ok",
+                        "evidence": "코드 'C1' 가 후보 1건 중 있음",
+                    },
+                ],
+                "skippedReason": None,
+            },
+        }
+
+
+def test_prescription_verification_flows_from_finder_to_response(monkeypatch):
+    """prescription_api 의 항목 단위 검증이 최상위 응답까지 도달해야 한다
+    (Diagnosis.tsx 의 처방 항목 배지가 실제로 읽는 값). validation-agent 자신의
+    verification 과 뒤섞이면 안 된다 — 후자는 항상 target="response" 다."""
+    import app.agent as agent
+
+    _install_llm_decisions(monkeypatch)
+    monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinderWithVerification())
+
+    response = agent.run_validation_agent(_request())
+
+    assert response.prescriptionVerification is not None
+    targets = [c["target"] for c in response.prescriptionVerification["checks"]]
+    assert "prescription[1]" in targets
+
+    own_targets = {c["target"] for c in (response.verification or {}).get("checks", [])}
+    assert "prescription[1]" not in own_targets, (
+        "validation-agent 자신의 verification 은 항상 target=\"response\" 다 — "
+        "prescription[N] 이 섞여 있으면 두 검증이 잘못 합쳐진 것이다"
+    )
+
+
 # --- 리뷰 Important 1: cited_pmid_in_evidence 가 실제 응답 모양에서는 우연히만
 # 동작하고 있었다. response_dict.get("pubmedEvidenceSummary") 는 최상위 키인데,
 # _normalize_final_result 가 만드는 실제 응답에서 그 요약은

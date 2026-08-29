@@ -325,7 +325,14 @@ describe("처방 표의 항목 단위 검증 표시", () => {
     );
   }
 
-  function mockJobWithVerification(jobId: string, verification: Verification | undefined) {
+  // 처방 항목 배지(prescription[N])는 result.prescriptionVerification 을 읽는다
+  // (최종 리뷰 C1) — result.verification 은 validation-agent 자기 자신의 검증이고
+  // 검사 전부 target="response" 라 이 배지에는 절대 도달하지 않는다. 이 헬퍼는
+  // 백엔드가 실제로 만들 수 있는 payload 모양으로 mock 한다.
+  function mockJobWithPrescriptionVerification(
+    jobId: string,
+    prescriptionVerification: Verification | undefined
+  ) {
     mockedRecommend.mockResolvedValue({ jobId, historyId: 10, status: "RUNNING" });
     mockedGetJob.mockResolvedValue({
       jobId,
@@ -335,7 +342,7 @@ describe("처방 표의 항목 단위 검증 표시", () => {
         overallStatus: "PASS",
         summary: "이상 없음",
         llmStatus: "real",
-        verification,
+        prescriptionVerification,
         recommendedPrescriptions: [
           {
             id: 1,
@@ -354,7 +361,7 @@ describe("처방 표의 항목 단위 검증 표시", () => {
   }
 
   it("근거 불일치인 처방 행에 표시가 붙는다", async () => {
-    mockJobWithVerification("job-v-1", {
+    mockJobWithPrescriptionVerification("job-v-1", {
       status: "flagged",
       checks: [
         { id: "code_in_candidates", target: "prescription[1]", outcome: "flagged", evidence: "" },
@@ -371,7 +378,7 @@ describe("처방 표의 항목 단위 검증 표시", () => {
   });
 
   it("verification 이 없으면 미검증으로 표시한다", async () => {
-    mockJobWithVerification("job-v-2", undefined);
+    mockJobWithPrescriptionVerification("job-v-2", undefined);
 
     renderDiagnosis();
     fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
@@ -381,7 +388,7 @@ describe("처방 표의 항목 단위 검증 표시", () => {
   });
 
   it("모달을 닫아도 패널의 검증 표시가 남는다", async () => {
-    mockJobWithVerification("job-v-3", {
+    mockJobWithPrescriptionVerification("job-v-3", {
       status: "flagged",
       checks: [
         { id: "code_in_candidates", target: "prescription[1]", outcome: "flagged", evidence: "" },
@@ -407,7 +414,7 @@ describe("처방 표의 항목 단위 검증 표시", () => {
         overallStatus: "PASS",
         summary: "이상 없음",
         llmStatus: "real",
-        verification: {
+        prescriptionVerification: {
           status: "flagged",
           checks: [
             { id: "code_in_candidates", target: "prescription[1]", outcome: "flagged", evidence: "" },
@@ -434,7 +441,34 @@ describe("처방 표의 항목 단위 검증 표시", () => {
   // 검증 표시는 그 아래(modalReason 과 검증 이유 목록 사이) 별도 줄에 서야
   // 한다. 세 배지를 한 줄에 쌓으면 셋 다 안 읽힌다(spec §7.1).
   it("검증 모달에 근거 표시가 뜬다", async () => {
-    mockJobWithVerification("job-v-4", { status: "flagged", checks: [] });
+    // 모달의 "근거" 표시는 validation-agent 자기 자신의 verification(항상
+    // target="response")을 읽는다 — 처방 항목 배지(prescriptionVerification)와는
+    // 다른 값이다.
+    mockedRecommend.mockResolvedValue({ jobId: "job-v-4", historyId: 10, status: "RUNNING" });
+    mockedGetJob.mockResolvedValue({
+      jobId: "job-v-4",
+      historyId: 10,
+      status: "DONE",
+      result: {
+        overallStatus: "PASS",
+        summary: "이상 없음",
+        llmStatus: "real",
+        verification: { status: "flagged", checks: [] },
+        recommendedPrescriptions: [
+          {
+            id: 1,
+            rank: 1,
+            prescription_code: "C1",
+            prescription_name: "약1",
+            reason: "",
+            confidence_score: 0.9,
+            dose: 1,
+            time: 1,
+            days: 1,
+          },
+        ],
+      },
+    } as unknown as ValidationJobResponse);
 
     renderDiagnosis();
     fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
@@ -531,7 +565,7 @@ describe("처방 상세 선택으로 처방을 바꾸면 그 rank 의 검증이 
         overallStatus: "PASS",
         summary: "이상 없음",
         llmStatus: "real",
-        verification: {
+        prescriptionVerification: {
           status: "flagged",
           checks: [
             { id: "code_in_candidates", target: "prescription[1]", outcome: "ok", evidence: "" },
@@ -621,7 +655,7 @@ describe("처방 상세 선택으로 처방을 바꾸면 그 rank 의 검증이 
         overallStatus: "PASS",
         summary: "이상 없음",
         llmStatus: "real",
-        verification: {
+        prescriptionVerification: {
           status: "passed",
           checks: [
             { id: "code_in_candidates", target: "prescription[1]", outcome: "ok", evidence: "" },
@@ -661,7 +695,7 @@ describe("환자·진료 전환 시 AI 추천/검증 상태가 초기화된다",
         overallStatus: "PASS",
         summary: "이상 없음",
         llmStatus: "fallback",
-        verification: {
+        prescriptionVerification: {
           status: "flagged",
           checks: [
             { id: "code_in_candidates", target: "prescription[1]", outcome: "flagged", evidence: "" },

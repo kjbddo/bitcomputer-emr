@@ -108,7 +108,15 @@ export interface ValidationJobResponse {
     suspectedIssues?: Array<Record<string, unknown>>;
     reasoningTrace?: Array<Record<string, unknown>>;
     validation?: Record<string, unknown>;
+    // validation-agent 자기 자신의 검증. checks[].target 은 항상 "response" 다 —
+    // "prescription[N]" 은 절대 만들지 않는다(services/validation-agent/app/verification.py).
+    // 처방 항목 배지는 이 필드가 아니라 아래 prescriptionVerification 을 읽어야
+    // 한다(최종 리뷰 C1).
     verification?: Verification | null;
+    // prescription_api 자신의 항목 단위 검증. checks[].target 이 "prescription[N]"
+    // 인 유일한 출처다(services/prescription/verification.py). 위 verification
+    // 과는 다른 서비스, 다른 판정이므로 병합하지 않는다.
+    prescriptionVerification?: Verification | null;
     [key: string]: unknown;
   } | null;
   lastError?: string | null;

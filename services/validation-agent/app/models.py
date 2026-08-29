@@ -50,4 +50,14 @@ class ValidationAgentResponse(BaseModel):
     # 출력이 도구 관측값으로 추적되는지. llmStatus 와 다른 축이다.
     # 기본값을 두지 않는 이유는 llmStatus 와 같다 — 없는 것을 있는 것처럼
     # 보이게 하면 안 된다. 웹은 None 을 "미검증"으로 렌더한다.
+    #
+    # 이 필드는 validation-agent 자기 자신의 검증(app/verification.py)이다.
+    # 검사 셋 전부 target="response" 다 — 절대 "prescription[N]" 을 만들지
+    # 않는다(spec §6.3). prescription_api 의 항목 단위 검증과 섞으면 Task 6
+    # llmStatus 회귀와 같은 부류의 결함이 된다(tools.py:205-211 참고).
     verification: Optional[Dict[str, Any]] = None
+    # prescription_api 자신의 항목 단위 검증 — target="prescription[N]" 을
+    # 갖는 유일한 출처다(services/prescription/verification.py). 위
+    # `verification`(validation-agent 자신의 판정) 과는 별개의 서비스,
+    # 별개의 판정이라 절대 병합하지 않는다(최종 리뷰 C1).
+    prescriptionVerification: Optional[Dict[str, Any]] = None

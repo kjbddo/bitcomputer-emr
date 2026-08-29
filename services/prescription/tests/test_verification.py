@@ -77,6 +77,18 @@ def test_wrong_rank_set_is_flagged():
     assert _outcomes(result, "schema_top3") == ["flagged"]
 
 
+# I2(§12.6 GC-8 공백): 중복 처방코드 조건에는 죽이는 테스트가 없었다.
+# `and len(set(codes)) == len(codes)` 를 지워도 스위트가 전부 초록이었다
+# (실측: §11.5, 실제 모델 응답의 60%에서 이 조건이 발화한다). rank 는
+# {1, 2, 3} 을 온전히 채워 rank 조건과는 독립적으로 중복 조건만 검증한다.
+def test_duplicate_prescription_codes_is_flagged():
+    items = [_item(1, "A01", "약가"), _item(2, "A01", "약가"),
+             _item(3, "C03", "약다", "2정")]
+    result = verify_prescriptions(candidates=CANDIDATES, items=items)
+
+    assert _outcomes(result, "schema_top3") == ["flagged"]
+
+
 # GC-3. 검증기는 판정만 한다.
 def test_does_not_mutate_output():
     items = [_item(1, "A01", "약가")]
