@@ -26,6 +26,12 @@
   margin-bottom: var(--space-3);
 }
 
+.aiPreviewNoticeLabel {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  margin-right: var(--space-2);
+}
+
 .aiPreviewTextarea {
   min-height: 220px;
 }

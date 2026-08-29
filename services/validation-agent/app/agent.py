@@ -19,6 +19,7 @@ from .tools import (
     prescription_validator,
     xray_result_loader,
 )
+from .verification import verify_validation
 
 logger = logging.getLogger("validation_agent.agent")
 
@@ -55,6 +56,16 @@ class ValidationState(TypedDict, total=False):
     disease_check: Dict[str, Any]
     prescription_check: Dict[str, Any]
     candidate_prescriptions: List[Dict[str, Any]]
+    # 도구 관측값 원본. 응답에 실리는 candidate_prescriptions 는 정규화(코드/키 통일)를
+    # 거치므로, 검증기(app.verification)에 넘길 대조 기준은 이 원본이어야 한다 —
+    # 정규화된 값을 넘기면 응답이 자기 자신과 비교돼 항상 통과한다(spec §4.1).
+    pubmed_articles: List[Dict[str, Any]]
+    finder_candidates: List[Dict[str, Any]]
+    # prescription_api 자신의 항목 단위 검증(target="prescription[N]") 원본.
+    # validation-agent 자신의 verification 과는 다른 서비스, 다른 판정이라
+    # 응답 최상위에 별도 필드(prescriptionVerification)로만 얹는다 — 섞지
+    # 않는다(최종 리뷰 C1, tools.py:205-211).
+    prescription_verification: Optional[Dict[str, Any]]
     final_result: Dict[str, Any]
 
 
@@ -89,6 +100,9 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
         "saved_prescriptions": request.savedPrescriptions,
         "xray_inference": request.xrayInference,
         "candidate_prescriptions": [],
+        "pubmed_articles": [],
+        "finder_candidates": [],
+        "prescription_verification": None,
     }
     reasoning_trace: List[Dict[str, Any]] = []
     pubmed_evidence: List[Dict[str, Any]] = []
@@ -161,6 +175,7 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
                 "diseases": state.get("saved_diseases", []),
                 "symptoms": f"{state.get('symptoms') or ''}\n검증 사유: {reason}\nPubMed query: {query_context}",
             },
+            state,
             # 결정 루프 밖에서 항상 실행되는 후처리라 "rule" 로 표기한다(리뷰 finding 2).
             source="rule",
         )
@@ -209,7 +224,39 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
     })
     if pubmed_evidence and final_overall != "PASS":
         final_result["reason"] = _with_pubmed_reason(str(final_result.get("reason") or ""), pubmed_evidence)
-    return ValidationAgentResponse(**_normalize_final_result(final_result))
+    # _normalize_final_result 는 알려진 키만 남기는 새 dict 를 만들어 돌려주므로
+    # (임의 키를 그대로 통과시키지 않는다), verification 은 정규화 이후에 얹는다.
+    response_payload = _normalize_final_result(final_result)
+    response_payload["verification"] = _safe_verify(state, response_payload)
+    # prescription_api 자신의 항목 단위 검증. validation-agent 자신의 verification
+    # (바로 위)과는 다른 서비스, 다른 판정이라 별도 필드로만 얹는다 — 병합하지
+    # 않는다(최종 리뷰 C1, tools.py:205-211). 후보 조회 자체가 없었으면(예: 이미
+    # candidate_prescriptions 가 채워져 있어 finder 를 다시 부를 필요가 없던 경우)
+    # None 그대로 두어 GC-2/GC-3(미검증 fail-closed)를 지킨다.
+    response_payload["prescriptionVerification"] = state.get("prescription_verification")
+    return ValidationAgentResponse(**response_payload)
+
+
+def _safe_verify(state: Any, response_payload: Dict[str, Any]) -> Dict[str, Any]:
+    """검증을 돌리되 본 응답을 실패시키지 않는다(GC-4).
+
+    반드시 도구 관측값 원본(state["pubmed_articles"] / state["finder_candidates"])을
+    넘긴다 — state["candidate_prescriptions"] 처럼 응답에 그대로 실리는 정규화값을
+    넘기면 응답이 자기 자신과 비교돼 어떤 입력으로도 flagged 가 나올 수 없다.
+    """
+    try:
+        return verify_validation(
+            pubmed_articles=state.get("pubmed_articles") or [],
+            finder_candidates=state.get("finder_candidates") or [],
+            response_dict=response_payload,
+        ).to_dict()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("검증 실패, skipped 로 처리: %s", type(exc).__name__)
+        return {
+            "status": "skipped",
+            "checks": [],
+            "skippedReason": f"검증기 예외: {type(exc).__name__}",
+        }
 
 
 def _resolve_llm_status(sources: List[str]) -> str:
@@ -273,6 +320,7 @@ def _invoke_prescription_finder(
     reasoning_trace: List[Dict[str, Any]],
     thought: str,
     payload: Dict[str, Any],
+    state: ValidationState,
     source: str,
 ) -> Dict[str, Any]:
     """Prescription Finder 전용 호출 래퍼.
@@ -283,6 +331,10 @@ def _invoke_prescription_finder(
     스텁/폴백에서 왔다면 트레이스는 그 사실을 우선한다. **`decision_sources` 에는
     절대 반영하지 않는다** — 최상위 llmStatus 를 오염시키면 Task 6 의 결함이
     재발한다(브리프 §주의).
+
+    `state["finder_candidates"]` 에 관측값 원본(정규화 전)을 누적한다 — 검증기
+    (app.verification)가 대조할 기준은 응답에 실리는 정규화값이 아니라 이
+    원본이어야 한다(spec §4.1).
     """
     try:
         observation = prescription_finder.invoke(payload)
@@ -299,6 +351,15 @@ def _invoke_prescription_finder(
         "observation": observation,
         "source": trace_source,
     })
+    if isinstance(observation, dict):
+        raw_candidates = observation.get("candidatePrescriptions") or []
+        if isinstance(raw_candidates, list):
+            state.setdefault("finder_candidates", []).extend(raw_candidates)
+        # prescription_api 자신의 항목 단위 검증(target="prescription[N]") 원본을
+        # 그대로 들고 있는다 — 최상위 응답의 prescriptionVerification 이 이 값을
+        # 읽는다(최종 리뷰 C1). 여러 번 호출되면 가장 최근 관측값이 이긴다 —
+        # state["candidate_prescriptions"] 를 덮어쓰는 것과 같은 규칙이다.
+        state["prescription_verification"] = observation.get("recommendationVerification")
     return observation if isinstance(observation, dict) else {"status": "UNKNOWN", "raw": observation}
 
 
@@ -563,7 +624,11 @@ def _execute_decided_tool(
                 pubmed_loader,
                 source=source,
             )
-            pubmed_evidence.extend(_dedupe_pubmed_articles(pubmed_result.get("articles") or []))
+            raw_articles = pubmed_result.get("articles") or []
+            # 검증기(app.verification) 대조 기준은 중복 제거된 pubmed_evidence 가
+            # 아니라 관측값 원본이어야 한다(spec §4.1) — dedupe 는 표시용 가공이다.
+            state.setdefault("pubmed_articles", []).extend(raw_articles)
+            pubmed_evidence.extend(_dedupe_pubmed_articles(raw_articles))
         else:
             reason = _summary_for_current_state(state)
             # 두 번째 반환값(쿼리 생성 출처)은 _load_pubmed_evidence 내부에서 이미
@@ -593,6 +658,7 @@ def _execute_decided_tool(
             reasoning_trace,
             thought,
             payload,
+            state,
             source=source,
         )
         candidates = finder_result.get("candidatePrescriptions") or []
@@ -662,7 +728,13 @@ def _load_pubmed_evidence(
             pubmed_loader,
             source=trace_source,
         )
-        articles.extend(pubmed_result.get("articles") or [])
+        raw_articles = pubmed_result.get("articles") or []
+        # 검증기(app.verification) 대조 기준은 관측값 원본이다(spec §4.1). 이
+        # 함수는 결정 루프 안(_execute_decided_tool)과 밖(run_validation_agent 의
+        # PASS 후 보강 경로) 양쪽에서 호출되므로, 여기서 저장해야 두 경로 모두
+        # 빠짐없이 커버된다.
+        state.setdefault("pubmed_articles", []).extend(raw_articles)
+        articles.extend(raw_articles)
         if articles:
             break
     return _dedupe_pubmed_articles(articles), ("llm" if llm_queries else "fallback")

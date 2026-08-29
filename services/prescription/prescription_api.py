@@ -42,6 +42,8 @@ except ImportError:
 
 from llm_provider import resolve_provider, stub_prescription_response
 
+from verification import verify_prescriptions
+
 from prescription_agent import (
     build_prescription_agent_prompt,
     parse_prescriptions_llm_response,
@@ -162,6 +164,9 @@ class PrescriptionRecommendResponse(BaseModel):
     # 기본값을 두지 않는다 — 생성 시 값을 빠뜨리면 "모델이 실제로 판단했다"는
     # 거짓 신호를 조용히 내보내게 된다(MINOR 5).
     llmStatus: Literal["real", "stub"]
+    # 출력이 조회 결과로 추적되는지. llmStatus 와 다른 축이다 —
+    # llmStatus 는 "모델이 돌았나", 이건 "돈 결과에 근거가 있나"다(spec §7.1).
+    verification: Optional[Dict[str, Any]] = None
 
 
 class PrescriptionFeedbackItem(BaseModel):
@@ -402,6 +407,23 @@ def _ensure_feedback_graph_collections(db: Any) -> None:
         db.create_collection(_ARANGO_FALLBACK_RX_VTX)
     if not db.has_collection(_ARANGO_RECOMMENDED_EDGE):
         db.create_collection(_ARANGO_RECOMMENDED_EDGE, edge=True)
+
+
+def _safe_verify(*, candidates: Any, items: Any) -> Dict[str, Any]:
+    """검증을 돌리되 절대 본 응답을 실패시키지 않는다(GC-4).
+
+    검증기에서 예외가 나면 skipped 로 흡수한다. 검증이 실패했는데 passed 로
+    떨어지면 검증층이 있는 이유가 사라지므로, 실패는 반드시 skipped 다.
+    """
+    try:
+        return verify_prescriptions(candidates=candidates, items=items).to_dict()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("처방 검증 실패, skipped 로 처리")
+        return {
+            "status": "skipped",
+            "checks": [],
+            "skippedReason": f"검증기 예외: {type(exc).__name__}",
+        }
 
 
 @app.post(
@@ -695,6 +717,9 @@ def recommend(
         if not code or code == "미기재":
             continue
         if confidence_by_code:
+            # M-4(verification.py 의 confidence_in_range 문서화 참조): 코드가
+            # confidence_by_code 에 없어도 여기서 0.0 이 주입된다 — 조회된 0.0 과
+            # 폴백된 0.0 이 구분되지 않는다. 동작은 그대로 두고 한계만 기록한다.
             it.confidence_score = confidence_by_code.get(code, 0.0)
 
     return PrescriptionRecommendResponse(
@@ -711,6 +736,7 @@ def recommend(
         # 바뀌지 않는다, resolve_provider() 를 몇 번 호출하는지만 바뀐다.
         engineStatus=provider,
         llmStatus=llm_status,
+        verification=_safe_verify(candidates=effective_top_rx, items=items),
     )
 
 

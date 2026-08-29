@@ -1,6 +1,7 @@
 import type { InternalAxiosRequestConfig } from "axios";
 import { http, post } from "./http/client";
 import { fetchDiagnosesPage } from "./diagnoses";
+import type { Verification } from "@/utils/verificationNotice";
 
 export interface DocumentGenerateRequest {
   diseaseCode: string;
@@ -50,6 +51,8 @@ export interface DocumentGenerateResponse {
   medical_certificate?: string;
   /** 소견이 실제로 모델에서 나왔는지. 값 공간을 좁히지 않는다 — Java 가 검증하지 않는다. */
   llmStatus?: string | null;
+  /** 소견이 조회 결과로 추적되는지. llmStatus 와 다른 축(spec §7.1). */
+  verification?: Verification | null;
 }
 
 // 최종 리뷰 IMPORTANT: 이 값은 Java 의 http.client.rest-template.read-timeout-ms

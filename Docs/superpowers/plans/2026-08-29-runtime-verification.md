@@ -122,7 +122,9 @@ def test_all_skipped_is_skipped():
 
 # 구조 검사 집합이 비면 위 방어가 통째로 사라진다. 상수 자체를 고정한다.
 def test_structural_ids_are_pinned():
-    assert STRUCTURAL_CHECK_IDS == frozenset({"schema_top3", "confidence_in_range"})
+    assert STRUCTURAL_CHECK_IDS == frozenset(
+        {"schema_top3", "confidence_in_range", "trace_step_has_observation"}
+    )
 
 
 def test_to_dict_shape():
@@ -177,7 +179,13 @@ VerificationStatus = Literal["passed", "flagged", "skipped"]
 # 구조 검사: 출력의 형태만 본다. 조회 데이터가 없어도 판정된다.
 # 이 집합에 든 검사만 통과해서는 "passed" 가 되지 않는다(spec §5.1).
 # 형식이 맞다는 것과 근거가 있다는 것은 다른 말이다.
-STRUCTURAL_CHECK_IDS = frozenset({"schema_top3", "confidence_in_range"})
+#
+# trace_step_has_observation 이 여기 든 이유: 그것은 "스텝에 관측값이 있나"만
+# 보고 조회 데이터와 대조하지 않는다. 근거 검사로 집계하면, PubMed 도 finder 도
+# 아무것도 못 가져온 응답이 트레이스만 멀쩡하면 "passed" 가 된다.
+STRUCTURAL_CHECK_IDS = frozenset(
+    {"schema_top3", "confidence_in_range", "trace_step_has_observation"}
+)
 
 
 @dataclass(frozen=True)
@@ -526,7 +534,7 @@ def verify_prescriptions(*, candidates: Sequence[Any], items: Sequence[Any]) -> 
                 else:
                     checks.append(CheckResult(
                         id="dosage_verbatim", target=target,
-                        outcome="ok" if dosage in source_dosage or dosage == source_dosage else "flagged",
+                        outcome="ok" if dosage in source_dosage else "flagged",
                         evidence=f"후보 {source_dosage!r} vs 출력 {dosage!r}"))
 
         if confidence is None:
@@ -730,10 +738,12 @@ git commit -m "feat(prescription): 응답에 verification 필드 배선"
 
 **Interfaces:**
 - Consumes: Task 1 의 계약
-- Produces: `verify_certificate(*, diseases: List[Any], prescription_names: List[str], text: str) -> VerificationResult`
+- Produces: `verify_certificate(*, diseases: List[Any], diagnoses: List[Any], text: str) -> VerificationResult`
 - Produces: `CertificateGenerateResponse.verification: Optional[Dict[str, Any]]`
 
-`diseases` 는 `CertificateGenerateRequest.diseases` — `DiseaseInfo{code, name, degree}` 목록이다.
+`diseases` 는 `CertificateGenerateRequest.diseases` — `DiseaseInfo{code, name, degree}` 목록이고,
+`diagnoses` 는 `CertificateGenerateRequest.diagnoses` — `DiagnoseInfo{code, name}` 목록이다.
+요청에는 처방 목록이 없다(확인함). premise 는 이 두 목록의 코드와 이름이 전부다.
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
@@ -750,6 +760,7 @@ def _disease(code, name):
 
 
 DISEASES = [_disease("J00", "급성 비인두염"), _disease("E11.9", "제2형 당뇨병")]
+DIAGNOSES = [SimpleNamespace(code="Z00", name="건강검진")]
 
 
 def _outcomes(result, check_id):
@@ -758,7 +769,7 @@ def _outcomes(result, check_id):
 
 def test_known_code_and_term_pass():
     text = "환자는 급성 비인두염(J00)으로 통원 치료가 필요합니다."
-    result = verify_certificate(diseases=DISEASES, prescription_names=["약가"], text=text)
+    result = verify_certificate(diseases=DISEASES, diagnoses=DIAGNOSES, text=text)
 
     assert result.status == "passed"
     assert _outcomes(result, "cited_code_known") == ["ok"]
@@ -767,7 +778,7 @@ def test_known_code_and_term_pass():
 
 def test_unknown_icd_code_is_flagged():
     text = "환자는 급성 비인두염(K52.9)으로 통원 치료가 필요합니다."
-    result = verify_certificate(diseases=DISEASES, prescription_names=[], text=text)
+    result = verify_certificate(diseases=DISEASES, diagnoses=[], text=text)
 
     assert result.status == "flagged"
     assert "flagged" in _outcomes(result, "cited_code_known")
@@ -775,14 +786,14 @@ def test_unknown_icd_code_is_flagged():
 
 def test_no_code_in_text_is_skipped():
     text = "환자는 통원 치료가 필요합니다."
-    result = verify_certificate(diseases=DISEASES, prescription_names=[], text=text)
+    result = verify_certificate(diseases=DISEASES, diagnoses=[], text=text)
 
     assert _outcomes(result, "cited_code_known") == ["skipped"]
 
 
 def test_premise_term_absent_is_flagged():
     text = "환자는 안정이 필요합니다."
-    result = verify_certificate(diseases=DISEASES, prescription_names=["약가"], text=text)
+    result = verify_certificate(diseases=DISEASES, diagnoses=DIAGNOSES, text=text)
 
     assert "flagged" in _outcomes(result, "premise_term_present")
 
@@ -790,7 +801,7 @@ def test_premise_term_absent_is_flagged():
 # GC-2. premise 가 비면 통과가 아니라 미확인이다.
 def test_empty_premise_never_passes():
     text = "환자는 급성 비인두염으로 통원 치료가 필요합니다."
-    result = verify_certificate(diseases=[], prescription_names=[], text=text)
+    result = verify_certificate(diseases=[], diagnoses=[], text=text)
 
     assert result.status == "skipped"
     assert result.skippedReason is not None
@@ -798,16 +809,24 @@ def test_empty_premise_never_passes():
 
 def test_dotted_icd_code_is_recognised():
     text = "제2형 당뇨병(E11.9) 소견입니다."
-    result = verify_certificate(diseases=DISEASES, prescription_names=[], text=text)
+    result = verify_certificate(diseases=DISEASES, diagnoses=[], text=text)
 
     assert _outcomes(result, "cited_code_known") == ["ok"]
 
 
-def test_prescription_name_counts_as_premise_term():
-    text = "약가 투여를 지속할 것을 권고합니다."
-    result = verify_certificate(diseases=DISEASES, prescription_names=["약가"], text=text)
+def test_diagnosis_name_counts_as_premise_term():
+    """premise 는 diseases 와 diagnoses 를 합친 것이다. 어느 쪽 이름이든 인정한다."""
+    text = "건강검진 목적의 소견입니다."
+    result = verify_certificate(diseases=DISEASES, diagnoses=DIAGNOSES, text=text)
 
     assert _outcomes(result, "premise_term_present") == ["ok"]
+
+
+def test_diagnosis_code_counts_as_known_code():
+    text = "건강검진(Z00) 소견입니다."
+    result = verify_certificate(diseases=DISEASES, diagnoses=DIAGNOSES, text=text)
+
+    assert _outcomes(result, "cited_code_known") == ["ok"]
 ```
 
 - [ ] **Step 2: 테스트가 실패하는지 확인**
@@ -845,13 +864,13 @@ def _text(value: Any) -> str:
 def verify_certificate(
     *,
     diseases: Sequence[Any],
-    prescription_names: Sequence[str],
+    diagnoses: Sequence[Any],
     text: str,
 ) -> VerificationResult:
-    known_codes = {_text(getattr(d, "code", "")) for d in diseases}
+    premise_entries = list(diseases) + list(diagnoses)
+    known_codes = {_text(getattr(e, "code", "")) for e in premise_entries}
     known_codes.discard("")
-    known_terms = {_text(getattr(d, "name", "")) for d in diseases}
-    known_terms |= {_text(n) for n in prescription_names}
+    known_terms = {_text(getattr(e, "name", "")) for e in premise_entries}
     known_terms.discard("")
 
     has_premise = bool(known_codes or known_terms)
@@ -930,13 +949,9 @@ from certificate_verification import verify_certificate
 def _safe_verify_certificate(req: Any, text: str) -> Dict[str, Any]:
     """검증을 돌리되 본 응답을 실패시키지 않는다(GC-4)."""
     try:
-        names = [
-            _text_or_empty(getattr(p, "name", ""))
-            for p in (getattr(req, "prescriptions", None) or [])
-        ]
         return verify_certificate(
             diseases=getattr(req, "diseases", None) or [],
-            prescription_names=[n for n in names if n],
+            diagnoses=getattr(req, "diagnoses", None) or [],
             text=text,
         ).to_dict()
     except Exception as exc:  # noqa: BLE001
@@ -952,8 +967,7 @@ def _text_or_empty(value: Any) -> str:
     return str(value).strip() if value is not None else ""
 ```
 
-`CertificateGenerateRequest` 에 `prescriptions` 필드가 없으면 `getattr` 이 빈 목록을
-돌려주므로 상병명만으로 판정한다 — 필드 존재 여부를 먼저 읽고 확인한다.
+`_text_or_empty` 는 더 이상 쓰이지 않으면 넣지 않는다.
 
 - [ ] **Step 6: 배선 테스트 추가**
 
@@ -1301,6 +1315,20 @@ def test_trace_step_without_observation_is_flagged():
     assert "flagged" in _outcomes(result, "trace_step_has_observation")
 
 
+# 사전점검에서 찾은 구멍. 트레이스만 멀쩡하고 조회 데이터가 하나도 없으면
+# 대조한 것이 아무것도 없다. 그때 passed 가 나오면 §5.1 이 막으려던 실패다.
+def test_trace_only_never_passes():
+    response = {
+        "pubmedEvidenceSummary": "", "checks": [], "candidatePrescriptions": [],
+        "reasoningTrace": [{"action": "A", "observation": {"status": "OK"}}],
+    }
+    result = verify_validation(
+        pubmed_articles=[], finder_candidates=[], response_dict=response)
+
+    assert _outcomes(result, "trace_step_has_observation") == ["ok"]
+    assert result.status == "skipped"
+
+
 def test_does_not_mutate_response():
     response = {"pubmedEvidenceSummary": "PMID 11111111", "checks": [],
                 "candidatePrescriptions": [], "reasoningTrace": []}
@@ -1414,7 +1442,9 @@ def verify_validation(
             evidence=(f"finder 관측값 밖의 코드: {outside}" if outside
                       else f"후보 {len(returned)}건이 모두 finder 관측값에서 옴")))
 
-    # --- trace_step_has_observation (구조 검사가 아니다: 관측 기록 대조다) ---
+    # --- trace_step_has_observation ---
+    # 구조 검사다(STRUCTURAL_CHECK_IDS). 조회 데이터와 대조하지 않으므로
+    # 이것만 통과해서는 passed 가 되지 않는다.
     trace = response_dict.get("reasoningTrace") or []
     if not trace:
         checks.append(CheckResult(
@@ -1447,7 +1477,8 @@ Expected: PASS (8개)
 2. `known_pmids` 가 빌 때 `"skipped"` 대신 `"ok"` 로 → `test_no_articles_never_passes_pmid_check` FAIL
 3. `candidates_from_finder` 의 `outside` 를 항상 빈 목록으로 → `test_candidate_outside_finder_is_flagged` FAIL
 4. `trace_step_has_observation` 의 `missing` 을 항상 빈 목록으로 → `test_trace_step_without_observation_is_flagged` FAIL
-5. `app/verification_contract.py` 의 `STRUCTURAL_CHECK_IDS` 를 비운다 → `test_contract_copy_matches_prescription` FAIL
+5. `STRUCTURAL_CHECK_IDS` 에서 `trace_step_has_observation` 을 뺀다 → `test_trace_only_never_passes` FAIL
+6. `app/verification_contract.py` 의 `STRUCTURAL_CHECK_IDS` 를 비운다 → `test_contract_copy_matches_prescription` FAIL
 
 - [ ] **Step 7: 커밋**
 
@@ -1862,15 +1893,24 @@ Expected: PASS (10개)
 표 헤더에 요약 한 줄:
 
 ```tsx
-{aiRecommendations.length > 0 && (
-  <span className={styles.verificationSummary}>
-    {`검증: ${aiRecommendations.length}건 중 ${
-      aiRecommendations.filter(
-        (r) => itemVerificationOutcome(aiVerification, `prescription[${r.rank}]`) !== "ok"
-      ).length
-    }건 미확인`}
-  </span>
-)}
+{aiRecommendations.length > 0 && (() => {
+  const outcomes = aiRecommendations.map((r) =>
+    itemVerificationOutcome(aiVerification, `prescription[${r.rank}]`)
+  );
+  const flagged = outcomes.filter((o) => o === "flagged").length;
+  const skipped = outcomes.filter((o) => o === "skipped").length;
+  if (flagged === 0 && skipped === 0) return null;
+  // flagged 와 skipped 를 한 숫자로 뭉치지 않는다(spec §7.3).
+  // "근거와 어긋난다"와 "대조할 근거가 없었다"는 다른 정보다.
+  const parts = [];
+  if (flagged > 0) parts.push(`근거 불일치 ${flagged}건`);
+  if (skipped > 0) parts.push(`미검증 ${skipped}건`);
+  return (
+    <span className={styles.verificationSummary}>
+      {`검증: ${aiRecommendations.length}건 중 ${parts.join(", ")}`}
+    </span>
+  );
+})()}
 ```
 
 `Diagnosis.module.css` 에 여백만 주는 클래스를 추가한다. 색 리터럴을 쓰지 않는다
@@ -1947,6 +1987,28 @@ Expected: 출력 없음
 2. `itemVerificationOutcome` 이 항상 `"ok"` 를 반환하게 → 렌더 테스트 FAIL
 3. 패널의 배지를 지운다 → "모달을 닫아도" 테스트 FAIL
 4. `flagged` 와 `skipped` 의 label 을 같게 → "다른 문구를 쓴다" 테스트 FAIL
+5. 요약에서 `flagged` 와 `skipped` 를 하나로 합산 → 아래 테스트 FAIL
+
+요약 문구를 고정하는 테스트를 함께 넣는다:
+
+```tsx
+it("요약이 근거 불일치와 미검증을 따로 센다", async () => {
+  mockJobWithVerification("job-v-5", {
+    status: "flagged",
+    checks: [
+      { id: "code_in_candidates", target: "prescription[1]", outcome: "flagged", evidence: "" },
+      { id: "code_in_candidates", target: "prescription[2]", outcome: "skipped", evidence: "" },
+      { id: "code_in_candidates", target: "prescription[3]", outcome: "ok", evidence: "" },
+    ],
+  });
+
+  renderDiagnosis();
+  fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+  expect(await screen.findByText(/근거 불일치 1건/)).toBeInTheDocument();
+  expect(screen.getByText(/미검증 1건/)).toBeInTheDocument();
+});
+```
 
 - [ ] **Step 10: 커밋**
 

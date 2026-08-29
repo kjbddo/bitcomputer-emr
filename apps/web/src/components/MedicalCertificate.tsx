@@ -13,6 +13,7 @@ import styles from "./MedicalCertificate.module.css";
 import { CertificateItem, CertificateType } from "./CertificateList";
 import type { CertificatePatientInfo } from "./CertificatePatientSearch";
 import { llmStatusNotice } from "@/utils/llmStatus";
+import { verificationNotice, type Verification } from "@/utils/verificationNotice";
 
 type FieldValues = Record<string, string>;
 
@@ -206,7 +207,11 @@ export default function MedicalCertificate({
   const [saving, setSaving] = useState(false);
   const [aiGenerating, setAiGenerating] = useState(false);
   const [noticeModal, setNoticeModal] = useState<string | null>(null);
-  const [aiPreviewModal, setAiPreviewModal] = useState<{ text: string; llmStatus?: string | null } | null>(null);
+  const [aiPreviewModal, setAiPreviewModal] = useState<{
+    text: string;
+    llmStatus?: string | null;
+    verification?: Verification | null;
+  } | null>(null);
   const [resolvedAiRound, setResolvedAiRound] = useState<AiModalResolution | null>(null);
   const certificatePageRef = useRef<HTMLDivElement>(null);
 
@@ -351,7 +356,7 @@ export default function MedicalCertificate({
       });
       const text = res.medicalCertificate ?? res.medical_certificate ?? "";
       setResolvedAiRound(null);
-      setAiPreviewModal({ text, llmStatus: res.llmStatus });
+      setAiPreviewModal({ text, llmStatus: res.llmStatus, verification: res.verification });
     } catch (error: unknown) {
       console.error("AI 문서 생성 실패", error);
       if (error instanceof HttpError) {
@@ -558,6 +563,16 @@ export default function MedicalCertificate({
               const notice = llmStatusNotice(aiPreviewModal.llmStatus);
               return notice ? (
                 <div className={styles.aiPreviewNotice}>
+                  <span className={styles.aiPreviewNoticeLabel}>모델</span>
+                  <Badge tone={notice.tone}>{notice.label}</Badge>
+                </div>
+              ) : null;
+            })()}
+            {(() => {
+              const notice = verificationNotice(aiPreviewModal.verification?.status);
+              return notice ? (
+                <div className={styles.aiPreviewNotice}>
+                  <span className={styles.aiPreviewNoticeLabel}>근거</span>
                   <Badge tone={notice.tone}>{notice.label}</Badge>
                 </div>
               ) : null;

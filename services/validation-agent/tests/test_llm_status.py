@@ -661,3 +661,81 @@ def test_hallucinated_action_produces_trace_entry(monkeypatch):
         "status": "UNKNOWN_ACTION",
         "evidence": ["Nonexistent Tool"],
     }
+
+
+def _pubmed_evidence_check(response):
+    """응답의 checks[] 에서 PUBMED_EVIDENCE 체크 하나를 꺼낸다."""
+    pubmed_checks = [c for c in response.checks if c.get("type") == "PUBMED_EVIDENCE"]
+    assert pubmed_checks, "PubMed 근거 요약 체크가 있어야 이 테스트가 의미가 있다"
+    return pubmed_checks[0]
+
+
+def test_pubmed_check_message_carries_rule_based_summary_body(monkeypatch):
+    # agent.py:191 의 메시지 조합에서 ": {pubmed_evidence_summary}" 를 통째로
+    # 날려도(뮤테이션 M8: f"{summary_label}") 기존 스위트는 그대로 통과했다 —
+    # 라벨 유무만 보는 테스트(test_pubmed_summary_label_*)뿐이었고, 의료진이
+    # 화면에서 실제로 읽는 요약 본문(PMID 인용 포함)이 남아 있는지 단언하는
+    # 테스트가 없었기 때문이다. 이 테스트는 규칙 기반 경로에서 그 본문을 본다.
+    monkeypatch.setenv("LLM_PROVIDER", "real")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
+    monkeypatch.setattr(agent, "_create_llm", lambda: None)  # 요약은 반드시 폴백을 탄다
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(
+        agent,
+        "_llm_tool_decision",
+        _sequenced_llm_decision([
+            {
+                "thought": "문헌 근거 확보",
+                "action": "Pubmed Loader",
+                "actionInput": {"query": "cough treatment guideline"},
+            },
+            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
+        ]),
+    )
+
+    response = run_validation_agent(_passing_request())
+
+    message = _pubmed_evidence_check(response)["message"]
+    # 대역 논문(_fake_pubmed_articles)에서 나온, 규칙 기반 요약에만 있는 문자열.
+    # PMID 인용은 의료진이 원문을 찾아가는 진입점이라 특히 사라지면 안 된다.
+    assert "Cough treatment guideline (PMID 111)" in message
+    assert "Cough treatment abstract." in message
+
+    # 라벨만 남고 본문이 잘려나가는 회귀를 직접 막는다. 빈 문자열은 어떤
+    # 문자열에도 "in" 으로 걸리므로 비어 있지 않다는 것을 먼저 단언한다.
+    summary = response.validation["pubmedEvidenceSummary"]
+    assert summary, "요약 본문이 비어 있으면 checks[] 메시지 검증이 무의미해진다"
+    assert summary in message, "checks[] 메시지에 요약 본문이 그대로 실려야 한다"
+
+
+def test_pubmed_check_message_carries_llm_summary_body(monkeypatch):
+    # 위 테스트의 LLM 경로 쌍. 요약이 모델에서 나온 경우에도 본문이 checks[]
+    # 메시지에 그대로 실려야 한다(_FakeLLM 이 요약 호출을 실제 "llm" 경로로
+    # 태운다).
+    monkeypatch.setenv("LLM_PROVIDER", "real")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
+    monkeypatch.setattr(agent, "_create_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(
+        agent,
+        "_llm_tool_decision",
+        _sequenced_llm_decision([
+            {
+                "thought": "문헌 근거 확보",
+                "action": "Pubmed Loader",
+                "actionInput": {"query": "cough treatment guideline"},
+            },
+            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
+        ]),
+    )
+
+    response = run_validation_agent(_passing_request())
+
+    message = _pubmed_evidence_check(response)["message"]
+    # _FakeLLM 기본 요약문 그대로. 규칙 기반 조합에서는 절대 나올 수 없는 문장이라
+    # "요약 본문이 LLM 경로에서도 살아 있다" 는 신호가 된다.
+    assert "PubMed 초록에 따르면 기침 관련 대증치료가 보고되었다 (PMID: 111)." in message
+
+    summary = response.validation["pubmedEvidenceSummary"]
+    assert summary, "요약 본문이 비어 있으면 checks[] 메시지 검증이 무의미해진다"
+    assert summary in message, "checks[] 메시지에 요약 본문이 그대로 실려야 한다"

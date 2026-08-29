@@ -7,6 +7,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.Map;
+
 /**
  * Python(FastAPI) certificate_api → Spring 응답 본문.
  *
@@ -33,4 +35,14 @@ public class CertificateAgentResponse {
     @Builder.Default
     @JsonProperty("llmStatus")
     private String llmStatus = "fallback";
+
+    /**
+     * 소견이 조회 결과로 추적되는지. llmStatus 와 다른 축이다 —
+     * llmStatus 는 "모델이 돌았나", 이건 "돈 결과에 근거가 있나"다.
+     *
+     * <p>상류가 안 주면 null 이고, 웹은 null 을 "미검증"으로 렌더한다.
+     * 여기서 기본값을 만들면 검증하지 않은 것이 검증된 것처럼 보인다.
+     */
+    @JsonProperty("verification")
+    private Map<String, Object> verification;
 }

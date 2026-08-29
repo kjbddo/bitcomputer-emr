@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMedicalSelection, type PrescriptionFeedbackItem } from "@store/medicalSelection";
 import { Badge, Button, EmptyState, Modal, Panel, Table } from "@/components/ui";
 import styles from "./Diagnosis.module.css";
@@ -17,6 +17,12 @@ import {
 } from "@/services/history";
 import { HttpError } from "@/services/http/types";
 import { llmStatusNotice } from "@/utils/llmStatus";
+import {
+  itemVerificationOutcome,
+  responseVerificationOutcome,
+  verificationNotice,
+  type Verification,
+} from "@/utils/verificationNotice";
 
 // reasoningTrace 스텝 각각의 출처. 최상위 llmStatus 배지는 작업 전체를
 // 하나로 뭉뚱그리므로, fallback 작업 안에 llm 스텝이 섞여 있거나 그 반대인
@@ -163,6 +169,25 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
   // llmStatus 를 모달 state 에만 두면 모달을 닫는 순간 모델 미사용 여부를 알
   // 방법이 사라진다 — aiRecommendations 와 생명주기를 맞춰 별도로 들고 있는다.
   const [aiLlmStatus, setAiLlmStatus] = useState<string | null | undefined>(undefined);
+  // verification 은 llmStatus 와 다른 축("출력이 조회 결과로 추적되나")이므로
+  // 별도 state 로 들고 있는다. 생명주기는 aiRecommendations/aiLlmStatus 와
+  // 정확히 같아야 한다 — 다르면 배지가 자기가 설명하는 데이터와 어긋난다.
+  // 불변식: aiVerification 은 `aiRecommendations.length > 0` 로 게이트된 패널
+  // 안에서만 읽는다. 이 불변식 때문에 리셋 지점에서 이 상태를 지우는 것은
+  // 방어적 조치일 뿐이다 — 패널을 다시 띄우는 유일한 경로(생성 성공)가 같은
+  // 블록에서 이 값을 새 결과로 덮으므로 낡은 값이 화면에 닿을 수 없다.
+  // 이 파일 밖이나 게이트 밖에서 aiVerification 을 읽기 시작하면 그 논증이
+  // 깨지고, 검증된 적 없는 추천이 검증된 것처럼 보이는 결함이 되돌아온다.
+  const [aiVerification, setAiVerification] = useState<Verification | null | undefined>(undefined);
+  // 처방 상세 선택으로 스왑된 랭크의 집합. rank 는 표의 "행 위치"고, aiVerification
+  // 은 그 위치에 원래 앉아있던 처방을 검사한 결과다. 스왑 후에도 rank 는 그대로라
+  // `prescription[${rank}]` 로 조회하면 새 처방이 옛 검사 결과를 뒤집어쓴다 —
+  // 한 번도 검사 안 된 처방이 "검증됨"으로 보이는 정확히 그 반전이다. 그래서
+  // 스왑된 rank 는 별도로 추적해 무조건 미검증으로 렌더한다. aiVerification 과
+  // 생명주기를 정확히 같이 가야 한다(새 세대가 시작되면 이 집합도 깨끗해져야
+  // 한다) — 다르면 이 브랜치가 이미 한 번 걸린 함정(Task 10 리뷰)을 새 state 로
+  // 재현하는 꼴이다.
+  const [swappedRanks, setSwappedRanks] = useState<Set<number>>(new Set());
   const [selectedRecommendationKeys, setSelectedRecommendationKeys] = useState<string[]>([]);
   const [validationModal, setValidationModal] = useState<ValidationJobResponse | null>(null);
   const [prescriptionPicker, setPrescriptionPicker] = useState<PrescriptionPickerState | null>(null);
@@ -182,6 +207,8 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
       clearPrescriptionFeedback();
       setAiRecommendations([]);
       setAiLlmStatus(undefined);
+      setAiVerification(undefined);
+      setSwappedRanks(new Set());
       setSelectedRecommendationKeys([]);
       setPrescriptionPicker(null);
       setAiSessionHistoryId(null);
@@ -193,6 +220,8 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
     clearPrescriptionFeedback();
     setAiRecommendations([]);
     setAiLlmStatus(undefined);
+    setAiVerification(undefined);
+    setSwappedRanks(new Set());
     setSelectedRecommendationKeys([]);
     setPrescriptionPicker(null);
     setAiSessionHistoryId(null);
@@ -301,6 +330,13 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
 
       setAiRecommendations(recommended);
       setAiLlmStatus(result.llmStatus);
+      // 처방 항목 배지(getVerificationOutcome)는 `prescription[N]` 타깃을 조회한다.
+      // result.verification 은 validation-agent 자기 자신의 검증이고 검사 전부
+      // target="response" 다 — 그 값을 읽으면 조회가 영원히 0건이 되어 배지가
+      // 항상 미검증으로 굳는다(최종 리뷰 C1). prescription_api 자신의 항목 단위
+      // 검증인 result.prescriptionVerification 을 읽어야 한다.
+      setAiVerification(result.prescriptionVerification);
+      setSwappedRanks(new Set());
       setSelectedRecommendationKeys(recommended.map(recommendationKey));
       setAiSessionHistoryId(historyId);
       setAiSessionHistoryDiagnoseId(null);
@@ -395,8 +431,41 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
         ? prev.map((key) => key === prescriptionPicker.key ? nextKey : key)
         : prev
     );
+    // rank 는 유지되지만 그 자리의 처방이 바뀌었다 — aiVerification 은 옛 처방을
+    // 검사한 결과이므로 더 이상 화면의 처방을 설명하지 않는다. 다른 rank 의
+    // 검증은 여전히 유효하므로 전체를 지우지 않고 이 rank 만 무효화한다.
+    setSwappedRanks((prev) => {
+      const next = new Set(prev);
+      next.add(prescriptionPicker.item.rank);
+      return next;
+    });
     setPrescriptionPicker(null);
   }, [prescriptionPicker]);
+
+  // 스왑된 rank 는 aiVerification 에 무엇이 담겨 있든 무조건 미검증으로 본다 —
+  // 그 rank 의 검사는 지금 화면의 처방이 아니라 스왑되기 전 처방을 대상으로 했다.
+  const getVerificationOutcome = useCallback(
+    (rank: number) => {
+      if (swappedRanks.has(rank)) return "skipped" as const;
+      return itemVerificationOutcome(aiVerification, `prescription[${rank}]`);
+    },
+    [aiVerification, swappedRanks]
+  );
+
+  // 응답 단위 판정(최종 리뷰 M1). schema_top3 는 target="response" 라
+  // getVerificationOutcome(`prescription[N]`) 조회에 절대 걸리지 않는다 —
+  // 항목 배지만 있으면 이 검사는 flagged 여도 처방 화면에 아무 표시가 없다.
+  //
+  // 스왑이 하나라도 있으면 미검증이다. schema_top3 는 "rank 집합이 {1,2,3}
+  // 인가" 와 "코드 중복이 없는가" 를 그때 화면에 있던 처방코드 집합에 대해
+  // 판정한 결과인데, 스왑은 그 집합을 바꾼다. 스왑으로 들어온 코드가 다른
+  // 행과 겹쳐도 옛 판정은 여전히 ok 이므로, 그대로 두면 검사된 적 없는
+  // 조합이 "응답 단위 이상 없음" 으로 보인다 — 항목 배지에서 막은 것과
+  // 정확히 같은 반전이다.
+  const responseOutcome = useMemo(() => {
+    if (swappedRanks.size > 0) return "skipped" as const;
+    return responseVerificationOutcome(aiVerification);
+  }, [aiVerification, swappedRanks]);
 
   const handleApplySelectedRecommendations = useCallback(async () => {
     if (aiRecommendations.length === 0) {
@@ -519,6 +588,15 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
             <p className={styles.modalReason}>
               {validationModal.result?.summary ?? validationModal.summary ?? "검증 결과를 확인했습니다."}
             </p>
+            {(() => {
+              const notice = verificationNotice(validationModal.result?.verification?.status);
+              return notice ? (
+                <div className={styles.modalVerification}>
+                  <span className={styles.modalVerificationLabel}>근거</span>
+                  <Badge tone={notice.tone}>{notice.label}</Badge>
+                </div>
+              ) : null;
+            })()}
             {validationReasons.length > 0 && (
               <div className={styles.modalReasons}>
                 <strong>검증 이유</strong>
@@ -666,6 +744,36 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
                   const notice = llmStatusNotice(aiLlmStatus);
                   return notice ? <Badge tone={notice.tone}>{notice.label}</Badge> : null;
                 })()}
+                {(() => {
+                  const outcomes = aiRecommendations.map((r) => getVerificationOutcome(r.rank));
+                  const flagged = outcomes.filter((o) => o === "flagged").length;
+                  const skipped = outcomes.filter((o) => o === "skipped").length;
+                  if (flagged === 0 && skipped === 0 && responseOutcome === "ok") return null;
+                  // flagged 와 skipped 를 한 숫자로 뭉치지 않는다(spec §7.3).
+                  // "근거와 어긋난다"와 "대조할 근거가 없었다"는 다른 정보다.
+                  const parts: string[] = [];
+                  if (flagged > 0) parts.push(`근거 불일치 ${flagged}건`);
+                  if (skipped > 0) parts.push(`미검증 ${skipped}건`);
+                  // 항목 단위와 응답 단위를 한 숫자로 합치지 않고 두 줄로 낸다
+                  // (최종 리뷰 M1). "3건 중 1건" 에 응답 단위 판정을 더하면
+                  // 의사가 어느 처방 행을 봐야 하는지 알 수 없어진다.
+                  const responseNotice =
+                    responseOutcome === "ok" ? null : verificationNotice(responseOutcome);
+                  return (
+                    <>
+                      {parts.length > 0 ? (
+                        <span className={styles.verificationSummary}>
+                          {`검증: ${aiRecommendations.length}건 중 ${parts.join(", ")}`}
+                        </span>
+                      ) : null}
+                      {responseNotice ? (
+                        <span className={styles.verificationSummary}>
+                          {`검증(응답 전체): ${responseNotice.label}`}
+                        </span>
+                      ) : null}
+                    </>
+                  );
+                })()}
               </span>
               <Button type="button" variant="secondary" size="sm" onClick={handleApplySelectedRecommendations}>
                 선택 처방 반영
@@ -694,6 +802,14 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
                       </td>
                       <td>
                         [{item.rank}] {item.prescription_name} ({item.prescription_code})
+                        {(() => {
+                          const outcome = getVerificationOutcome(item.rank);
+                          if (outcome === "ok") return null;
+                          const notice = verificationNotice(
+                            outcome === "flagged" ? "flagged" : "skipped"
+                          );
+                          return <Badge tone={notice!.tone}>{notice!.label}</Badge>;
+                        })()}
                       </td>
                       <td>
                         <Button type="button" variant="secondary" size="sm" onClick={() => openPrescriptionPicker(item)}>
