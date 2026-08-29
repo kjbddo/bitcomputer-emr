@@ -17,6 +17,11 @@ import {
 } from "@/services/history";
 import { HttpError } from "@/services/http/types";
 import { llmStatusNotice } from "@/utils/llmStatus";
+import {
+  itemVerificationOutcome,
+  verificationNotice,
+  type Verification,
+} from "@/utils/verificationNotice";
 
 // reasoningTrace 스텝 각각의 출처. 최상위 llmStatus 배지는 작업 전체를
 // 하나로 뭉뚱그리므로, fallback 작업 안에 llm 스텝이 섞여 있거나 그 반대인
@@ -163,6 +168,10 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
   // llmStatus 를 모달 state 에만 두면 모달을 닫는 순간 모델 미사용 여부를 알
   // 방법이 사라진다 — aiRecommendations 와 생명주기를 맞춰 별도로 들고 있는다.
   const [aiLlmStatus, setAiLlmStatus] = useState<string | null | undefined>(undefined);
+  // verification 은 llmStatus 와 다른 축("출력이 조회 결과로 추적되나")이므로
+  // 별도 state 로 들고 있는다. 생명주기는 aiRecommendations/aiLlmStatus 와
+  // 정확히 같아야 한다 — 다르면 배지가 자기가 설명하는 데이터와 어긋난다.
+  const [aiVerification, setAiVerification] = useState<Verification | null | undefined>(undefined);
   const [selectedRecommendationKeys, setSelectedRecommendationKeys] = useState<string[]>([]);
   const [validationModal, setValidationModal] = useState<ValidationJobResponse | null>(null);
   const [prescriptionPicker, setPrescriptionPicker] = useState<PrescriptionPickerState | null>(null);
@@ -182,6 +191,7 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
       clearPrescriptionFeedback();
       setAiRecommendations([]);
       setAiLlmStatus(undefined);
+      setAiVerification(undefined);
       setSelectedRecommendationKeys([]);
       setPrescriptionPicker(null);
       setAiSessionHistoryId(null);
@@ -193,6 +203,7 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
     clearPrescriptionFeedback();
     setAiRecommendations([]);
     setAiLlmStatus(undefined);
+    setAiVerification(undefined);
     setSelectedRecommendationKeys([]);
     setPrescriptionPicker(null);
     setAiSessionHistoryId(null);
@@ -301,6 +312,7 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
 
       setAiRecommendations(recommended);
       setAiLlmStatus(result.llmStatus);
+      setAiVerification(result.verification);
       setSelectedRecommendationKeys(recommended.map(recommendationKey));
       setAiSessionHistoryId(historyId);
       setAiSessionHistoryDiagnoseId(null);
@@ -666,6 +678,24 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
                   const notice = llmStatusNotice(aiLlmStatus);
                   return notice ? <Badge tone={notice.tone}>{notice.label}</Badge> : null;
                 })()}
+                {aiRecommendations.length > 0 && (() => {
+                  const outcomes = aiRecommendations.map((r) =>
+                    itemVerificationOutcome(aiVerification, `prescription[${r.rank}]`)
+                  );
+                  const flagged = outcomes.filter((o) => o === "flagged").length;
+                  const skipped = outcomes.filter((o) => o === "skipped").length;
+                  if (flagged === 0 && skipped === 0) return null;
+                  // flagged 와 skipped 를 한 숫자로 뭉치지 않는다(spec §7.3).
+                  // "근거와 어긋난다"와 "대조할 근거가 없었다"는 다른 정보다.
+                  const parts: string[] = [];
+                  if (flagged > 0) parts.push(`근거 불일치 ${flagged}건`);
+                  if (skipped > 0) parts.push(`미검증 ${skipped}건`);
+                  return (
+                    <span className={styles.verificationSummary}>
+                      {`검증: ${aiRecommendations.length}건 중 ${parts.join(", ")}`}
+                    </span>
+                  );
+                })()}
               </span>
               <Button type="button" variant="secondary" size="sm" onClick={handleApplySelectedRecommendations}>
                 선택 처방 반영
@@ -694,6 +724,17 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
                       </td>
                       <td>
                         [{item.rank}] {item.prescription_name} ({item.prescription_code})
+                        {(() => {
+                          const outcome = itemVerificationOutcome(
+                            aiVerification,
+                            `prescription[${item.rank}]`
+                          );
+                          if (outcome === "ok") return null;
+                          const notice = verificationNotice(
+                            outcome === "flagged" ? "flagged" : "skipped"
+                          );
+                          return <Badge tone={notice!.tone}>{notice!.label}</Badge>;
+                        })()}
                       </td>
                       <td>
                         <Button type="button" variant="secondary" size="sm" onClick={() => openPrescriptionPicker(item)}>

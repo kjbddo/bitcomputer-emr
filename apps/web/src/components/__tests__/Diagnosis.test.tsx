@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import Diagnosis from "../Diagnosis";
 import { llmStatusNotice } from "@/utils/llmStatus";
+import type { Verification } from "@/utils/verificationNotice";
 import { MedicalSelectionProvider } from "@store/medicalSelection";
 import {
   getValidationJob,
@@ -304,5 +305,121 @@ describe("검증 이유 목록의 스텝별 출처 표시", () => {
     expect(
       await within(dialog).findByText("처방 검증 (규칙 기반): OK - 근거 E")
     ).toBeInTheDocument();
+  });
+});
+
+// verification 은 llmStatus 와 다른 축("출력이 조회 결과로 추적되나")이다.
+// aiRecommendations 와 같은 생명주기를 가져야 하므로(모달을 닫아도 패널에
+// 남아야 한다), 실제 렌더 경로로 확인한다.
+describe("처방 표의 항목 단위 검증 표시", () => {
+  const clinicVisit = { patientId: 1, deptId: 1 };
+
+  function renderDiagnosis() {
+    return render(
+      <MedicalSelectionProvider>
+        <Diagnosis clinicVisit={clinicVisit} ensureHistory={async () => 10} employeeId={1} />
+      </MedicalSelectionProvider>
+    );
+  }
+
+  function mockJobWithVerification(jobId: string, verification: Verification | undefined) {
+    mockedRecommend.mockResolvedValue({ jobId, historyId: 10, status: "RUNNING" });
+    mockedGetJob.mockResolvedValue({
+      jobId,
+      historyId: 10,
+      status: "DONE",
+      result: {
+        overallStatus: "PASS",
+        summary: "이상 없음",
+        llmStatus: "real",
+        verification,
+        recommendedPrescriptions: [
+          {
+            id: 1,
+            rank: 1,
+            prescription_code: "C1",
+            prescription_name: "약1",
+            reason: "",
+            confidence_score: 0.9,
+            dose: 1,
+            time: 1,
+            days: 1,
+          },
+        ],
+      },
+    } as unknown as ValidationJobResponse);
+  }
+
+  it("근거 불일치인 처방 행에 표시가 붙는다", async () => {
+    mockJobWithVerification("job-v-1", {
+      status: "flagged",
+      checks: [
+        { id: "code_in_candidates", target: "prescription[1]", outcome: "flagged", evidence: "" },
+      ],
+    });
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    expect(await screen.findByText("근거 불일치")).toBeInTheDocument();
+  });
+
+  it("verification 이 없으면 미검증으로 표시한다", async () => {
+    mockJobWithVerification("job-v-2", undefined);
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    expect(await screen.findByText("미검증")).toBeInTheDocument();
+  });
+
+  it("모달을 닫아도 패널의 검증 표시가 남는다", async () => {
+    mockJobWithVerification("job-v-3", {
+      status: "flagged",
+      checks: [
+        { id: "code_in_candidates", target: "prescription[1]", outcome: "flagged", evidence: "" },
+      ],
+    });
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+    await screen.findByRole("dialog");
+    fireEvent.click(screen.getByRole("button", { name: "확인" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByText("근거 불일치")).toBeInTheDocument();
+  });
+
+  it("요약이 근거 불일치와 미검증을 따로 센다", async () => {
+    mockedRecommend.mockResolvedValue({ jobId: "job-v-5", historyId: 10, status: "RUNNING" });
+    mockedGetJob.mockResolvedValue({
+      jobId: "job-v-5",
+      historyId: 10,
+      status: "DONE",
+      result: {
+        overallStatus: "PASS",
+        summary: "이상 없음",
+        llmStatus: "real",
+        verification: {
+          status: "flagged",
+          checks: [
+            { id: "code_in_candidates", target: "prescription[1]", outcome: "flagged", evidence: "" },
+            { id: "code_in_candidates", target: "prescription[2]", outcome: "skipped", evidence: "" },
+            { id: "code_in_candidates", target: "prescription[3]", outcome: "ok", evidence: "" },
+          ],
+        },
+        recommendedPrescriptions: [
+          { id: 1, rank: 1, prescription_code: "C1", prescription_name: "약1", reason: "", confidence_score: 0.9, dose: 1, time: 1, days: 1 },
+          { id: 2, rank: 2, prescription_code: "C2", prescription_name: "약2", reason: "", confidence_score: 0.9, dose: 1, time: 1, days: 1 },
+          { id: 3, rank: 3, prescription_code: "C3", prescription_name: "약3", reason: "", confidence_score: 0.9, dose: 1, time: 1, days: 1 },
+        ],
+      },
+    } as unknown as ValidationJobResponse);
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    expect(await screen.findByText(/근거 불일치 1건/)).toBeInTheDocument();
+    expect(screen.getByText(/미검증 1건/)).toBeInTheDocument();
   });
 });

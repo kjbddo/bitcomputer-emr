@@ -1,6 +1,7 @@
 import { get, post, put } from "./http/client";
 import type { PaginatedResponse } from "@/types/api";
 import type { HistoryEntry } from "@/types/history";
+import type { Verification } from "@/utils/verificationNotice";
 
 export interface HistoryPayload {
   employeeId: number;
@@ -107,6 +108,7 @@ export interface ValidationJobResponse {
     suspectedIssues?: Array<Record<string, unknown>>;
     reasoningTrace?: Array<Record<string, unknown>>;
     validation?: Record<string, unknown>;
+    verification?: Verification | null;
     [key: string]: unknown;
   } | null;
   lastError?: string | null;
