@@ -281,7 +281,7 @@ def _certificate_premise(req: Any) -> str:
     return ", ".join(parts)
 
 
-def _call_certificate_nli(premise: str, hypothesis: str) -> str:
+def _call_certificate_nli(premise: str, hypothesis: str, timeout: float) -> str:
     """NLI 2차 호출. `_invoke_gateway_text` 와 의도적으로 분리한 별도 함수다.
 
     - 헤더가 다르다: X-LLM-Caller: certificate-api-nli. 계측이 본 기능 호출
@@ -297,6 +297,11 @@ def _call_certificate_nli(premise: str, hypothesis: str) -> str:
       끊으면 GC-4 를 어긴다. 그래서 여기서는 예외를 그대로 전파시키고,
       그걸 skipped 로 접수하는 책임은 verify_certificate_nli 의 try/except
       쪽에 맡긴다(GC-1: I/O 는 주입, 판정 로직은 순수 함수).
+    - `timeout` 을 인자로 받는다 — 모듈 상수 NLI_TIMEOUT_SECONDS 를 여기서
+      직접 읽지 않는다. 예산은 문장별이 아니라 요청 전체에 대한 것이라,
+      `verify_certificate_nli` 가 매 문장 호출 전에 "남은" 시간으로 잘라
+      넘긴다(CRITICAL 후속 리뷰). 이 함수가 상수를 다시 읽으면 그 절삭이
+      여기서 무시되고 매 호출이 다시 전체 예산을 받는 것과 같아진다.
     """
     base_url = os.environ.get("LLM_GATEWAY_BASE_URL")
     if not base_url:
@@ -308,7 +313,7 @@ def _call_certificate_nli(premise: str, hypothesis: str) -> str:
             {"role": "user", "content": f"전제: {premise}\n가설: {hypothesis}"},
         ],
     }
-    with httpx.Client(timeout=NLI_TIMEOUT_SECONDS) as client:
+    with httpx.Client(timeout=timeout) as client:
         response = client.post(
             f"{base_url.rstrip('/')}/chat/completions",
             headers={"X-LLM-Caller": "certificate-api-nli"},

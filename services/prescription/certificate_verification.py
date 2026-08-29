@@ -103,9 +103,19 @@ def verify_certificate_nli(
     설계됐다 — 문장 수만큼 호출이 늘면 136.5 + 30×N 이 되어 사다리가
     뒤집힌다. 그래서 루프 시작 시점에 마감(deadline)을 한 번만 계산하고,
     이미 마감을 넘긴 뒤의 문장은 call_llm 을 아예 부르지 않고 skipped 로
-    떨어뜨려 총 지연을 한 예산 안으로 묶는다. `clock` 은 `call_llm` 과 같은
-    이유로 주입한다(GC-1) — 실시간이 흐르길 기다리지 않고도 이 판정 로직을
-    테스트하기 위해서다.
+    떨어뜨린다.
+
+    마감 검사만으로는 부족하다 — 검사는 호출 "전"에만 있고, 이미 시작된
+    호출은 끊지 못한다. 문장 1이 자기 몫(예: 30s)을 거의 다 태우고 나서
+    (t=29) 마감 검사를 통과하면, 문장 2가 다시 새로 30초를 받아 총합이
+    59s 로 예산을 넘는다(후속 CRITICAL 리뷰). 그래서 `call_llm` 은
+    이제 문장마다 "얼마나 써도 되는지"를 세 번째 인자로 받는다:
+    `call_llm(premise, sentence, timeout)`. 매 호출 전에
+    `remaining = deadline - clock()` 을 계산하고, `min(budget_seconds,
+    remaining)` 을 그 호출의 timeout 으로 넘겨 어떤 단일 호출도 남은
+    예산보다 오래 살 수 없게 한다 — 소진된 뒤에 다시 신선한 전체 예산을
+    받는 일이 없다. `clock` 은 `call_llm` 과 같은 이유로 주입한다(GC-1) —
+    실시간이 흐르길 기다리지 않고도 이 판정 로직을 테스트하기 위해서다.
     """
     if not premise.strip():
         return []
@@ -115,13 +125,15 @@ def verify_certificate_nli(
     deadline = clock() + budget_seconds
     for index, sentence in enumerate(sentences):
         target = f"sentence[{index}]"
-        if clock() >= deadline:
+        remaining = deadline - clock()
+        if remaining <= 0:
             checks.append(CheckResult(
                 id="nli_entailment", target=target, outcome="skipped",
                 evidence="NLI 예산 소진으로 미검증(예산은 문장별이 아니라 요청 전체)"))
             continue
+        per_call_timeout = min(budget_seconds, remaining)
         try:
-            verdict = str(call_llm(premise, sentence)).strip().upper()
+            verdict = str(call_llm(premise, sentence, per_call_timeout)).strip().upper()
         except Exception as exc:  # noqa: BLE001
             checks.append(CheckResult(
                 id="nli_entailment", target=target, outcome="skipped",

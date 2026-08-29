@@ -24,7 +24,7 @@ from verification_contract import STRUCTURAL_CHECK_IDS
 
 
 def test_entailed_sentences_pass():
-    def fake_llm(premise, hypothesis):
+    def fake_llm(premise, hypothesis, timeout):
         return "ENTAILMENT"
 
     checks = verify_certificate_nli(
@@ -35,7 +35,7 @@ def test_entailed_sentences_pass():
 
 
 def test_contradiction_is_flagged():
-    def fake_llm(premise, hypothesis):
+    def fake_llm(premise, hypothesis, timeout):
         return "CONTRADICTION"
 
     checks = verify_certificate_nli(
@@ -48,7 +48,7 @@ def test_contradiction_is_flagged():
 # GC-2 의 NLI 판. 2차 호출이 실패하면 통과가 아니라 미확인이다.
 # 검증기가 자기 실패를 통과로 바꾸면 검증층이 있는 이유가 사라진다.
 def test_llm_failure_is_skipped_not_ok():
-    def boom(premise, hypothesis):
+    def boom(premise, hypothesis, timeout):
         raise TimeoutError("30초 초과")
 
     checks = verify_certificate_nli(
@@ -60,7 +60,7 @@ def test_llm_failure_is_skipped_not_ok():
 
 
 def test_unknown_verdict_is_skipped():
-    def weird(premise, hypothesis):
+    def weird(premise, hypothesis, timeout):
         return "아무말"
 
     checks = verify_certificate_nli(
@@ -70,7 +70,7 @@ def test_unknown_verdict_is_skipped():
 
 
 def test_empty_premise_returns_no_checks():
-    checks = verify_certificate_nli(premise="", text="문장.", call_llm=lambda p, h: "ENTAILMENT")
+    checks = verify_certificate_nli(premise="", text="문장.", call_llm=lambda p, h, timeout: "ENTAILMENT")
     assert checks == []
 
 
@@ -87,7 +87,7 @@ def test_total_nli_latency_is_bounded_by_one_budget_not_per_sentence():
     def fake_clock():
         return clock_state["now"]
 
-    def fake_llm(premise, hypothesis):
+    def fake_llm(premise, hypothesis, timeout):
         calls.append(hypothesis)
         clock_state["now"] += 30.0  # 게이트웨이가 자기 타임아웃까지 다 태움
         return "ENTAILMENT"
@@ -108,12 +108,59 @@ def test_total_nli_latency_is_bounded_by_one_budget_not_per_sentence():
         assert "예산" in skipped_check.evidence
 
 
+# CRITICAL 리뷰 후속: 마감 검사는 호출 "전"에만 있고, 이미 시작된 호출은
+# 끊지 못한다. 그래서 최악은 예산 하나가 아니라 거의 둘이다 — 문장 1이
+# 자기 몫(30s)을 거의 다 태우고 나서(t=29) 마감 검사를 통과하면, 문장
+# 2가 다시 새로 30초를 받아 총합이 59s 로 예산을 넘는다. 이 테스트는
+# call_llm 이 실제로 받는 timeout 값을 기록해, 매 호출이 "남은" 예산으로
+# 잘리는지 — 소진된 뒤에 새 30초를 다시 받지 않는지 — 확인한다.
+def test_call_llm_receives_truncated_timeout_when_budget_partially_consumed():
+    granted_timeouts = []
+    clock_state = {"now": 0.0}
+
+    def fake_clock():
+        return clock_state["now"]
+
+    # 첫 호출은 자기가 받은 예산(30s) 중 20s 만 쓰고 돌아온다(남은 예산 10s).
+    # 둘째 호출은 자기가 받은 예산을 전부 쓴다.
+    call_durations = iter([20.0, 10.0])
+
+    def fake_llm(premise, hypothesis, timeout):
+        granted_timeouts.append(timeout)
+        clock_state["now"] += next(call_durations)
+        return "ENTAILMENT"
+
+    text = "첫째 문장. 둘째 문장. 셋째 문장."
+    checks = verify_certificate_nli(
+        premise="p", text=text, call_llm=fake_llm,
+        budget_seconds=30.0, clock=fake_clock)
+
+    assert len(checks) == 3
+    # 첫 호출은 남은 예산 전체(30s)를 받는다. 둘째 호출은 새 30초가 아니라
+    # 그 시점에 실제로 남은 10초로 잘려서 전달돼야 한다 — min(per_call,
+    # remaining) 대신 per_call_timeout 을 그대로 넘기면 이 assert 가
+    # [30.0, 30.0] 으로 실패한다.
+    assert granted_timeouts == [30.0, 10.0]
+    # 둘째 호출이 남은 10초를 전부 써서 예산이 소진되므로, 셋째 문장은
+    # call_llm 자체가 호출되지 않고 skipped 로 떨어진다.
+    assert [c.outcome for c in checks] == ["ok", "ok", "skipped"]
+    assert "예산" in checks[2].evidence
+    # 둘째 호출은 새 30초(budget_seconds) 가 아니라 그 시점에 실제로
+    # 남은 몫만 받는다 — 소진되지 않았다고 매번 신선한 전체 예산을
+    # 재지급하지 않는다.
+    assert granted_timeouts[1] < 30.0
+    # 실제로 소요된 총 시간(각 호출이 받은 timeout 을 다 쓴 경우를 포함해)이
+    # 예산을 넘지 않는다는 일반 성질 — 마감이 호출마다 남은 몫으로 계속
+    # 줄어들기 때문에 성립한다.
+    assert clock_state["now"] <= 30.0
+
+
 def test_nli_budget_defaults_when_not_passed():
     """budget_seconds/clock 을 넘기지 않아도 함수가 호출 가능해야 한다 —
     certificate_api.py 가 아닌 다른 호출자, 혹은 예전 시그니처로 호출하는
     테스트 코드가 깨지지 않아야 한다."""
     checks = verify_certificate_nli(
-        premise="p", text="문장.", call_llm=lambda p, h: "ENTAILMENT")
+        premise="p", text="문장.", call_llm=lambda p, h, timeout: "ENTAILMENT")
     assert [c.outcome for c in checks] == ["ok"]
 
 
@@ -121,7 +168,7 @@ def test_nli_budget_defaults_when_not_passed():
 # `_VERDICT_BAD` 에서 "NEUTRAL" 을 빼도(else 분기로 떨어져 skipped 가
 # 돼도) 스위트가 전부 초록이었다.
 def test_neutral_verdict_is_flagged():
-    def fake_llm(premise, hypothesis):
+    def fake_llm(premise, hypothesis, timeout):
         return "NEUTRAL"
 
     checks = verify_certificate_nli(
@@ -137,7 +184,7 @@ def test_neutral_verdict_is_flagged():
 def test_newline_separated_sentences_without_terminal_punctuation_still_split():
     calls = []
 
-    def fake_llm(premise, hypothesis):
+    def fake_llm(premise, hypothesis, timeout):
         calls.append(hypothesis)
         return "ENTAILMENT"
 
@@ -154,7 +201,7 @@ def test_newline_separated_sentences_without_terminal_punctuation_still_split():
 def test_decimal_point_in_dosage_is_not_a_sentence_boundary():
     calls = []
 
-    def fake_llm(premise, hypothesis):
+    def fake_llm(premise, hypothesis, timeout):
         calls.append(hypothesis)
         return "ENTAILMENT"
 
@@ -180,7 +227,7 @@ def test_nli_entailment_is_a_grounding_check_not_structural():
 def test_multiple_sentences_each_get_their_own_check():
     calls = []
 
-    def fake_llm(premise, hypothesis):
+    def fake_llm(premise, hypothesis, timeout):
         calls.append(hypothesis)
         return "ENTAILMENT" if "비인두염" in hypothesis else "CONTRADICTION"
 
@@ -299,17 +346,21 @@ def test_nli_wire_contract_header_is_certificate_api_nli_and_single_attempt(monk
     _install_transport(monkeypatch, handler)
     monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://llm-gateway:8003/v1")
 
-    verdict = ca._call_certificate_nli("premise", "hypothesis")
+    verdict = ca._call_certificate_nli("premise", "hypothesis", 30.0)
 
     assert verdict.strip() == "ENTAILMENT"
     assert captured["headers"].get("x-llm-caller") == "certificate-api-nli"
     assert captured["calls"] == 1
 
 
-def test_nli_call_uses_nli_timeout_seconds_not_gateway_timeout(monkeypatch):
+def test_nli_call_uses_its_timeout_argument_not_the_gateway_timeout(monkeypatch):
     """게이트웨이 총예산(136.5s)에 NLI 예산이 더해지면 호출자 타임아웃(180s)을
-    넘는다(spec §8.4) — 그래서 NLI 호출은 LLM_GATEWAY_TIMEOUT_SECONDS 가
-    아니라 별도의 NLI_TIMEOUT_SECONDS 를 써야 한다."""
+    넘는다(spec §8.4) — 그래서 NLI 호출은 LLM_GATEWAY_TIMEOUT_SECONDS 를 쓰면
+    안 된다. 후속 CRITICAL 리뷰 이후로는 NLI_TIMEOUT_SECONDS 모듈 상수도 여기서
+    직접 읽지 않는다 — `_call_certificate_nli` 는 이제 `timeout` 인자로 받은
+    값을 그대로 httpx 타임아웃으로 쓴다. 그 값은 verify_certificate_nli 가
+    "남은" 예산으로 잘라서 넘기므로(문장마다 다를 수 있다), 함수 자신이
+    NLI_TIMEOUT_SECONDS 를 다시 읽으면 그 절삭이 여기서 무시된다."""
     import certificate_api as ca
 
     captured_kwargs: dict = {}
@@ -325,9 +376,12 @@ def test_nli_call_uses_nli_timeout_seconds_not_gateway_timeout(monkeypatch):
     monkeypatch.setattr(httpx, "Client", _factory)
     monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://llm-gateway:8003/v1")
     monkeypatch.setenv("LLM_GATEWAY_TIMEOUT_SECONDS", "180")
-    monkeypatch.setattr(ca, "NLI_TIMEOUT_SECONDS", 7.0)
+    # NLI_TIMEOUT_SECONDS 를 일부러 다른 값(20.0)으로 둬서, 함수가 그 상수를
+    # 몰래 다시 읽는 게 아니라 실제로 넘겨받은 timeout 인자(7.0)를 쓰는지
+    # 구분해 확인한다.
+    monkeypatch.setattr(ca, "NLI_TIMEOUT_SECONDS", 20.0)
 
-    ca._call_certificate_nli("premise", "hypothesis")
+    ca._call_certificate_nli("premise", "hypothesis", 7.0)
 
     assert captured_kwargs.get("timeout") == 7.0
 
@@ -345,7 +399,7 @@ def test_nli_call_failure_is_not_swallowed_by_the_caller(monkeypatch):
     monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://llm-gateway:8003/v1")
 
     with pytest.raises(httpx.ConnectTimeout):
-        ca._call_certificate_nli("premise", "hypothesis")
+        ca._call_certificate_nli("premise", "hypothesis", 30.0)
 
 
 def test_nli_disabled_by_default_appends_no_nli_checks(monkeypatch):
@@ -354,7 +408,7 @@ def test_nli_disabled_by_default_appends_no_nli_checks(monkeypatch):
     monkeypatch.setattr(ca, "NLI_ENABLED", False)
     called = {"n": 0}
 
-    def fake_llm(premise, hypothesis):
+    def fake_llm(premise, hypothesis, timeout):
         called["n"] += 1
         return "ENTAILMENT"
 
@@ -376,7 +430,7 @@ def test_nli_enabled_outcome_comes_from_call_llm_not_from_the_flag(monkeypatch):
     import certificate_api as ca
 
     monkeypatch.setattr(ca, "NLI_ENABLED", True)
-    monkeypatch.setattr(ca, "_call_certificate_nli", lambda premise, hypothesis: "CONTRADICTION")
+    monkeypatch.setattr(ca, "_call_certificate_nli", lambda premise, hypothesis, timeout: "CONTRADICTION")
 
     result = ca._safe_verify_certificate(_request(), "환자는 골절 상태입니다.")
 
@@ -416,7 +470,7 @@ def test_nli_enabled_llm_failure_still_skipped_through_safe_verify(monkeypatch):
 
     monkeypatch.setattr(ca, "NLI_ENABLED", True)
 
-    def boom(premise, hypothesis):
+    def boom(premise, hypothesis, timeout):
         raise TimeoutError("30초 초과")
 
     monkeypatch.setattr(ca, "_call_certificate_nli", boom)
