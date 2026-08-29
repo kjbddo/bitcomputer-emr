@@ -94,6 +94,117 @@ def test_trace_only_never_passes():
 
     assert _outcomes(result, "trace_step_has_observation") == ["ok"]
     assert result.status == "skipped"
+    # status 가 skipped 인 케이스인데 skippedReason 이 비어 있으면 화면에는
+    # "미확인"만 뜨고 이유가 안 나온다. 리뷰 Important 3.
+    assert result.skippedReason == "도구 관측값이 없어 대조를 수행하지 못했습니다."
+
+
+# --- 리뷰 Important 1 & 2: PMID 정규식이 두 방향으로 틀렸던 문제 ---
+
+# 오탐: PMID 마커 없는 7~8자리 숫자(용량, 날짜)를 인용으로 잘못 뽑던 문제.
+def test_dosage_number_without_marker_is_not_cited():
+    response = {"pubmedEvidenceSummary": "용량 1234567 mg 투여", "checks": [],
+                "candidatePrescriptions": [], "reasoningTrace": []}
+    result = verify_validation(
+        pubmed_articles=ARTICLES, finder_candidates=[], response_dict=response)
+
+    assert _outcomes(result, "cited_pmid_in_evidence") == ["skipped"]
+
+
+def test_date_number_without_marker_is_not_cited():
+    response = {"pubmedEvidenceSummary": "방문일 20260829", "checks": [],
+                "candidatePrescriptions": [], "reasoningTrace": []}
+    result = verify_validation(
+        pubmed_articles=ARTICLES, finder_candidates=[], response_dict=response)
+
+    assert _outcomes(result, "cited_pmid_in_evidence") == ["skipped"]
+
+
+# 누락: 공백 없이 조사가 붙으면(`11111111을`) \b 가 숫자-한글 경계에서
+# 작동하지 않아 정상 인용도, 위조 인용도 똑같이 "skipped"로 숨어버리던 문제.
+def test_pmid_with_attached_particle_is_extracted():
+    response = {"pubmedEvidenceSummary": "PMID 11111111을 보면 됨", "checks": [],
+                "candidatePrescriptions": [], "reasoningTrace": []}
+    result = verify_validation(
+        pubmed_articles=ARTICLES, finder_candidates=[], response_dict=response)
+
+    assert _outcomes(result, "cited_pmid_in_evidence") == ["ok"]
+
+
+def test_invented_pmid_with_attached_particle_is_flagged():
+    response = {"pubmedEvidenceSummary": "PMID 99999999에 따르면 됨", "checks": [],
+                "candidatePrescriptions": [], "reasoningTrace": []}
+    result = verify_validation(
+        pubmed_articles=ARTICLES, finder_candidates=[], response_dict=response)
+
+    assert result.status == "flagged"
+    assert "flagged" in _outcomes(result, "cited_pmid_in_evidence")
+
+
+# Important 5: 자릿수 경계(7~8)를 고정한다. 범위를 넓히는 뮤테이션이 있으면
+# 이 두 테스트가 빨개져야 한다.
+def test_pmid_pattern_rejects_six_digit_number():
+    response = {"pubmedEvidenceSummary": "PMID 123456 참고", "checks": [],
+                "candidatePrescriptions": [], "reasoningTrace": []}
+    result = verify_validation(
+        pubmed_articles=ARTICLES, finder_candidates=[], response_dict=response)
+
+    assert _outcomes(result, "cited_pmid_in_evidence") == ["skipped"]
+
+
+def test_pmid_pattern_rejects_nine_digit_number():
+    response = {"pubmedEvidenceSummary": "PMID 123456789 참고", "checks": [],
+                "candidatePrescriptions": [], "reasoningTrace": []}
+    result = verify_validation(
+        pubmed_articles=ARTICLES, finder_candidates=[], response_dict=response)
+
+    assert _outcomes(result, "cited_pmid_in_evidence") == ["skipped"]
+
+
+# --- 리뷰 Important 4: _code 의 처방코드 fallback 이 테스트되지 않던 문제 ---
+def test_candidate_code_matches_via_hangul_key_fallback():
+    response = {"pubmedEvidenceSummary": "", "checks": [],
+                "candidatePrescriptions": [{"처방코드": "A01"}],
+                "reasoningTrace": []}
+    result = verify_validation(
+        pubmed_articles=[], finder_candidates=[{"처방코드": "A01"}],
+        response_dict=response)
+
+    assert _outcomes(result, "candidates_from_finder") == ["ok"]
+
+
+# --- 리뷰 MINOR: dict 가 아닌 후보 행을 "정상"으로 흘려보내던 문제 ---
+def test_malformed_candidate_row_is_flagged():
+    response = {"pubmedEvidenceSummary": "", "checks": [],
+                "candidatePrescriptions": ["not-a-dict"],
+                "reasoningTrace": []}
+    result = verify_validation(
+        pubmed_articles=[], finder_candidates=[{"prescription_code": "A01"}],
+        response_dict=response)
+
+    assert "flagged" in _outcomes(result, "candidates_from_finder")
+
+
+# --- 리뷰 MINOR: discard("") 가 "죽은 코드"가 아님을 고정하는 회귀 테스트 ---
+def test_finder_candidates_without_code_field_is_skipped_not_flagged():
+    response = {"pubmedEvidenceSummary": "", "checks": [],
+                "candidatePrescriptions": [{"prescription_code": "A01"}],
+                "reasoningTrace": []}
+    result = verify_validation(
+        pubmed_articles=[], finder_candidates=[{"foo": "bar"}],
+        response_dict=response)
+
+    assert _outcomes(result, "candidates_from_finder") == ["skipped"]
+
+
+def test_pubmed_articles_without_pmid_field_is_skipped_not_flagged():
+    response = {"pubmedEvidenceSummary": "PMID 11111111 에 따르면", "checks": [],
+                "candidatePrescriptions": [], "reasoningTrace": []}
+    result = verify_validation(
+        pubmed_articles=[{"title": "no pmid field"}], finder_candidates=[],
+        response_dict=response)
+
+    assert _outcomes(result, "cited_pmid_in_evidence") == ["skipped"]
 
 
 def test_does_not_mutate_response():

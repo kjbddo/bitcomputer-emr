@@ -1,6 +1,15 @@
 """검증 에이전트 출력을 도구 관측값과 대조한다.
 
 순수 함수만 둔다(GC-1). 출력을 변형하지 않는다(GC-3).
+
+`cited_pmid_in_evidence` 는 `PMID` 마커로 도입된 인용만 본다(대소문자
+무관, 콜론·공백은 있어도 없어도 됨). 마커 없는 7~8자리 숫자(용량, 날짜 등)는
+이 검사의 범위 밖이며 인용으로 보지 않는다 — 놓쳤다는 뜻이지 검증했다는
+뜻이 아니다. certificate_verification.py 의 BRACKETED_ICD10_PATTERN 과
+같은 이유로, 마커 뒤 숫자 경계는 `\\b` 가 아니라 ASCII 전용
+lookahead/lookbehind 로 둔다: 파이썬 `re` 는 한글 음절도 `\\w` 로 취급해
+`\\b` 가 숫자-한글 조사 경계에서 전혀 작동하지 않는다.
+
 spec: Docs/superpowers/specs/2026-08-29-runtime-verification-design.md §6.3
 """
 from __future__ import annotations
@@ -10,10 +19,31 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from app.verification_contract import CheckResult, VerificationResult, aggregate_status
 
-PMID_PATTERN = re.compile(r"\b\d{7,8}\b")
+# PMID 마커로 도입된 인용만 대조한다(대소문자 무관, 마커와 숫자 사이 콜론·
+# 공백은 있어도 없어도 됨). 마커 없는 7~8자리 숫자는 이 검사의 범위 밖이다 —
+# 용량이나 날짜도 우연히 그 자릿수가 될 수 있고, 그런 숫자를 인용으로 잡으면
+# 아무것도 인용하지 않은 응답에 할루시네이션 경보를 울리게 된다.
+#
+# 경계는 `\b` 대신 ASCII 전용 lookahead/lookbehind 로 둔다. 파이썬 `re` 는
+# 한글 음절도 `\w` 로 취급해 `\b` 가 숫자-한글 조사 경계에서 전혀 작동하지
+# 않는다(certificate_verification.py 의 BRACKETED_ICD10_PATTERN 문서와 같은
+# 근거). 그 결과 `\b\d{7,8}\b` 는 두 방향으로 다 틀렸다: 공백 없이 조사가
+# 붙은 정상 인용(`PMID 11111111을`)을 놓치고, 같은 자리에 붙은 위조 인용도
+# 똑같이 놓친다 — 이 검사가 막으려던 바로 그 실패를 피해간다.
+#
+# 자릿수 범위(7~8)는 고정값이다. 넓히면 용량·날짜 같은 무관한 숫자를 다시
+# 주워 담고, 좁히면 실제 PMID 형식을 놓친다 — 회귀 테스트로 양쪽 다 고정한다.
+PMID_PATTERN = re.compile(
+    r"(?i)(?<![0-9A-Za-z])PMID\s*:?\s*(\d{7,8})(?![0-9A-Za-z])"
+)
 
 
 def _code(row: Any) -> str:
+    """행에서 처방 코드를 뽑는다. `prescription_code` 를 우선하고 없으면
+    `처방코드` 로 fallback 한다 — 두 키 형태가 이 코드베이스에 실제로
+    혼재한다(finder 관측값과 응답 후보가 서로 다른 키를 쓸 수 있음).
+    dict 가 아닌 행은 코드를 뽑을 수 없어 "" 를 반환한다; 호출부는 그
+    "코드 없음"을 "정상"과 구분해서 다룬다(malformed 행 참고)."""
     if not isinstance(row, dict):
         return ""
     value = row.get("prescription_code")
@@ -33,6 +63,12 @@ def verify_validation(
 
     # --- cited_pmid_in_evidence ---
     known_pmids = {str(a.get("pmid", "")).strip() for a in pubmed_articles}
+    # ""를 버린다. pmid 필드가 없는(또는 빈) article 이 섞여 있으면 버리지
+    # 않은 known_pmids 가 {""} 처럼 비어 있지 않은 집합이 돼 아래
+    # `not known_pmids` 가드를 건너뛴다 — 그러면 실제로는 대조할 PMID가
+    # 하나도 없는데도 "조회 결과 있음" 취급돼, 응답이 인용한 진짜 PMID가
+    # 전부 "조회 결과 밖"으로 flag 된다(있어야 할 skipped 대신 오탐성
+    # flagged). 죽은 코드가 아니라 이 가드의 전제조건이다.
     known_pmids.discard("")
     cited_text = " ".join([
         str(response_dict.get("pubmedEvidenceSummary") or ""),
@@ -47,7 +83,8 @@ def verify_validation(
     elif not cited:
         checks.append(CheckResult(
             id="cited_pmid_in_evidence", target="response", outcome="skipped",
-            evidence="응답에 PMID 인용이 없음"))
+            evidence="응답에 PMID 마커로 표시된 인용이 없음"
+                      "(마커 없는 숫자는 이 검사의 범위 밖)"))
     else:
         unknown = sorted(cited - known_pmids)
         checks.append(CheckResult(
@@ -58,6 +95,12 @@ def verify_validation(
 
     # --- candidates_from_finder ---
     known_codes = {_code(r) for r in finder_candidates}
+    # ""를 버린다. 코드 필드가 없는(또는 빈) finder 후보가 섞여 있으면 버리지
+    # 않은 known_codes 가 {""} 처럼 비어 있지 않은 집합이 돼 아래
+    # `not known_codes` 가드를 건너뛴다 — 그러면 대조할 코드가 실제로는
+    # 하나도 없는데 "관측값 있음" 취급돼, 정상 후보가 전부 "finder 밖"으로
+    # flag 된다(있어야 할 skipped 대신 오탐성 flagged). 죽은 코드가 아니라
+    # 이 가드의 전제조건이다.
     known_codes.discard("")
     returned = response_dict.get("candidatePrescriptions") or []
 
@@ -70,12 +113,26 @@ def verify_validation(
             id="candidates_from_finder", target="response", outcome="skipped",
             evidence="finder 관측값이 없어 대조할 수 없음"))
     else:
-        outside = sorted({_code(r) for r in returned} - known_codes - {""})
-        checks.append(CheckResult(
-            id="candidates_from_finder", target="response",
-            outcome="flagged" if outside else "ok",
-            evidence=(f"finder 관측값 밖의 코드: {outside}" if outside
-                      else f"후보 {len(returned)}건이 모두 finder 관측값에서 옴")))
+        # dict 가 아닌 행은 _code 가 "" 를 반환하고, 그대로 두면 `- {""}` 로
+        # outside 계산에서 조용히 빠져 "정상"(ok) 취급된다. 형식이 깨진
+        # 행은 대조하지 못했다는 뜻이지 검증됐다는 뜻이 아니다(GC-2) —
+        # 그래서 malformed 행은 outside 와 별개로 flag 사유에 넣는다.
+        malformed = [i for i, r in enumerate(returned) if not isinstance(r, dict)]
+        outside = sorted({_code(r) for r in returned if isinstance(r, dict)}
+                          - known_codes - {""})
+        if malformed or outside:
+            reasons = []
+            if outside:
+                reasons.append(f"finder 관측값 밖의 코드: {outside}")
+            if malformed:
+                reasons.append(f"형식이 잘못된 후보 인덱스: {malformed}")
+            checks.append(CheckResult(
+                id="candidates_from_finder", target="response", outcome="flagged",
+                evidence="; ".join(reasons)))
+        else:
+            checks.append(CheckResult(
+                id="candidates_from_finder", target="response", outcome="ok",
+                evidence=f"후보 {len(returned)}건이 모두 finder 관측값에서 옴"))
 
     # --- trace_step_has_observation ---
     # 구조 검사다(STRUCTURAL_CHECK_IDS). 조회 데이터와 대조하지 않으므로
@@ -94,8 +151,12 @@ def verify_validation(
             evidence=(f"관측값이 없는 스텝 인덱스: {missing}" if missing
                       else f"{len(trace)}개 스텝이 모두 관측값을 가짐")))
 
-    if all(c.outcome == "skipped" for c in checks):
+    # aggregate 는 all(skipped) 보다 넓다 — 구조 검사(trace_step_has_observation)
+    # 만 ok 이고 나머지가 skipped 여도 전체는 "skipped" 다(§5.1). all(...) 로
+    # 판정하면 그 경우 skipped_reason 이 None 인 채로 status 만 "skipped" 가
+    # 나가, 화면에는 "미확인"만 뜨고 이유가 안 붙는다.
+    status = aggregate_status(checks)
+    if status == "skipped":
         skipped_reason = "도구 관측값이 없어 대조를 수행하지 못했습니다."
 
-    return VerificationResult(
-        status=aggregate_status(checks), checks=checks, skippedReason=skipped_reason)
+    return VerificationResult(status=status, checks=checks, skippedReason=skipped_reason)
