@@ -33,7 +33,7 @@ describe("itemVerificationOutcome", () => {
     status: "flagged",
     checks: [
       { id: "code_in_candidates", target: "prescription[1]", outcome: "ok", evidence: "" },
-      { id: "dosage_verbatim", target: "prescription[2]", outcome: "flagged", evidence: "" },
+      { id: "name_matches_code", target: "prescription[2]", outcome: "flagged", evidence: "" },
       { id: "code_in_candidates", target: "prescription[3]", outcome: "skipped", evidence: "" },
     ],
   };
@@ -56,5 +56,18 @@ describe("itemVerificationOutcome", () => {
 
   it("verification 자체가 없으면 skipped", () => {
     expect(itemVerificationOutcome(undefined, "prescription[1]")).toBe("skipped");
+  });
+
+  // M2 — fail-closed 는 verificationNotice.ts:43 에서 이미 맞게 동작하지만
+  // 계약 밖 outcome 값(대소문자 오탈자 등)에 대한 고정 테스트가 없었다.
+  // "ok"/"flagged" 정확 일치가 아니면 통과로 새지 않아야 한다(GC-3).
+  it("계약 밖 outcome 값(대소문자 오탈자)이 섞이면 ok 로 새지 않고 skipped", () => {
+    const withBogusOutcome = {
+      status: "flagged",
+      checks: [
+        { id: "code_in_candidates", target: "prescription[5]", outcome: "OK", evidence: "" },
+      ],
+    };
+    expect(itemVerificationOutcome(withBogusOutcome, "prescription[5]")).toBe("skipped");
   });
 });

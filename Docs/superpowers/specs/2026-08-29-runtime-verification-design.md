@@ -340,6 +340,18 @@ schema_top3           flagged=6  ok=4                (총 10)
 
 ### 11.3 2차 측정 (실제 모델, 60 시나리오)
 
+**[환경 조건] §11.3–§11.5 의 실측은 모두 컬렉션이 하나도 없는(0개) 완전히
+빈 ArangoDB 상태에서 돌았다.** `req.fetch_top_rx_from_arango` 를 켠 채였지만
+`fetch_top_rx_from_arango()` 가 빈 리스트를 돌려주면 `effective_top_rx` 는
+요청에 실린 시나리오 `top_rx` 로 그대로 남는다(`prescription_api.py`
+`_is_empty_top_rx`/`if rows:` 폴백, 515-533행) — 즉 `code_in_candidates` 와
+`name_matches_code` 가 대조한 후보는 프로덕션 그래프 조회 결과가 아니라
+시나리오 fixture 값이었다. 같은 이유로 `prescription_api.py` 710-720행의
+Arango co-occurrence 기반 `confidence_score` 주입도 `confidence_by_code` 가
+비어 있어 아무것도 채우지 못했다. 이 절의 수치는 검증층의 비교 로직 자체가
+옳게 동작하는지를 보여줄 뿐, 실제 프로덕션 그래프 데이터를 상대로 한 근거
+대조 성능은 이 실측에 담겨 있지 않다. 그 구분을 지우지 않는다.
+
 `scripts/measure_verification.py` 로 시나리오 60건을 실제 모델 경로에 태워 측정했다.
 
 - [x] **`confidence_in_range` — 결론(해결됨).** 180건(60×3) 전부 `skipped`.

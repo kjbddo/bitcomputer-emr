@@ -478,6 +478,77 @@ describe("처방 표의 항목 단위 검증 표시", () => {
     expect(within(dialog).getByText("근거 불일치")).toBeInTheDocument();
   });
 
+  // M2 — §10.4 의 fail-closed 네 shape(undefined/null/"PASSED"/"bogus")이
+  // 순수 함수(verificationNotice.test.ts) 밖에서는 "필드 누락" 하나로만
+  // 구동됐다. null/계약 밖 값도 이 모달 렌더 경로를 통과시킨다.
+  it("검증 모달의 근거 표시: verification.status 가 null 이면 미검증", async () => {
+    mockedRecommend.mockResolvedValue({ jobId: "job-v-8", historyId: 10, status: "RUNNING" });
+    mockedGetJob.mockResolvedValue({
+      jobId: "job-v-8",
+      historyId: 10,
+      status: "DONE",
+      result: {
+        overallStatus: "PASS",
+        summary: "이상 없음",
+        llmStatus: "real",
+        verification: { status: null, checks: [] },
+        recommendedPrescriptions: [
+          {
+            id: 1,
+            rank: 1,
+            prescription_code: "C1",
+            prescription_name: "약1",
+            reason: "",
+            confidence_score: 0.9,
+            dose: 1,
+            time: 1,
+            days: 1,
+          },
+        ],
+      },
+    } as unknown as ValidationJobResponse);
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText("미검증")).toBeInTheDocument();
+  });
+
+  it("검증 모달의 근거 표시: 계약 밖 status 값도 미검증으로 본다", async () => {
+    mockedRecommend.mockResolvedValue({ jobId: "job-v-9", historyId: 10, status: "RUNNING" });
+    mockedGetJob.mockResolvedValue({
+      jobId: "job-v-9",
+      historyId: 10,
+      status: "DONE",
+      result: {
+        overallStatus: "PASS",
+        summary: "이상 없음",
+        llmStatus: "real",
+        verification: { status: "bogus", checks: [] },
+        recommendedPrescriptions: [
+          {
+            id: 1,
+            rank: 1,
+            prescription_code: "C1",
+            prescription_name: "약1",
+            reason: "",
+            confidence_score: 0.9,
+            dose: 1,
+            time: 1,
+            days: 1,
+          },
+        ],
+      },
+    } as unknown as ValidationJobResponse);
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText("미검증")).toBeInTheDocument();
+  });
+
   // 리뷰에서 지적된 갭: 근거 표시 텍스트가 어딘가에 있다는 것만으로는 그게
   // modalCardHead 안(overallStatus 배지, 모델 배지와 한 줄)으로 옮겨져도 안
   // 잡힌다 — 이 저장소가 이미 겪은 "세 배지가 한 줄"(spec §7.1 위반) 실패를

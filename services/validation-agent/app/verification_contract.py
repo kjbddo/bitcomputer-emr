@@ -1,7 +1,11 @@
 """검증 결과 계약과 집계 규칙(validation-agent 사본).
 
-services/prescription/verification_contract.py 와 동일해야 한다. 별도 Docker
-빌드 컨텍스트라 공유 패키지 대신 복제한다. 동일성은 테스트로 고정한다.
+이 모듈 docstring 바로 다음부터 파일 끝까지의 본문(계약 규칙 코드)이
+services/prescription/verification_contract.py 와 동일해야 한다 — 이
+docstring 자체는 사본마다 다르게 써도 된다(별도 서비스임을 밝히는 문구이므로).
+별도 Docker 빌드 컨텍스트라 공유 패키지 대신 복제한다. 본문 동일성은
+tests/test_verification.py::test_contract_copy_matches_prescription 이
+테스트로 고정한다.
 """
 from __future__ import annotations
 

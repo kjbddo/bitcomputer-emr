@@ -504,6 +504,9 @@ def test_does_not_mutate_response():
 
 
 # 계약이 두 서비스에 복제돼 있다. 어긋나면 두 서비스가 다른 집계 규칙을 쓰게 된다.
+# 파일 전체가 아니라 첫 모듈 docstring 이후의 본문(계약 규칙 코드)만 비교한다 —
+# 두 사본의 모듈 docstring 은 각자 어떤 서비스의 사본인지 밝히는 문구라
+# 의도적으로 다르며, 그 차이는 이 검사가 잡을 대상이 아니다.
 def test_contract_copy_matches_prescription():
     # tests/ -> validation-agent -> services -> (repo root)
     here = pathlib.Path(__file__).resolve().parents[1] / "app" / "verification_contract.py"
@@ -511,6 +514,8 @@ def test_contract_copy_matches_prescription():
              / "prescription" / "verification_contract.py")
     assert here.exists() and other.exists(), (here, other)
     def body(p):
+        """모듈 docstring 을 제외한 본문. 두 사본의 docstring 문구 차이는
+        여기서 걸러지므로 비교 대상에 들어가지 않는다."""
         text = p.read_text(encoding="utf-8")
         return text[text.index('"""', text.index('"""') + 3) + 3:]
     assert hashlib.sha256(body(here).encode()).hexdigest() == \

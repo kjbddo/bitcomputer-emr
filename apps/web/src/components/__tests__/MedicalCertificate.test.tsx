@@ -187,6 +187,50 @@ describe("진단서 AI 미리보기의 근거 검증 표시", () => {
     expect(await within(dialog).findByText("미검증")).toBeInTheDocument();
   });
 
+  // M2 — GC-3 fail-closed 는 순수 함수 단위(verificationNotice.test.ts)에서만
+  // 검증됐고 렌더 경로는 "필드 누락" 하나뿐이었다. status 가 null 인 경우도
+  // 렌더 경로를 통과시킨다.
+  it("verification.status 가 null 이면 미검증으로 표시한다", async () => {
+    vi.mocked(generateDocumentCertificateByHistory).mockResolvedValue({
+      grantType: "Bearer", accessToken: "a", refreshToken: "r",
+      medicalCertificate: "소견", llmStatus: "real",
+      verification: { status: null, checks: [] },
+    });
+    renderWithAppliedDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: /AI/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText("미검증")).toBeInTheDocument();
+  });
+
+  // 계약 밖 값(대소문자 등 오탈자)이 "passed"로 오인돼 무표시로 새지 않는지
+  // 렌더 경로에서 확인한다. "passed" 정확 일치만 무표시여야 한다(GC-3).
+  it("verification.status 가 계약 밖 값(대소문자 오탈자)이면 미검증으로 표시한다", async () => {
+    vi.mocked(generateDocumentCertificateByHistory).mockResolvedValue({
+      grantType: "Bearer", accessToken: "a", refreshToken: "r",
+      medicalCertificate: "소견", llmStatus: "real",
+      verification: { status: "PASSED", checks: [] },
+    });
+    renderWithAppliedDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: /AI/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText("미검증")).toBeInTheDocument();
+  });
+
+  it("verification.status 가 알 수 없는 값이면 미검증으로 표시한다", async () => {
+    vi.mocked(generateDocumentCertificateByHistory).mockResolvedValue({
+      grantType: "Bearer", accessToken: "a", refreshToken: "r",
+      medicalCertificate: "소견", llmStatus: "real",
+      verification: { status: "bogus", checks: [] },
+    });
+    renderWithAppliedDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: /AI/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText("미검증")).toBeInTheDocument();
+  });
+
   it("passed 면 검증 표시가 없다", async () => {
     vi.mocked(generateDocumentCertificateByHistory).mockResolvedValue({
       grantType: "Bearer", accessToken: "a", refreshToken: "r",
