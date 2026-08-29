@@ -1,7 +1,18 @@
 """진단서 소견을 premise 와 대조한다.
 
-자유 산문이라 결정론적으로 잡을 수 있는 것이 얇다. 잡히는 것은 "없는 상병코드를
-인용했다"와 "근거로 삼았다는 상병을 한 번도 언급하지 않았다" 두 가지다.
+자유 산문이라 결정론적으로 잡을 수 있는 것이 얇다. 이 모듈이 실제로 검사하는
+것은 정확히 다음 두 가지뿐이다.
+
+1. `cited_code_known` — 소견 텍스트에서 **대괄호 [ ] 또는 소괄호 ( ) 로 감싼**
+   ICD-10 형태 코드만 "인용"으로 본다(예: `[J00]`, `(E11.9)`). 괄호 없이 문장에
+   섞여 있는 코드(`...E21.9으로...`)나 `비타민 B12` 같은 의학 약어는 이 검사의
+   범위 밖이며, "인용이 없다"는 뜻으로 skipped 로 처리한다 — 검증했다는 뜻이
+   아니다.
+2. `premise_term_present` — premise(상병명·처방명)의 문자열이 소견 텍스트 안에
+   부분 문자열로 "등장"하는지만 본다. 소견이 그 상병에 "대한" 것인지, 문맥상
+   실제로 그 진단을 뒷받침하는지는 보지 않는다 — 짧은 premise 용어가 무관한
+   복합어 안에 부분 문자열로 등장해도 ok 로 판정될 수 있다(알려진 한계).
+
 문장 단위 함의 판정은 B(NLI)의 몫이다(spec §6.2).
 """
 from __future__ import annotations
@@ -13,9 +24,17 @@ from typing import Any, List, Optional, Sequence
 
 from verification_contract import CheckResult, VerificationResult, aggregate_status
 
-# ICD-10 형태. "코드처럼 생긴 것"을 애매하게 두면 검사가 무엇을 하는지
-# 아무도 말할 수 없게 된다(spec §6.2).
-ICD10_PATTERN = re.compile(r"\b[A-Z]\d{2}(?:\.\d+)?\b")
+# 대괄호 또는 소괄호로 감싼 ICD-10 형태 코드만 인용으로 본다.
+#
+# certificate_agent.py 의 프롬프트가 상병을 `- [J00] 급성 비인두염` 형태로
+# 제시하므로(certificate_agent.py:106 부근), 실제로 쓰이는 인용 형식은 괄호로
+# 감싼 것이다. 경계를 괄호가 아니라 `\b` 로만 두면 두 방향으로 다 틀린다:
+# 한글 음절은 Python 정규식에서 \w 로 취급되어 `\b` 가 한글-코드 경계에서
+# 전혀 작동하지 않으므로 `...심근경색E21.9으로...` 같은 위조 코드를 놓치고,
+# 반대로 `비타민 B12` 같은 정상적인 의학 약어를 코드로 오인해 flag 한다
+# (spec §6.2). 괄호 한정은 이 두 오탐/누락을 모두 피하는 대신, 괄호 없는
+# 인용은 이 검사의 범위 밖으로 명시적으로 둔다.
+BRACKETED_ICD10_PATTERN = re.compile(r"[\[(]([A-Z]\d{2}(?:\.\d+)?)[\])]")
 
 
 def _text(value: Any) -> str:
@@ -58,18 +77,20 @@ def verify_certificate(
             status=aggregate_status(checks), checks=checks, skippedReason=skipped_reason)
 
     normalized_text = _normalize(text or "")
-    cited = ICD10_PATTERN.findall(normalized_text)
+    cited = BRACKETED_ICD10_PATTERN.findall(normalized_text)
     if not cited:
         checks.append(CheckResult(
             id="cited_code_known", target="certificate", outcome="skipped",
-            evidence="소견에 ICD-10 형태 토큰이 없음"))
+            evidence="소견에 괄호로 감싼 ICD-10 형태 코드가 없음"
+                      "(괄호 없는 인라인 코드는 이 검사의 범위 밖)"))
     else:
         unknown = [c for c in cited if c not in known_codes]
         checks.append(CheckResult(
             id="cited_code_known", target="certificate",
             outcome="flagged" if unknown else "ok",
-            evidence=(f"소견의 코드 {cited} 중 premise 밖: {unknown}" if unknown
-                      else f"소견의 코드 {cited} 가 모두 premise 안에 있음")))
+            evidence=(f"소견이 괄호로 인용한 코드 {cited} 중 premise 밖: {unknown}"
+                      if unknown else
+                      f"소견이 괄호로 인용한 코드 {cited} 가 모두 premise 안에 있음")))
 
     if not known_terms:
         checks.append(CheckResult(
@@ -80,8 +101,10 @@ def verify_certificate(
         checks.append(CheckResult(
             id="premise_term_present", target="certificate",
             outcome="ok" if present else "flagged",
-            evidence=(f"소견이 언급한 premise 용어: {present}" if present
-                      else "소견이 premise 의 상병명·처방명을 하나도 언급하지 않음")))
+            evidence=(f"premise 용어가 텍스트에 부분 문자열로 등장함: {present}"
+                      "(등장했다는 뜻이지 그 상병에 대한 소견이라는 보장은 아님)"
+                      if present else
+                      "소견이 premise 의 상병명·처방명을 하나도 언급하지 않음")))
 
     return VerificationResult(
         status=aggregate_status(checks), checks=checks, skippedReason=skipped_reason)

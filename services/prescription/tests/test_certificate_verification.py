@@ -91,3 +91,81 @@ def test_certificate_verifier_exception_becomes_skipped(monkeypatch):
 
     assert result["status"] == "skipped"
     assert "RuntimeError" in (result["skippedReason"] or "")
+
+
+# --- 리뷰어 반례: cited_code_known 이 반대 방향으로 둘 다 실패했다 ---
+# 1) 괄호 없이 한글에 붙은 위조 코드는 인용으로 인식되지 않아 skipped 로
+#    빠지고, 다른 premise 용어가 우연히 일치하면 전체가 passed 가 되어버렸다
+#    (허위 통과). 2) `비타민 B12` 처럼 정상적인 의학 약어가 ICD-10 코드로
+#    오인되어 flagged 되었다(허위 flag). 프로젝트 책임자의 결정: 괄호(또는
+#    대괄호)로 감싼 코드만 인용으로 본다 — certificate_agent.py 가 실제로
+#    `- [J00] 급성 비인두염` 형태로 코드를 제시하기 때문이다.
+
+def test_vitamin_b12_not_flagged_as_code():
+    """괄호 없는 `비타민 B12` 는 ICD-10 코드 인용이 아니다 — 이 검사 범위 밖."""
+    text = "환자는 비타민 B12 결핍 소견으로 통원 치료가 필요합니다."
+    result = verify_certificate(diseases=DISEASES, diagnoses=[], text=text)
+
+    assert _outcomes(result, "cited_code_known") == ["skipped"]
+
+
+def test_bracketed_unknown_code_is_flagged():
+    text = "환자는 소화기 증상[K52.9]으로 통원 치료가 필요합니다."
+    result = verify_certificate(diseases=DISEASES, diagnoses=[], text=text)
+
+    assert result.status == "flagged"
+    assert "flagged" in _outcomes(result, "cited_code_known")
+
+
+def test_bracketed_known_code_is_ok():
+    text = "환자는 급성 비인두염[J00]으로 통원 치료가 필요합니다."
+    result = verify_certificate(diseases=DISEASES, diagnoses=[], text=text)
+
+    assert _outcomes(result, "cited_code_known") == ["ok"]
+
+
+def test_code_glued_to_korean_text_is_out_of_scope():
+    """괄호 없이 한글에 바로 붙은 코드는 인용으로 보지 않는다. `\\b` 는 한글이
+    Python 정규식에서 \\w 로 취급되어 한글-코드 경계에서 작동하지 않으므로,
+    괄호 요구 없이는 이런 위조 코드를 영영 놓친다. 지금은 검사 범위 밖으로
+    skipped 처리하고 "검증했다"고 암시하지 않는다(허위 통과 방지)."""
+    text = "환자는 심근경색E21.9으로 통원 치료가 필요합니다."
+    result = verify_certificate(diseases=DISEASES, diagnoses=[], text=text)
+
+    assert _outcomes(result, "cited_code_known") == ["skipped"]
+
+
+# --- GC-2 회귀: premise 가 있어도 code/name 이 전부 빈 문자열이면 안 된다 ---
+
+def test_blank_code_and_name_premise_is_skipped_not_passed():
+    """빈 문자열은 모든 문자열의 부분집합이다 — .discard("") 가 없으면
+    diseases=[{code: "", name: ""}] 만으로도 아무 텍스트나 "통과"해버린다."""
+    diseases = [SimpleNamespace(code="", name="", degree=None)]
+    text = "환자는 급성 비인두염으로 통원 치료가 필요합니다."
+    result = verify_certificate(diseases=diseases, diagnoses=[], text=text)
+
+    assert result.status == "skipped"
+    assert result.status != "passed"
+
+
+def test_premise_with_only_name_counts_as_premise():
+    """has_premise 는 code 나 name 중 하나만 있어도 참이어야 한다
+    (`or` 여야 하며 `and` 로 바뀌면 안 된다)."""
+    diseases = [SimpleNamespace(code="", name="급성 비인두염", degree=None)]
+    text = "환자는 급성 비인두염으로 통원 치료가 필요합니다."
+    result = verify_certificate(diseases=diseases, diagnoses=[], text=text)
+
+    assert result.status == "passed"
+    assert result.skippedReason is None
+
+
+def test_premise_term_present_is_substring_containment_not_aboutness():
+    """알려진 한계(spec §6.2, NLI 이전까지 해소되지 않음): 이 검사는 premise
+    용어가 텍스트 안에 "등장"하는지만 본다. 소견이 그 상병에 "대한" 것인지는
+    보장하지 않는다 — 짧은 premise 용어가 무관한 복합어의 부분 문자열로
+    등장해도 ok 로 판정된다. 여기서는 "동" 이 무관한 "활동" 안에 등장한다."""
+    diseases = [_disease("J00", "동")]
+    text = "환자는 신체 활동에 큰 지장이 없습니다."
+    result = verify_certificate(diseases=diseases, diagnoses=[], text=text)
+
+    assert _outcomes(result, "premise_term_present") == ["ok"]
