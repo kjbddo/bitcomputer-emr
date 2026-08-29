@@ -28,6 +28,12 @@ code_in_candidates·name_matches_code 는 모델이 "미기재" 류 플레이스
 보고하면 안 된다. 지어낸 것처럼 보이지만 후보에 없는 코드는 여전히
 flagged 다(§10.1 변이 테스트 표의 test_invented_code_is_flagged 참조).
 
+schema_top3 의 코드중복 조건도 같은 플레이스홀더를 면제한다(최종 리뷰
+I1). 애초에 이 면제가 빠져 있어서, 모델이 세 추천 중 둘 이상에 "미기재"를
+정직하게 쓴 경우(코드가 없다는 뜻)가 "코드중복"으로 flag 됐다 — §11.5 의
+60% 수치에 이 오탐이 섞여 있었다(§11.4/§11.5 재측정 참조). rank 집합
+조건은 이 면제와 무관하며 그대로 둔다.
+
 spec: Docs/superpowers/specs/2026-08-29-runtime-verification-design.md §6.1, §11.2
 """
 from __future__ import annotations
@@ -101,17 +107,26 @@ def verify_prescriptions(*, candidates: Sequence[Any], items: Sequence[Any]) -> 
     # 스키마 위반으로 취급한다 — 어차피 {1,2,3} 집합에 속할 수 없다(GC-4).
     raw_ranks = [_safe_int(getattr(i, "rank", None)) for i in items]
     codes = [_text(getattr(i, "prescription_code", "")) for i in items]
+    # 중복 판정은 실제 코드끼리만 본다. "미기재" 류 플레이스홀더는
+    # code_in_candidates/name_matches_code 와 같은 이유로 여기서도 면제한다
+    # (최종 리뷰 I1) — 프롬프트가 지어내지 말고 플레이스홀더를 쓰라고 명시적으로
+    # 지시하는데, 그 지시를 두 번 따른 정직한 출력("미기재","미기재")이 "코드
+    # 중복"으로 flag 되면 §11.3 이 code_in_candidates 에서 고친 바로 그 오탐이
+    # 다른 검사로 되돌아온다. 실제 코드의 중복은 여전히 flag 해야 하므로
+    # comparable_codes(플레이스홀더 제외)로만 집합 크기를 비교한다.
+    comparable_codes = [c for c in codes if c not in _PLACEHOLDER_VALUES]
+    duplicate_count = len(comparable_codes) - len(set(comparable_codes))
     schema_ok = (
         None not in raw_ranks
         and sorted(raw_ranks) == [1, 2, 3]
-        and len(set(codes)) == len(codes)
+        and duplicate_count == 0
     )
     checks.append(
         CheckResult(
             id="schema_top3",
             target="response",
             outcome="ok" if schema_ok else "flagged",
-            evidence=f"rank={raw_ranks} 코드중복={len(codes) - len(set(codes))}건",
+            evidence=f"rank={raw_ranks} 코드중복={duplicate_count}건",
         )
     )
 

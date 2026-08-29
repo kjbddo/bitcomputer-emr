@@ -26,7 +26,7 @@ def test_grounding_ok_yields_passed():
 # passed 가 되면 "Arango 조회가 전부 실패했는데 rank 가 1,2,3 이라서 검증됨"
 # 이라는 거짓 신호가 나간다. §2.2 의 결함이 다른 모양으로 돌아오는 것이다.
 def test_structural_checks_alone_never_pass():
-    checks = [_check("schema_top3", "ok"), _check("confidence_in_range", "ok")]
+    checks = [_check("schema_top3", "ok"), _check("candidates_from_finder", "ok")]
     assert aggregate_status(checks) == "skipped"
 
 
@@ -42,7 +42,7 @@ def test_all_skipped_is_skipped():
 # 구조 검사 집합이 비면 위 방어가 통째로 사라진다. 상수 자체를 고정한다.
 def test_structural_ids_are_pinned():
     assert STRUCTURAL_CHECK_IDS == frozenset(
-        {"schema_top3", "confidence_in_range", "trace_step_has_observation"}
+        {"schema_top3", "trace_step_has_observation", "candidates_from_finder"}
     )
 
 

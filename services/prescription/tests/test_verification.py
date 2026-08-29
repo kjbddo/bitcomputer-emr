@@ -89,6 +89,29 @@ def test_duplicate_prescription_codes_is_flagged():
     assert _outcomes(result, "schema_top3") == ["flagged"]
 
 
+# I1: schema_top3 는 code_in_candidates/name_matches_code 와 달리 플레이스홀더
+# 면제가 없어서, 프롬프트 지시대로 "미기재"를 두 번 정직하게 쓴 출력을
+# "코드중복"으로 flag 했다. 지어내지 말라는 지시를 따른 것을 근거 불일치로
+# 보고하면 안 된다 — §11.3 이 code_in_candidates 에서 고친 바로 그 오탐이다.
+def test_duplicate_placeholder_codes_not_flagged_as_duplicate():
+    items = [_item(1, "미기재", "이름1"), _item(2, "미기재", "이름2"),
+             _item(3, "C03", "약다", "2정")]
+    result = verify_prescriptions(candidates=CANDIDATES, items=items)
+
+    assert _outcomes(result, "schema_top3") == ["ok"]
+
+
+# 플레이스홀더 면제가 실제 코드 중복까지 가려서는 안 된다 — 진짜 중복은
+# 여전히 걸려야 한다(위 test_duplicate_prescription_codes_is_flagged 가
+# 순수 중복을, 이 테스트는 플레이스홀더와 섞여도 살아남는지를 본다).
+def test_duplicate_real_code_still_flagged_when_mixed_with_placeholder():
+    items = [_item(1, "A01", "약가"), _item(2, "A01", "약가"),
+             _item(3, "미기재", "이름3")]
+    result = verify_prescriptions(candidates=CANDIDATES, items=items)
+
+    assert _outcomes(result, "schema_top3") == ["flagged"]
+
+
 # GC-3. 검증기는 판정만 한다.
 def test_does_not_mutate_output():
     items = [_item(1, "A01", "약가")]

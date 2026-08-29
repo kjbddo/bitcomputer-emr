@@ -190,15 +190,30 @@ def verify_validation(
         # outside 계산에서 조용히 빠져 "정상"(ok) 취급된다. 형식이 깨진
         # 행은 대조하지 못했다는 뜻이지 검증됐다는 뜻이 아니다(GC-2) —
         # 그래서 malformed 행은 outside 와 별개로 flag 사유에 넣는다.
+        #
+        # 코드가 빈 dict 행(_code 가 "" 반환 — 키가 없거나 값이 빈 문자열)도
+        # 같은 문제다(최종 리뷰 C2-b). dict 이므로 malformed 에는 안 걸리고,
+        # outside 계산은 `- {""}` 로 그 행 자체를 지워 버려 무엇과도 대조되지
+        # 않았는데 "N건이 모두 finder 관측값에서 옴"이라는 evidence 에 그대로
+        # 섞여 들었다 — 검사가 실제로 확인한 것보다 evidence 가 더 많이
+        # 주장하는, 이 브랜치에서 반복된 결함 유형이다. malformed 가 "형식이
+        # 깨져 대조 불가"를 flagged 로 다루는 것과 같은 이유로, 코드가 없어
+        # 대조 불가한 행도 조용히 넘기지 않고 flagged 로 드러낸다 — skipped
+        # 로 뺄 수도 있었지만, 이 행 하나 때문에 이미 검증 가능한 다른 행들의
+        # 결과(ok/flagged)까지 통째로 "미확인"이 되는 것은 과하다는 판단이다.
         malformed = [i for i, r in enumerate(returned) if not isinstance(r, dict)]
+        uncoded = [i for i, r in enumerate(returned)
+                   if isinstance(r, dict) and not _code(r)]
         outside = sorted({_code(r) for r in returned if isinstance(r, dict)}
                           - known_codes - {""})
-        if malformed or outside:
+        if malformed or outside or uncoded:
             reasons = []
             if outside:
                 reasons.append(f"finder 관측값 밖의 코드: {outside}")
             if malformed:
                 reasons.append(f"형식이 잘못된 후보 인덱스: {malformed}")
+            if uncoded:
+                reasons.append(f"코드가 없어 대조하지 못한 후보 인덱스: {uncoded}")
             checks.append(CheckResult(
                 id="candidates_from_finder", target="response", outcome="flagged",
                 evidence="; ".join(reasons)))

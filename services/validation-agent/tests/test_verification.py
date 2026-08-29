@@ -77,6 +77,68 @@ def test_candidate_outside_finder_is_flagged():
     assert "flagged" in _outcomes(result, "candidates_from_finder")
 
 
+# --- 최종 리뷰 C2: candidates_from_finder 는 응답을 자기 자신과 비교한다 ---
+#
+# 실제 배선(agent.py)에서 state["finder_candidates"] 와 state["candidate_prescriptions"]
+# 는 같은 finder 관측값에서 나온다 — 하나는 원본 누적, 하나는 그 정규화값이다.
+# 그래서 정상 입력으로는 outside 가 구조적으로 항상 공집합이라 flagged 가 나올
+# 수 없고, ok 만 나온다. 이 ok 하나가 근거 검사로 집계되면 트레이스도 비고
+# cited_pmid_in_evidence 도 skipped 인 응답이 "passed" 로 나간다 — GC-2 를
+# 실질적으로 우회한다. candidates_from_finder 를 STRUCTURAL_CHECK_IDS 로
+# 옮기면 이 ok 하나만으로는 더 이상 passed 가 나오지 않아야 한다.
+def test_candidates_from_finder_alone_never_passes():
+    response = {"pubmedEvidenceSummary": "", "checks": [],
+                "candidatePrescriptions": [{"prescription_code": "A01"}],
+                "reasoningTrace": []}
+    result = verify_validation(
+        pubmed_articles=[], finder_candidates=[{"prescription_code": "A01"}],
+        response_dict=response)
+
+    assert _outcomes(result, "candidates_from_finder") == ["ok"]
+    assert result.status == "skipped"
+
+
+# --- 최종 리뷰 C2(b): 코드가 빈 후보가 대조 없이 "모두 검증됨"에 섞여 든다 ---
+#
+# _code() 는 dict 행에 코드 키가 없거나 비어 있으면 "" 를 반환한다. 예전 구현은
+# outside 계산에서 `- {""}` 로 그 행을 조용히 빼 버려, 대조되지 않은 행이
+# "후보 N건이 모두 finder 관측값에서 옴" 이라는 evidence 에 그대로 포함됐다.
+# 검사보다 evidence 가 더 많이 주장하는 이 브랜치의 반복 결함이다(GC-2).
+def test_candidates_with_empty_code_are_not_silently_counted_as_verified():
+    response = {"pubmedEvidenceSummary": "", "checks": [],
+                "candidatePrescriptions": [
+                    {"prescription_name": "코드없는후보1", "prescription_code": ""},
+                    {"prescription_name": "코드없는후보2", "prescription_code": ""},
+                    {"prescription_name": "코드없는후보3", "prescription_code": ""},
+                ],
+                "reasoningTrace": []}
+    result = verify_validation(
+        pubmed_articles=[], finder_candidates=[{"prescription_code": "A01"}],
+        response_dict=response)
+
+    outcomes = _outcomes(result, "candidates_from_finder")
+    evidence = _evidence(result, "candidates_from_finder")
+    assert outcomes == ["flagged"]
+    assert "3건이 모두 finder 관측값에서 옴" not in evidence[0]
+
+
+def test_candidate_with_mixed_coded_and_uncoded_rows_reports_uncoded_indices():
+    response = {"pubmedEvidenceSummary": "", "checks": [],
+                "candidatePrescriptions": [
+                    {"prescription_code": "A01"},
+                    {"prescription_name": "코드없는후보", "prescription_code": ""},
+                ],
+                "reasoningTrace": []}
+    result = verify_validation(
+        pubmed_articles=[], finder_candidates=[{"prescription_code": "A01"}],
+        response_dict=response)
+
+    outcomes = _outcomes(result, "candidates_from_finder")
+    evidence = _evidence(result, "candidates_from_finder")
+    assert outcomes == ["flagged"]
+    assert "[1]" in evidence[0]
+
+
 def test_trace_step_without_observation_is_flagged():
     response = {"pubmedEvidenceSummary": "", "checks": [],
                 "candidatePrescriptions": [],
