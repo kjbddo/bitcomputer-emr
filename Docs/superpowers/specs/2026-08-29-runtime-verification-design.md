@@ -209,7 +209,15 @@ B0 Task 11 리뷰에서 `overallStatus` 가 `WARNING` 일 때 amber 배지 둘�
 |---|---|
 | prescription | 추천 표의 각 행 + 표 위 요약 한 줄("3건 중 1건 미검증") |
 | certificate | AI 미리보기 모달의 소견 텍스트 위 한 줄 |
-| validation-agent | 검증 이유 목록의 해당 항목 |
+| validation-agent | 검증 결과 모달의 요약 문단 아래 한 줄(응답 단위) |
+
+validation-agent 만 응답 단위인 이유: §6.3 이 이 서비스의 세 검사
+(`cited_pmid_in_evidence`, `candidates_from_finder`,
+`trace_step_has_observation`)를 전부 응답 전체를 대상으로 정의한다.
+항목 단위로 표시하려면 항목 단위 판정이 있어야 하는데 없다. 없는 판정을
+행마다 흩뿌리면 근거 없는 세분화이고, GC-2 가 금지하는 "검사하지 않은 것을
+검사한 것처럼 보이게 하는" 표시가 된다. 항목 단위 판정이 필요하면 먼저
+항목 단위 검사를 설계해야 한다.
 
 **7.3 `flagged` 와 `skipped` 를 다른 문구로 쓴다.**
 
