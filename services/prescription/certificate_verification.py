@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import re
+import time
 import unicodedata
 
 from typing import Any, List, Optional, Sequence
@@ -55,29 +56,70 @@ def _normalize(value: str) -> str:
     return unicodedata.normalize("NFC", value)
 
 
-SENTENCE_SPLIT = re.compile(r"(?<=[.!?。])|\n+")
+# 문장 경계는 종결부호([.!?。]) 바로 뒤, 또는 줄바꿈이다.
+#
+# 다루는 것: 종결부호 뒤에 숫자가 바로 오면(가격·용량의 소수점, 예:
+# "1.5mg") 문장 경계로 보지 않는다 — 그러지 않으면 소수점마다 문장이
+# 쪼개져 NLI 2차 판정이 문장 수만큼 늘어나고, 예산은 요청 전체에 대한
+# 것이라 사다리가 뒤집힌다(spec §8.4, CRITICAL 리뷰). 줄바꿈만 있고
+# 종결부호가 없는 소견도 `\n+` 로 문장을 나눈다.
+#
+# 다루지 않는 것: 종결부호 바로 뒤에 공백 없이 숫자로 시작하는 다음
+# 문장이 오면(예: "...완료했습니다.2026년...") 경계를 놓친다 — 그런
+# 붙여쓰기 표기는 이 정규식의 범위 밖이다.
+SENTENCE_SPLIT = re.compile(r"(?<=[.!?。])(?!\d)|\n+")
 
 # 모델이 돌려주는 판정 문자열. 이 셋 밖의 값은 판정 실패로 본다 —
 # 알 수 없는 응답을 통과로 읽으면 검증층이 스스로를 무력화한다.
 _VERDICT_OK = "ENTAILMENT"
 _VERDICT_BAD = {"CONTRADICTION", "NEUTRAL"}
 
+# NLI 호출 예산의 기본값. 호출자가 넘기지 않을 때만 쓰인다 — 실제 운영
+# 값은 certificate_api.NLI_TIMEOUT_SECONDS 가 결정하고, 호출부가 이를
+# budget_seconds 로 명시적으로 넘긴다(아래 참조).
+_DEFAULT_BUDGET_SECONDS = 30.0
 
-def verify_certificate_nli(*, premise: str, text: str, call_llm) -> List[CheckResult]:
+
+def verify_certificate_nli(
+    *,
+    premise: str,
+    text: str,
+    call_llm,
+    budget_seconds: float = _DEFAULT_BUDGET_SECONDS,
+    clock=time.monotonic,
+) -> List[CheckResult]:
     """소견 각 문장이 premise 에서 함의되는지 모델에게 묻는다(B(NLI), spec §6.2).
 
     검증기는 순수 함수로 남는다 — I/O 는 `call_llm` 으로 주입받는다(GC-1).
     호출 실패·타임아웃·알 수 없는 판정은 전부 skipped 다. 절대 ok 가 아니다
     (GC-2). `nli_entailment` 는 근거 검사다 — STRUCTURAL_CHECK_IDS 에 넣지
     않는다.
+
+    `budget_seconds` 는 이 함수 호출 **전체**에 대한 예산이지, 문장마다
+    새로 지급되지 않는다(CRITICAL 리뷰). `call_llm` 은 문장 하나당 게이트웨이
+    왕복 하나이고, 각 왕복은 독립적으로 최대 그 정도 시간을 쓸 수 있다.
+    사다리(게이트웨이 총예산 136.5s + NLI 예산 30s = 166.5s < 호출자 타임아웃
+    180s, spec §8.4)는 요청당 게이트웨이 호출이 "하나 더" 붙는다는 전제로
+    설계됐다 — 문장 수만큼 호출이 늘면 136.5 + 30×N 이 되어 사다리가
+    뒤집힌다. 그래서 루프 시작 시점에 마감(deadline)을 한 번만 계산하고,
+    이미 마감을 넘긴 뒤의 문장은 call_llm 을 아예 부르지 않고 skipped 로
+    떨어뜨려 총 지연을 한 예산 안으로 묶는다. `clock` 은 `call_llm` 과 같은
+    이유로 주입한다(GC-1) — 실시간이 흐르길 기다리지 않고도 이 판정 로직을
+    테스트하기 위해서다.
     """
     if not premise.strip():
         return []
 
     sentences = [s.strip() for s in SENTENCE_SPLIT.split(text or "") if s and s.strip()]
     checks: List[CheckResult] = []
+    deadline = clock() + budget_seconds
     for index, sentence in enumerate(sentences):
         target = f"sentence[{index}]"
+        if clock() >= deadline:
+            checks.append(CheckResult(
+                id="nli_entailment", target=target, outcome="skipped",
+                evidence="NLI 예산 소진으로 미검증(예산은 문장별이 아니라 요청 전체)"))
+            continue
         try:
             verdict = str(call_llm(premise, sentence)).strip().upper()
         except Exception as exc:  # noqa: BLE001

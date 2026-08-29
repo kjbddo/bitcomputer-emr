@@ -74,6 +74,101 @@ def test_empty_premise_returns_no_checks():
     assert checks == []
 
 
+# CRITICAL 리뷰: NLI 타임아웃 예산은 요청 전체에 대한 것이지 문장마다
+# 새로 지급되지 않는다. 문장이 N개면 사다리(136.5s 게이트웨이 + 30s NLI =
+# 166.5s < 180s 호출자 타임아웃, spec §8.4)가 136.5 + 30×N 으로 뒤집힌다.
+# 가짜 시계로 "게이트웨이가 매 호출마다 정직하게 자기 타임아웃까지 다
+# 태운다"는 최악을 시뮬레이션해, 예산 소진 이후 문장은 call_llm 을 아예
+# 부르지 않고 skipped 로 떨어지는지 확인한다.
+def test_total_nli_latency_is_bounded_by_one_budget_not_per_sentence():
+    calls = []
+    clock_state = {"now": 0.0}
+
+    def fake_clock():
+        return clock_state["now"]
+
+    def fake_llm(premise, hypothesis):
+        calls.append(hypothesis)
+        clock_state["now"] += 30.0  # 게이트웨이가 자기 타임아웃까지 다 태움
+        return "ENTAILMENT"
+
+    text = "첫째 문장. 둘째 문장. 셋째 문장. 넷째 문장."
+    checks = verify_certificate_nli(
+        premise="p", text=text, call_llm=fake_llm,
+        budget_seconds=30.0, clock=fake_clock)
+
+    assert len(checks) == 4
+    # 첫 문장 호출이 끝나는 순간 예산(30s)이 이미 소진되므로, 나머지
+    # 세 문장은 call_llm 을 아예 호출하지 않는다 — 문장마다 새 30초를
+    # 받으면 이 assert 는 4 로 실패한다.
+    assert len(calls) == 1
+    assert checks[0].outcome == "ok"
+    assert [c.outcome for c in checks[1:]] == ["skipped", "skipped", "skipped"]
+    for skipped_check in checks[1:]:
+        assert "예산" in skipped_check.evidence
+
+
+def test_nli_budget_defaults_when_not_passed():
+    """budget_seconds/clock 을 넘기지 않아도 함수가 호출 가능해야 한다 —
+    certificate_api.py 가 아닌 다른 호출자, 혹은 예전 시그니처로 호출하는
+    테스트 코드가 깨지지 않아야 한다."""
+    checks = verify_certificate_nli(
+        premise="p", text="문장.", call_llm=lambda p, h: "ENTAILMENT")
+    assert [c.outcome for c in checks] == ["ok"]
+
+
+# IMPORTANT 1(1): NEUTRAL 을 보내는 테스트가 지금까지 하나도 없었다.
+# `_VERDICT_BAD` 에서 "NEUTRAL" 을 빼도(else 분기로 떨어져 skipped 가
+# 돼도) 스위트가 전부 초록이었다.
+def test_neutral_verdict_is_flagged():
+    def fake_llm(premise, hypothesis):
+        return "NEUTRAL"
+
+    checks = verify_certificate_nli(
+        premise="급성 비인두염(J00) 진단", text="환자는 상태가 애매합니다.",
+        call_llm=fake_llm)
+
+    assert [c.outcome for c in checks] == ["flagged"]
+
+
+# IMPORTANT 1(2): 종결부호 없이 줄바꿈만으로 구분된 소견을 쓰는 테스트가
+# 지금까지 하나도 없었다. splitter 에서 `|\n+` 를 빼도 스위트가 전부
+# 초록이었다.
+def test_newline_separated_sentences_without_terminal_punctuation_still_split():
+    calls = []
+
+    def fake_llm(premise, hypothesis):
+        calls.append(hypothesis)
+        return "ENTAILMENT"
+
+    text = "첫째 줄\n둘째 줄\n셋째 줄"
+    checks = verify_certificate_nli(premise="p", text=text, call_llm=fake_llm)
+
+    assert len(checks) == 3
+    assert len(calls) == 3
+
+
+# CRITICAL 리뷰 부록: 소수점(예: "1.5mg")이 문장 경계로 오인되면 안 된다.
+# splitter 가 이를 잘못 다루면, 3문장짜리 소견이 4개 조각으로 쪼개져
+# 위 예산 문제를 더 악화시킨다.
+def test_decimal_point_in_dosage_is_not_a_sentence_boundary():
+    calls = []
+
+    def fake_llm(premise, hypothesis):
+        calls.append(hypothesis)
+        return "ENTAILMENT"
+
+    text = (
+        "환자는 급성 비인두염 진단을 받았습니다. "
+        "아목시실린 1.5mg 3회/일 3일분을 처방합니다. "
+        "향후 발열 시 재내원 바랍니다."
+    )
+    checks = verify_certificate_nli(premise="p", text=text, call_llm=fake_llm)
+
+    assert len(checks) == 3
+    assert "1.5mg" in calls[1]
+
+
 def test_nli_entailment_is_a_grounding_check_not_structural():
     """nli_entailment 는 근거 검사다 — STRUCTURAL_CHECK_IDS 에 넣으면
     trace_step_has_observation 과 같은 이유로 "형식만 맞아도 passed" 가
@@ -145,6 +240,37 @@ def test_nli_is_off_by_default(monkeypatch):
     importlib.reload(certificate_api)
 
     assert certificate_api.NLI_ENABLED is False
+
+
+# IMPORTANT 2: 지금까지 NLI_ENABLED 를 필요로 하는 모든 테스트가
+# monkeypatch.setattr(ca, "NLI_ENABLED", True) 로 파싱 자체를 우회했다.
+# 리뷰어가 실제로 `== "on"` 을 `== "true"` 로 바꿔봤더니 185개가 전부
+# 초록이었다 — test_nli_is_off_by_default 조차도, 환경변수가 비어 있으면
+# "off" == "true" 가 여전히 False 라 통과해버리기 때문이다. 이 테스트는
+# os.environ.get(...).strip().lower() == "on" 파싱 경로를 직접 태워서,
+# 그 리터럴이 바뀌면 실제로 빨개지게 만든다.
+@pytest.mark.parametrize("raw,expected", [
+    ("on", True),
+    ("ON", True),
+    (" on ", True),
+    ("On", True),
+    ("true", False),
+    ("1", False),
+    ("off", False),
+    ("", False),
+])
+def test_nli_enabled_env_var_parsing_covers_tolerant_shapes(monkeypatch, raw, expected):
+    import importlib
+    import certificate_api
+
+    monkeypatch.setenv("LLM_VERIFICATION_NLI", raw)
+    importlib.reload(certificate_api)
+
+    assert certificate_api.NLI_ENABLED is expected
+
+    # 다음 테스트에 영향을 주지 않도록 기본값(off)으로 되돌려 둔다.
+    monkeypatch.delenv("LLM_VERIFICATION_NLI", raising=False)
+    importlib.reload(certificate_api)
 
 
 def test_nli_timeout_seconds_defaults_to_30(monkeypatch):
@@ -258,6 +384,28 @@ def test_nli_enabled_outcome_comes_from_call_llm_not_from_the_flag(monkeypatch):
     assert nli_checks
     assert all(c["outcome"] == "flagged" for c in nli_checks)
     assert result["status"] == "flagged"
+
+
+def test_safe_verify_certificate_passes_nli_timeout_as_budget_seconds(monkeypatch):
+    """CRITICAL 리뷰: 예산은 문장이 아니라 요청 전체에 대한 것이어야 한다.
+    _safe_verify_certificate 가 NLI_TIMEOUT_SECONDS 를 verify_certificate_nli 의
+    budget_seconds 로 넘기지 않으면, 이 CRITICAL 수정이 순수 함수 안에서만
+    맞고 실제 배선에서는 새어나간다(문장마다 함수 기본값이 다시 적용됨)."""
+    import certificate_api as ca
+
+    captured: dict = {}
+
+    def fake_verify_certificate_nli(*, premise, text, call_llm, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(ca, "NLI_ENABLED", True)
+    monkeypatch.setattr(ca, "NLI_TIMEOUT_SECONDS", 7.0)
+    monkeypatch.setattr(ca, "verify_certificate_nli", fake_verify_certificate_nli)
+
+    ca._safe_verify_certificate(_request(), "환자는 급성 비인두염(J00)입니다.")
+
+    assert captured.get("budget_seconds") == 7.0
 
 
 def test_nli_enabled_llm_failure_still_skipped_through_safe_verify(monkeypatch):

@@ -335,6 +335,11 @@ def _safe_verify_certificate(req: Any, text: str) -> Dict[str, Any]:
                 premise=_certificate_premise(req),
                 text=text,
                 call_llm=_call_certificate_nli,
+                # CRITICAL 리뷰: NLI_TIMEOUT_SECONDS 는 이 호출 전체의 예산이지
+                # 문장마다 새로 지급되는 예산이 아니다. 여기서 명시적으로
+                # 넘기지 않으면 verify_certificate_nli 의 함수 기본값만 쓰이게
+                # 되어, 문장이 여럿인 소견에서 예산이 문장 수만큼 불어난다.
+                budget_seconds=NLI_TIMEOUT_SECONDS,
             ))
         return VerificationResult(
             status=aggregate_status(checks),
