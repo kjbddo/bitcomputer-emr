@@ -54,4 +54,28 @@ class ValidationAgentResponseTest {
         // 기본값이 조용히 사라지는 걸 못 잡는다. 파이썬 쪽 기본값과 동일한 값까지 확인한다.
         assertThat(parsed.getLlmStatus()).isEqualTo("fallback");
     }
+
+    @Test
+    void roundTripPreservesVerification() throws Exception {
+        String upstream = "{"
+                + "\"overallStatus\":\"PASS\",\"summary\":\"ok\","
+                + "\"verification\":{\"status\":\"flagged\",\"checks\":[],"
+                + "\"skippedReason\":null}"
+                + "}";
+
+        ValidationAgentResponse parsed =
+                objectMapper.readValue(upstream, ValidationAgentResponse.class);
+        String roundTripped = objectMapper.writeValueAsString(parsed);
+
+        assertThat(parsed.getVerification()).isNotNull();
+        assertThat(roundTripped).contains("\"status\":\"flagged\"");
+    }
+
+    @Test
+    void missingVerificationIsNull() throws Exception {
+        ValidationAgentResponse parsed = objectMapper.readValue(
+                "{\"overallStatus\":\"PASS\",\"summary\":\"s\"}", ValidationAgentResponse.class);
+
+        assertThat(parsed.getVerification()).isNull();
+    }
 }

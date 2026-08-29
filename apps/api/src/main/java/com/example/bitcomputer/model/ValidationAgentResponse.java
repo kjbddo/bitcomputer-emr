@@ -32,6 +32,9 @@ public class ValidationAgentResponse {
     @Builder.Default
     private String llmStatus = "fallback";
 
+    /** 출력이 도구 관측값으로 추적되는지: {status, checks[], skippedReason}. */
+    private Map<String, Object> verification;
+
     @JsonProperty("shouldNotifyDoctor")
     private Boolean shouldNotifyDoctor;
 
