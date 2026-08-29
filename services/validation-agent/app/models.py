@@ -47,3 +47,7 @@ class ValidationAgentResponse(BaseModel):
     # 기본값은 "fallback" 로 fail-closed 한다 — 이 필드가 누락된 채 역직렬화되면
     # "모델이 돌았다"고 오인되는 대신 "LLM 미사용" 쪽으로만 틀리게 한다(리뷰 finding 5).
     llmStatus: Literal["real", "stub", "fallback"] = "fallback"
+    # 출력이 도구 관측값으로 추적되는지. llmStatus 와 다른 축이다.
+    # 기본값을 두지 않는 이유는 llmStatus 와 같다 — 없는 것을 있는 것처럼
+    # 보이게 하면 안 된다. 웹은 None 을 "미검증"으로 렌더한다.
+    verification: Optional[Dict[str, Any]] = None

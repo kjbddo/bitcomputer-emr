@@ -2,6 +2,7 @@ import hashlib
 import pathlib
 
 from app.verification import verify_validation
+from app.models import ValidationAgentResponse
 
 
 ARTICLES = [
@@ -452,3 +453,125 @@ def test_contract_copy_matches_prescription():
         return text[text.index('"""', text.index('"""') + 3) + 3:]
     assert hashlib.sha256(body(here).encode()).hexdigest() == \
            hashlib.sha256(body(other).encode()).hexdigest()
+
+
+# --- Task 7: 응답 배선 (app.models.ValidationAgentResponse / app.agent) ---
+
+def test_response_model_has_verification_field():
+    assert "verification" in ValidationAgentResponse.model_fields
+
+
+def test_verification_defaults_to_none():
+    """기본값을 만들면 검증하지 않은 것이 검증된 것처럼 보인다."""
+    assert ValidationAgentResponse.model_fields["verification"].default is None
+
+
+def test_agent_verification_uses_observations_not_request(monkeypatch):
+    """검증기에 도구 관측값이 간다. 요청을 넘기면 검증이 무의미해진다."""
+    import app.agent as agent
+
+    seen = {}
+
+    def spy(*, pubmed_articles, finder_candidates, response_dict):
+        seen["articles"] = pubmed_articles
+        raise RuntimeError("여기서 멈춘다")
+
+    monkeypatch.setattr(agent, "verify_validation", spy)
+    result = agent._safe_verify({"pubmed_articles": [{"pmid": "1"}]}, {})
+
+    assert seen["articles"] == [{"pmid": "1"}]
+    assert result["status"] == "skipped"
+
+
+def test_safe_verify_flags_response_codes_outside_raw_finder_observation():
+    """검증기가 실제로 대조하는 것이 관측값 원본(state["finder_candidates"])인지,
+    응답에 그대로 실리는 정규화값(state["candidate_prescriptions"])인지를
+    구분하는 배선 테스트. verify_validation 을 대역으로 바꾸지 않고 진짜
+    구현을 그대로 통과시킨다.
+
+    응답의 candidatePrescriptions 에는 실제 finder 관측값 밖의 코드("FORGED")를
+    하나 심어 둔다. _safe_verify 가 진짜 관측값(state["finder_candidates"])과
+    대조하면 이 코드는 finder 밖의 코드로 flagged 돼야 한다.
+
+    만약 누군가 _safe_verify 의 배선을 state["finder_candidates"] 대신
+    state["candidate_prescriptions"](=응답에 그대로 실리는 정규화값, 이
+    테스트에서는 일부러 FORGED 까지 포함시켜 둔다)으로 바꿔치기하면, 응답이
+    자기 자신과 비교돼 known_codes 에 FORGED 까지 섞여 outside 계산이 비고
+    "ok" 가 나와 이 단언이 깨진다 — 즉 이 테스트는 그 바꿔치기를 red 로
+    잡아내기 위한 것이다.
+    """
+    import app.agent as agent
+
+    state = {
+        "finder_candidates": [{"prescription_code": "REAL1"}],
+        "candidate_prescriptions": [
+            {"prescription_code": "REAL1"}, {"prescription_code": "FORGED"},
+        ],
+    }
+    response_dict = {
+        "pubmedEvidenceSummary": "",
+        "checks": [],
+        "candidatePrescriptions": [
+            {"prescription_code": "REAL1"}, {"prescription_code": "FORGED"},
+        ],
+        "reasoningTrace": [],
+    }
+
+    result = agent._safe_verify(state, response_dict)
+
+    assert result["status"] == "flagged"
+    finder_checks = [c for c in result["checks"] if c["id"] == "candidates_from_finder"]
+    assert finder_checks and finder_checks[0]["outcome"] == "flagged"
+
+
+def _request():
+    from app.models import ValidationAgentRequest
+    return ValidationAgentRequest(
+        historyId=1,
+        symptoms="기침",
+        savedDiseases=[{"code": "J00", "name": "감기"}],
+        savedPrescriptions=[],
+    )
+
+
+def _sequenced_llm_decision(sequence):
+    """`_llm_tool_decision` 을 대신할 결정론적 대역(tests/test_llm_status.py 복제)."""
+    remaining = iter(sequence)
+
+    def fake(state, reasoning_trace, pubmed_queries, iteration):
+        return next(remaining, None)
+
+    return fake
+
+
+def _install_llm_decisions(monkeypatch):
+    """tests/test_llm_status.py 의 동명 헬퍼 복제. 결정 루프의 모든 반복이
+    LLM 결정이고 Prescription Finder 를 반드시 거치도록 시퀀스를 구성한다."""
+    import app.agent as agent
+    monkeypatch.setenv("LLM_PROVIDER", "real")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
+    monkeypatch.setattr(agent, "_create_llm", lambda: None)
+    monkeypatch.setattr(
+        agent,
+        "_llm_tool_decision",
+        _sequenced_llm_decision([
+            {"thought": "x-ray 로드", "action": "X-ray Result Loader", "actionInput": {}},
+            {"thought": "상병 검증", "action": "Disease Validator", "actionInput": {}},
+            {"thought": "처방 검증", "action": "Prescription Validator", "actionInput": {}},
+            {"thought": "처방 후보 조회", "action": "Prescription Finder", "actionInput": {}},
+            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
+        ]),
+    )
+
+
+def test_response_actually_carries_verification(monkeypatch):
+    """모델에 필드가 있는 것과 응답이 그것을 채우는 것은 다른 말이다.
+    배선이 끊겨도 필드 존재 테스트는 통과하므로 이 단언이 필요하다."""
+    from app.agent import run_validation_agent
+
+    _install_llm_decisions(monkeypatch)
+
+    response = run_validation_agent(_request())
+
+    assert response.verification is not None
+    assert response.verification["status"] in {"passed", "flagged", "skipped"}
