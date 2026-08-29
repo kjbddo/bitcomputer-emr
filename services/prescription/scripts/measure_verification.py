@@ -12,7 +12,7 @@ import argparse
 import collections
 import json
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import httpx
 
@@ -36,6 +36,7 @@ def main() -> int:
     status_counts: collections.Counter = collections.Counter()
     check_counts: collections.Counter = collections.Counter()
     http_failures: List[str] = []
+    flagged_details: List[Tuple[str, Any, Any, Any]] = []
 
     with httpx.Client(timeout=args.timeout) as client:
         for scenario in scenarios:
@@ -62,6 +63,14 @@ def main() -> int:
             status_counts[verification.get("status", "no_status")] += 1
             for check in verification.get("checks") or []:
                 check_counts[(check.get("id"), check.get("outcome"))] += 1
+                # flagged 는 이 계측이 찾는 유일한 사건이다. 집계 숫자만 남기면
+                # "왜 걸렸는지"를 되물을 수 없다 — 4차 실측에서 실제로 한 건이
+                # 발화했는데 evidence 를 버려서 원인을 끝내 못 밝혔다.
+                if check.get("outcome") == "flagged":
+                    flagged_details.append(
+                        (case_id, check.get("id"), check.get("target"),
+                         check.get("evidence"))
+                    )
 
     total = len(scenarios)
     print(f"시나리오 {total}건\n")
@@ -81,6 +90,12 @@ def main() -> int:
         n = sum(outcomes.values())
         parts = " ".join(f"{k}={v}" for k, v in sorted(outcomes.items()))
         print(f"  {check_id:22s} {parts:34s} (총 {n})")
+
+    if flagged_details:
+        print(f"\nflagged {len(flagged_details)}건 (근거 전문):")
+        for case_id, check_id, target, evidence in flagged_details:
+            print(f"  [{case_id}] {check_id} @ {target}")
+            print(f"      {evidence}")
 
     if http_failures:
         print(f"\n응답을 못 받은 케이스 {len(http_failures)}건:")
