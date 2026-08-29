@@ -437,6 +437,80 @@ describe("처방 표의 항목 단위 검증 표시", () => {
     expect(screen.getByText(/미검증 1건/)).toBeInTheDocument();
   });
 
+  // --- M1: 응답 단위 검사가 처방 화면에 도달한다 ---------------------------
+  //
+  // schema_top3 는 target="response" 라 항목별 집계에 들어가지 않는다. 요약
+  // 줄이 항목 outcome 만 세면 이 검사는 flagged 여도 처방 표면에 아무 표시가
+  // 남지 않는다. 항목 문제와 응답 문제는 의사에게 다른 정보이므로 한 숫자로
+  // 합치지 않고 각각 읽을 수 있게 낸다.
+
+  it("항목이 전부 ok 여도 응답 단위 검사가 flagged 면 요약에 나타난다", async () => {
+    mockJobWithPrescriptionVerification("job-v-m1-1", {
+      status: "flagged",
+      checks: [
+        { id: "schema_top3", target: "response", outcome: "flagged", evidence: "rank=[1,1,3]" },
+        { id: "code_in_candidates", target: "prescription[1]", outcome: "ok", evidence: "" },
+        { id: "confidence_in_range", target: "prescription[1]", outcome: "ok", evidence: "" },
+      ],
+    });
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    expect(await screen.findByText("검증(응답 전체): 근거 불일치")).toBeInTheDocument();
+  });
+
+  it("항목 문제와 응답 문제를 한 숫자로 합치지 않고 따로 낸다", async () => {
+    mockJobWithPrescriptionVerification("job-v-m1-2", {
+      status: "flagged",
+      checks: [
+        { id: "schema_top3", target: "response", outcome: "flagged", evidence: "" },
+        { id: "code_in_candidates", target: "prescription[1]", outcome: "skipped", evidence: "" },
+      ],
+    });
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    // 항목 줄: 1건 중 미검증 1건 (응답 단위 flagged 가 항목 숫자에 섞이지 않는다)
+    expect(await screen.findByText("검증: 1건 중 미검증 1건")).toBeInTheDocument();
+    // 응답 줄: 따로
+    expect(screen.getByText("검증(응답 전체): 근거 불일치")).toBeInTheDocument();
+  });
+
+  // fail-closed(GC-3). 응답 단위 검사가 오지 않은 응답을 "응답 단위는 문제
+  // 없음" 으로 읽으면 이 표시가 존재할 이유가 사라진다.
+  it("응답 단위 검사가 아예 없으면 응답 줄이 미검증으로 뜬다", async () => {
+    mockJobWithPrescriptionVerification("job-v-m1-3", {
+      status: "passed",
+      checks: [
+        { id: "code_in_candidates", target: "prescription[1]", outcome: "ok", evidence: "" },
+      ],
+    });
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    expect(await screen.findByText("검증(응답 전체): 미검증")).toBeInTheDocument();
+  });
+
+  it("항목과 응답 단위가 모두 정상이면 요약 줄이 아예 뜨지 않는다", async () => {
+    mockJobWithPrescriptionVerification("job-v-m1-4", {
+      status: "passed",
+      checks: [
+        { id: "schema_top3", target: "response", outcome: "ok", evidence: "" },
+        { id: "code_in_candidates", target: "prescription[1]", outcome: "ok", evidence: "" },
+      ],
+    });
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    await screen.findByRole("table");
+    expect(screen.queryByText(/^검증: /)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^검증\(응답 전체\): /)).not.toBeInTheDocument();
+  });
+
   // Task 10: modalCardHead 에는 이미 overallStatus 배지와 모델 배지가 있다 —
   // 검증 표시는 그 아래(modalReason 과 검증 이유 목록 사이) 별도 줄에 서야
   // 한다. 세 배지를 한 줄에 쌓으면 셋 다 안 읽힌다(spec §7.1).
@@ -686,6 +760,63 @@ describe("처방 상세 선택으로 처방을 바꾸면 그 rank 의 검증이 
     expect(screen.getByText("근거 불일치")).toBeInTheDocument();
     // flagged 와 skipped 를 따로 세는 요약도 스왑을 반영해 이동한다
     expect(screen.getByText(/검증: 2건 중 근거 불일치 1건, 미검증 1건/)).toBeInTheDocument();
+  });
+
+  // 응답 단위 검사(schema_top3)는 "rank 집합이 {1,2,3} 인가" 와 "코드 중복이
+  // 없는가" 를 그때 화면에 있던 처방코드 집합에 대해 판정한 결과다. 스왑은 그
+  // 집합을 바꾼다 — 스왑으로 들어온 코드가 다른 행과 겹쳐도 옛 판정은 여전히
+  // ok 이므로, 그대로 두면 검사된 적 없는 조합이 "응답 단위 이상 없음" 으로
+  // 보인다. 항목 배지와 같은 이유로 스왑이 있으면 응답 줄도 미검증이다.
+  it("스왑이 있으면 응답 단위 판정도 미검증으로 무효화된다", async () => {
+    mockedRecommend.mockResolvedValue({ jobId: "job-swap-3", historyId: 10, status: "RUNNING" });
+    mockedGetJob.mockResolvedValue({
+      jobId: "job-swap-3",
+      historyId: 10,
+      status: "DONE",
+      result: {
+        overallStatus: "PASS",
+        summary: "이상 없음",
+        llmStatus: "real",
+        prescriptionVerification: {
+          status: "passed",
+          checks: [
+            { id: "schema_top3", target: "response", outcome: "ok", evidence: "" },
+            { id: "code_in_candidates", target: "prescription[1]", outcome: "ok", evidence: "" },
+            { id: "code_in_candidates", target: "prescription[2]", outcome: "ok", evidence: "" },
+          ],
+        },
+        recommendedPrescriptions: [
+          { id: 1, rank: 1, prescription_code: "C1", prescription_name: "약1", reason: "", confidence_score: 0.9, dose: 1, time: 1, days: 1 },
+          { id: 2, rank: 2, prescription_code: "C2", prescription_name: "약2", reason: "", confidence_score: 0.9, dose: 1, time: 1, days: 1 },
+        ],
+      },
+    } as unknown as ValidationJobResponse);
+    mockedSearch.mockResolvedValue({
+      items: [{ id: 99, code: "C2", name: "약2", dose: 2, time: 2, days: 2 }],
+      total: 1,
+      page: 0,
+      pageSize: 20,
+    });
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "검증 완료" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "확인" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "검증 완료" })).not.toBeInTheDocument());
+
+    // 스왑 전: 응답 단위도 항목도 전부 ok 라 요약 줄이 없다
+    expect(screen.queryByText("검증(응답 전체): 미검증")).not.toBeInTheDocument();
+
+    // rank1 을 rank2 와 같은 코드("C2")로 스왑한다 — schema_top3 의 코드중복
+    // 조건이 다시 판정돼야 할 상황이지만 옛 판정은 여전히 ok 다.
+    const detailButtons = screen.getAllByRole("button", { name: "처방 상세 선택" });
+    fireEvent.click(detailButtons[0]);
+    const pickerDialog = await screen.findByRole("dialog", { name: "처방 상세 선택" });
+    fireEvent.click(await within(pickerDialog).findByRole("button", { name: "선택" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "처방 상세 선택" })).not.toBeInTheDocument());
+
+    expect(await screen.findByText("검증(응답 전체): 미검증")).toBeInTheDocument();
   });
 
   // 스왑 집합은 그것이 무효화하는 aiVerification 과 정확히 같은 생명주기를 가져야

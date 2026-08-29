@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMedicalSelection, type PrescriptionFeedbackItem } from "@store/medicalSelection";
 import { Badge, Button, EmptyState, Modal, Panel, Table } from "@/components/ui";
 import styles from "./Diagnosis.module.css";
@@ -19,6 +19,7 @@ import { HttpError } from "@/services/http/types";
 import { llmStatusNotice } from "@/utils/llmStatus";
 import {
   itemVerificationOutcome,
+  responseVerificationOutcome,
   verificationNotice,
   type Verification,
 } from "@/utils/verificationNotice";
@@ -451,6 +452,21 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
     [aiVerification, swappedRanks]
   );
 
+  // 응답 단위 판정(최종 리뷰 M1). schema_top3 는 target="response" 라
+  // getVerificationOutcome(`prescription[N]`) 조회에 절대 걸리지 않는다 —
+  // 항목 배지만 있으면 이 검사는 flagged 여도 처방 화면에 아무 표시가 없다.
+  //
+  // 스왑이 하나라도 있으면 미검증이다. schema_top3 는 "rank 집합이 {1,2,3}
+  // 인가" 와 "코드 중복이 없는가" 를 그때 화면에 있던 처방코드 집합에 대해
+  // 판정한 결과인데, 스왑은 그 집합을 바꾼다. 스왑으로 들어온 코드가 다른
+  // 행과 겹쳐도 옛 판정은 여전히 ok 이므로, 그대로 두면 검사된 적 없는
+  // 조합이 "응답 단위 이상 없음" 으로 보인다 — 항목 배지에서 막은 것과
+  // 정확히 같은 반전이다.
+  const responseOutcome = useMemo(() => {
+    if (swappedRanks.size > 0) return "skipped" as const;
+    return responseVerificationOutcome(aiVerification);
+  }, [aiVerification, swappedRanks]);
+
   const handleApplySelectedRecommendations = useCallback(async () => {
     if (aiRecommendations.length === 0) {
       alert("먼저 AI 추천을 생성해주세요.");
@@ -732,16 +748,30 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
                   const outcomes = aiRecommendations.map((r) => getVerificationOutcome(r.rank));
                   const flagged = outcomes.filter((o) => o === "flagged").length;
                   const skipped = outcomes.filter((o) => o === "skipped").length;
-                  if (flagged === 0 && skipped === 0) return null;
+                  if (flagged === 0 && skipped === 0 && responseOutcome === "ok") return null;
                   // flagged 와 skipped 를 한 숫자로 뭉치지 않는다(spec §7.3).
                   // "근거와 어긋난다"와 "대조할 근거가 없었다"는 다른 정보다.
                   const parts: string[] = [];
                   if (flagged > 0) parts.push(`근거 불일치 ${flagged}건`);
                   if (skipped > 0) parts.push(`미검증 ${skipped}건`);
+                  // 항목 단위와 응답 단위를 한 숫자로 합치지 않고 두 줄로 낸다
+                  // (최종 리뷰 M1). "3건 중 1건" 에 응답 단위 판정을 더하면
+                  // 의사가 어느 처방 행을 봐야 하는지 알 수 없어진다.
+                  const responseNotice =
+                    responseOutcome === "ok" ? null : verificationNotice(responseOutcome);
                   return (
-                    <span className={styles.verificationSummary}>
-                      {`검증: ${aiRecommendations.length}건 중 ${parts.join(", ")}`}
-                    </span>
+                    <>
+                      {parts.length > 0 ? (
+                        <span className={styles.verificationSummary}>
+                          {`검증: ${aiRecommendations.length}건 중 ${parts.join(", ")}`}
+                        </span>
+                      ) : null}
+                      {responseNotice ? (
+                        <span className={styles.verificationSummary}>
+                          {`검증(응답 전체): ${responseNotice.label}`}
+                        </span>
+                      ) : null}
+                    </>
                   );
                 })()}
               </span>

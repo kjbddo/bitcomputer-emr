@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { itemVerificationOutcome, verificationNotice } from "../verificationNotice";
+import {
+  itemVerificationOutcome,
+  responseVerificationOutcome,
+  verificationNotice,
+} from "../verificationNotice";
 
 describe("verificationNotice", () => {
   it("passed 면 아무것도 표시하지 않는다", () => {
@@ -69,5 +73,82 @@ describe("itemVerificationOutcome", () => {
       ],
     };
     expect(itemVerificationOutcome(withBogusOutcome, "prescription[5]")).toBe("skipped");
+  });
+});
+
+// M1 — 응답 단위 검사(target="response", 예: schema_top3)는 항목 단위 집계에
+// 들어가지 않는다. 처방 화면 요약이 항목 outcome 만 세면 이 검사는 무엇을
+// 보고하든 화면에 나타나지 않는다. 응답 단위 판정을 별도로 뽑아낸다.
+describe("responseVerificationOutcome", () => {
+  it("응답 단위 검사가 flagged 면 flagged", () => {
+    expect(
+      responseVerificationOutcome({
+        status: "flagged",
+        checks: [
+          { id: "schema_top3", target: "response", outcome: "flagged", evidence: "" },
+          { id: "code_in_candidates", target: "prescription[1]", outcome: "ok", evidence: "" },
+        ],
+      })
+    ).toBe("flagged");
+  });
+
+  it("응답 단위 검사가 전부 ok 면 ok", () => {
+    expect(
+      responseVerificationOutcome({
+        status: "passed",
+        checks: [
+          { id: "schema_top3", target: "response", outcome: "ok", evidence: "" },
+          { id: "code_in_candidates", target: "prescription[1]", outcome: "flagged", evidence: "" },
+        ],
+      })
+    ).toBe("ok");
+  });
+
+  // 항목 단위 판정과 뒤섞이면 안 된다. 항목이 flagged 라고 응답 단위까지
+  // flagged 로 물들면 의사가 "표의 어느 행 문제인지" 와 "응답 전체 형태
+  // 문제인지" 를 구분할 수 없다.
+  it("항목 단위 검사만 flagged 여도 응답 단위 판정은 물들지 않는다", () => {
+    expect(
+      responseVerificationOutcome({
+        status: "flagged",
+        checks: [
+          { id: "schema_top3", target: "response", outcome: "ok", evidence: "" },
+          { id: "code_in_candidates", target: "prescription[1]", outcome: "flagged", evidence: "" },
+        ],
+      })
+    ).toBe("ok");
+  });
+
+  // fail-closed(GC-3). 응답 단위 검사가 아예 없으면 "응답 단위로는 검증된 적
+  // 없음" 이지 "통과" 가 아니다.
+  it("응답 단위 검사가 없으면 skipped", () => {
+    expect(
+      responseVerificationOutcome({
+        status: "passed",
+        checks: [
+          { id: "code_in_candidates", target: "prescription[1]", outcome: "ok", evidence: "" },
+        ],
+      })
+    ).toBe("skipped");
+  });
+
+  it("verification 자체가 없거나 null 이면 skipped", () => {
+    expect(responseVerificationOutcome(undefined)).toBe("skipped");
+    expect(responseVerificationOutcome(null)).toBe("skipped");
+  });
+
+  it("checks 가 배열이 아니면 skipped", () => {
+    expect(
+      responseVerificationOutcome({ status: "passed", checks: null })
+    ).toBe("skipped");
+  });
+
+  it("계약 밖 outcome 값은 ok 로 새지 않고 skipped", () => {
+    expect(
+      responseVerificationOutcome({
+        status: "passed",
+        checks: [{ id: "schema_top3", target: "response", outcome: "OK", evidence: "" }],
+      })
+    ).toBe("skipped");
   });
 });
