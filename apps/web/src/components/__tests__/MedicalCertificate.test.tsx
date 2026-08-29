@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeAll, beforeEach } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 // jsdom 은 <dialog> 의 모달 동작을 구현하지 않는다. open 속성만 흉내 낸다.
 // (apps/web/src/components/__tests__/Diagnosis.test.tsx 와 동일한 폴리필)
@@ -136,5 +136,110 @@ describe("진단서 AI 미리보기의 llmStatus 배선", () => {
 
     const dialog = await screen.findByRole("dialog");
     await within(dialog).findByText(/모델 미사용/);
+  });
+
+  // 근거 배지가 추가되면서 llmStatus 배지도 나란히 설 수 있다. 접두어가 없으면
+  // Diagnosis.tsx 모달과 같은 문제(라벨 없는 amber 배지 두 개)가 재현된다.
+  it("모델 접두어가 배지 옆에 표시된다", async () => {
+    vi.mocked(generateDocumentCertificateByHistory).mockResolvedValue({
+      grantType: "Bearer",
+      accessToken: "a",
+      refreshToken: "r",
+      medicalCertificate: "환자는 통원 치료가 필요합니다.",
+      llmStatus: "fallback",
+    });
+    renderWithAppliedDiagnosis();
+
+    fireEvent.click(screen.getByRole("button", { name: /AI/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText("모델")).toBeInTheDocument();
+  });
+});
+
+describe("진단서 AI 미리보기의 근거 검증 표시", () => {
+  it("진단서 검증이 flagged 면 미리보기에 근거 불일치가 뜬다", async () => {
+    vi.mocked(generateDocumentCertificateByHistory).mockResolvedValue({
+      grantType: "Bearer", accessToken: "a", refreshToken: "r",
+      medicalCertificate: "소견",
+      llmStatus: "real",
+      verification: {
+        status: "flagged",
+        checks: [{ id: "cited_code_known", target: "certificate", outcome: "flagged", evidence: "K52.9" }],
+      },
+    });
+    renderWithAppliedDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: /AI/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText("근거 불일치")).toBeInTheDocument();
+  });
+
+  it("verification 이 없으면 미검증으로 표시한다", async () => {
+    vi.mocked(generateDocumentCertificateByHistory).mockResolvedValue({
+      grantType: "Bearer", accessToken: "a", refreshToken: "r",
+      medicalCertificate: "소견", llmStatus: "real",
+    });
+    renderWithAppliedDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: /AI/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText("미검증")).toBeInTheDocument();
+  });
+
+  it("passed 면 검증 표시가 없다", async () => {
+    vi.mocked(generateDocumentCertificateByHistory).mockResolvedValue({
+      grantType: "Bearer", accessToken: "a", refreshToken: "r",
+      medicalCertificate: "소견", llmStatus: "real",
+      verification: { status: "passed", checks: [] },
+    });
+    renderWithAppliedDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: /AI/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByLabelText("AI 생성 소견 미리보기");
+    expect(within(dialog).queryByText("미검증")).toBeNull();
+    expect(within(dialog).queryByText("근거 불일치")).toBeNull();
+  });
+
+  // 근거 접두어가 지워지면(라벨 없는 배지로 되돌아가면) 이 테스트가 잡는다 —
+  // 모델(llmStatus)과 근거(verification) 두 배지가 나란히 설 때 어느 쪽인지
+  // 구분할 유일한 단서가 이 접두어다.
+  it("근거 접두어가 배지 옆에 표시된다", async () => {
+    vi.mocked(generateDocumentCertificateByHistory).mockResolvedValue({
+      grantType: "Bearer", accessToken: "a", refreshToken: "r",
+      medicalCertificate: "소견",
+      llmStatus: "real",
+      verification: { status: "flagged", checks: [] },
+    });
+    renderWithAppliedDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: /AI/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText("근거")).toBeInTheDocument();
+  });
+
+  // 생명주기: 미리보기 모달의 근거 표시는 그 미리보기가 담은 정확히 그 텍스트를
+  // 설명한다. 수락하면 모달은 사라지고 텍스트는 편집 가능한 opinion 필드로
+  // 옮겨간다 — 그 시점부터 의사가 자유롭게 고칠 수 있는 텍스트이므로, 검증
+  // 당시의 근거 표시가 화면 어디에도 남아있으면 안 된다(더 이상 설명하는
+  // 대상과 일치한다고 보장할 수 없다).
+  it("수락 후에는 근거 표시가 화면에 남지 않는다", async () => {
+    vi.mocked(generateDocumentCertificateByHistory).mockResolvedValue({
+      grantType: "Bearer", accessToken: "a", refreshToken: "r",
+      medicalCertificate: "소견",
+      llmStatus: "real",
+      verification: { status: "flagged", checks: [] },
+    });
+    renderWithAppliedDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: /AI/ }));
+
+    await screen.findByRole("dialog");
+    expect(screen.getByText("근거 불일치")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "수락" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.queryByText("근거 불일치")).toBeNull();
   });
 });

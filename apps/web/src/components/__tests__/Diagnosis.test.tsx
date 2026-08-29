@@ -364,7 +364,10 @@ describe("처방 표의 항목 단위 검증 표시", () => {
     renderDiagnosis();
     fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
 
-    expect(await screen.findByText("근거 불일치")).toBeInTheDocument();
+    // Task 10부터 검증 모달도 같은 문구("근거 불일치")를 낼 수 있어, 이 테스트가
+    // 확인하려는 "처방 행" 표시는 표로 범위를 좁혀야 모달의 표시와 섞이지 않는다.
+    const table = await screen.findByRole("table");
+    expect(await within(table).findByText("근거 불일치")).toBeInTheDocument();
   });
 
   it("verification 이 없으면 미검증으로 표시한다", async () => {
@@ -373,7 +376,8 @@ describe("처방 표의 항목 단위 검증 표시", () => {
     renderDiagnosis();
     fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
 
-    expect(await screen.findByText("미검증")).toBeInTheDocument();
+    const table = await screen.findByRole("table");
+    expect(await within(table).findByText("미검증")).toBeInTheDocument();
   });
 
   it("모달을 닫아도 패널의 검증 표시가 남는다", async () => {
@@ -424,6 +428,20 @@ describe("처방 표의 항목 단위 검증 표시", () => {
 
     expect(await screen.findByText(/근거 불일치 1건/)).toBeInTheDocument();
     expect(screen.getByText(/미검증 1건/)).toBeInTheDocument();
+  });
+
+  // Task 10: modalCardHead 에는 이미 overallStatus 배지와 모델 배지가 있다 —
+  // 검증 표시는 그 아래(modalReason 과 검증 이유 목록 사이) 별도 줄에 서야
+  // 한다. 세 배지를 한 줄에 쌓으면 셋 다 안 읽힌다(spec §7.1).
+  it("검증 모달에 근거 표시가 뜬다", async () => {
+    mockJobWithVerification("job-v-4", { status: "flagged", checks: [] });
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText("근거")).toBeInTheDocument();
+    expect(within(dialog).getByText("근거 불일치")).toBeInTheDocument();
   });
 });
 

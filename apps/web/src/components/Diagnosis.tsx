@@ -567,6 +567,15 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
             <p className={styles.modalReason}>
               {validationModal.result?.summary ?? validationModal.summary ?? "검증 결과를 확인했습니다."}
             </p>
+            {(() => {
+              const notice = verificationNotice(validationModal.result?.verification?.status);
+              return notice ? (
+                <div className={styles.modalVerification}>
+                  <span className={styles.modalVerificationLabel}>근거</span>
+                  <Badge tone={notice.tone}>{notice.label}</Badge>
+                </div>
+              ) : null;
+            })()}
             {validationReasons.length > 0 && (
               <div className={styles.modalReasons}>
                 <strong>검증 이유</strong>
