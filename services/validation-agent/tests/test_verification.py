@@ -206,6 +206,148 @@ def test_multiple_pmids_with_hangul_separator_both_present_ok():
     assert _outcomes(result, "cited_pmid_in_evidence") == ["ok"]
 
 
+# 리뷰(4회차): 위 테스트는 두 id 가 모두 known 이라 "구분자가 작동했다"와
+# "구분자가 고장나 첫 id 만 봤다"를 구분하지 못한다(뮤테이션으로 및 지원을
+# 통째로 지워도 그린으로 남는 것으로 확인됨). 비대칭 픽스처(하나는 known,
+# 하나는 조작)로 구분자별 테스트를 다시 만든다 — flagged 와 evidence 에
+# 조작된 id 가 실제로 이름이 올라오는지까지 확인해야 구분자가 두 번째
+# id 까지 실제로 잡았음을 증명한다.
+def test_multiple_pmids_with_hangul_separator_fabricated_is_flagged():
+    response = {
+        "pubmedEvidenceSummary": "PMID 11111111 및 99999999 근거로",
+        "checks": [], "candidatePrescriptions": [], "reasoningTrace": [],
+    }
+    result = verify_validation(
+        pubmed_articles=[{"pmid": "11111111"}], finder_candidates=[],
+        response_dict=response)
+
+    assert result.status == "flagged"
+    assert "flagged" in _outcomes(result, "cited_pmid_in_evidence")
+    evidence = _evidence(result, "cited_pmid_in_evidence")[0]
+    assert "99999999" in evidence
+
+
+# `·` 는 패턴 주석에 구분자로 이름이 올라 있었지만 테스트가 아예 없었다.
+def test_multiple_pmids_with_middle_dot_separator_fabricated_is_flagged():
+    response = {
+        "pubmedEvidenceSummary": "PMID 11111111·99999999 근거로",
+        "checks": [], "candidatePrescriptions": [], "reasoningTrace": [],
+    }
+    result = verify_validation(
+        pubmed_articles=[{"pmid": "11111111"}], finder_candidates=[],
+        response_dict=response)
+
+    assert result.status == "flagged"
+    assert "flagged" in _outcomes(result, "cited_pmid_in_evidence")
+    evidence = _evidence(result, "cited_pmid_in_evidence")[0]
+    assert "99999999" in evidence
+
+
+# --- 리뷰(4회차): 구분자를 열거하는 방식 자체가 뚫린다. 열거에 없는
+# 구분자(`/`, `;`, 공백 없이 붙는 조사 `와`/`과`)는 전부 조작 id 를 숨긴다.
+# 구분자를 "모양"으로 정의한다: 선택적 공백 + ASCII 영숫자도 공백도 아닌
+# 문자 정확히 1개 + 선택적 공백. ---
+def test_multiple_pmids_with_slash_separator_fabricated_is_flagged():
+    response = {
+        "pubmedEvidenceSummary": "PMID 11111111/99999999 근거로 처방함",
+        "checks": [], "candidatePrescriptions": [], "reasoningTrace": [],
+    }
+    result = verify_validation(
+        pubmed_articles=[{"pmid": "11111111"}], finder_candidates=[],
+        response_dict=response)
+
+    assert result.status == "flagged"
+    assert "flagged" in _outcomes(result, "cited_pmid_in_evidence")
+    evidence = _evidence(result, "cited_pmid_in_evidence")[0]
+    assert "99999999" in evidence
+
+
+def test_multiple_pmids_with_semicolon_separator_fabricated_is_flagged():
+    response = {
+        "pubmedEvidenceSummary": "PMID 11111111;99999999 근거로 처방함",
+        "checks": [], "candidatePrescriptions": [], "reasoningTrace": [],
+    }
+    result = verify_validation(
+        pubmed_articles=[{"pmid": "11111111"}], finder_candidates=[],
+        response_dict=response)
+
+    assert result.status == "flagged"
+    assert "flagged" in _outcomes(result, "cited_pmid_in_evidence")
+    evidence = _evidence(result, "cited_pmid_in_evidence")[0]
+    assert "99999999" in evidence
+
+
+def test_multiple_pmids_with_attached_particle_separator_fabricated_is_flagged():
+    # "와"(보통의 한국어 접속 조사)가 앞 숫자에 공백 없이 붙는 흔한 형태.
+    response = {
+        "pubmedEvidenceSummary": "PMID 11111111와 99999999 근거로 처방함",
+        "checks": [], "candidatePrescriptions": [], "reasoningTrace": [],
+    }
+    result = verify_validation(
+        pubmed_articles=[{"pmid": "11111111"}], finder_candidates=[],
+        response_dict=response)
+
+    assert result.status == "flagged"
+    assert "flagged" in _outcomes(result, "cited_pmid_in_evidence")
+    evidence = _evidence(result, "cited_pmid_in_evidence")[0]
+    assert "99999999" in evidence
+
+
+# 이전 라운드가 지운 오탐이 "구분자는 공백이면 충분하다"는 규칙으로
+# 되살아난다: 인용 뒤에 우연히 7~8자리인 용량 숫자가 공백만 두고 붙으면
+# 목록에 딸려 들어가면 안 된다. 순수 공백은 "특수문자 정확히 1개"라는
+# 모양 규칙을 만족하지 못하므로 목록이 거기서 끊겨야 한다.
+def test_pmid_list_does_not_swallow_whitespace_separated_dosage():
+    response = {
+        "pubmedEvidenceSummary": "PMID 11111111 1234567 mg 투여",
+        "checks": [], "candidatePrescriptions": [], "reasoningTrace": [],
+    }
+    result = verify_validation(
+        pubmed_articles=[{"pmid": "11111111"}], finder_candidates=[],
+        response_dict=response)
+
+    assert _outcomes(result, "cited_pmid_in_evidence") == ["ok"]
+    evidence = _evidence(result, "cited_pmid_in_evidence")[0]
+    assert "1234567" not in evidence
+
+
+# 두 글자 이상의 틈(예: "근거")은 목록을 끊는다 — 구분자는 정확히 1문자여야
+# 한다는 모양 규칙 때문이다. 산문 중간의 숫자가 우연히 이어져도 목록에
+# 딸려 들어가지 않는다.
+def test_pmid_list_stops_at_multi_character_gap():
+    response = {
+        "pubmedEvidenceSummary": "PMID 11111111 근거 99999999",
+        "checks": [], "candidatePrescriptions": [], "reasoningTrace": [],
+    }
+    result = verify_validation(
+        pubmed_articles=[{"pmid": "11111111"}], finder_candidates=[],
+        response_dict=response)
+
+    assert _outcomes(result, "cited_pmid_in_evidence") == ["ok"]
+    evidence = _evidence(result, "cited_pmid_in_evidence")[0]
+    assert "99999999" not in evidence
+
+
+def test_pmid_list_with_hangul_separator_and_trailing_count_phrase_not_overcaptured():
+    response = {
+        "pubmedEvidenceSummary": "PMID 11111111, 22222222 및 기타 3건",
+        "checks": [], "candidatePrescriptions": [], "reasoningTrace": [],
+    }
+    result = verify_validation(
+        pubmed_articles=ARTICLES, finder_candidates=[], response_dict=response)
+
+    assert _outcomes(result, "cited_pmid_in_evidence") == ["ok"]
+
+
+def test_pmid_marker_without_digits_no_match_no_crash():
+    response = {"pubmedEvidenceSummary": "PMID 근거 없음", "checks": [],
+                "candidatePrescriptions": [], "reasoningTrace": []}
+    result = verify_validation(
+        pubmed_articles=ARTICLES, finder_candidates=[], response_dict=response)
+
+    assert _outcomes(result, "cited_pmid_in_evidence") == ["skipped"]
+
+
 def test_two_separate_pmid_markers_both_extracted():
     response = {
         "pubmedEvidenceSummary": "PMID 11111111 근거, 이후 PMID 99999999 도 참고",
