@@ -169,6 +169,61 @@ class AgentDocumentServiceImplCertificateTest {
             assertThat(response.getMedicalCertificate())
                     .contains("보존적 치료와 증상 조절을 위한 약물치료를 시행하였습니다.");
         }
+
+        @Test
+        @DisplayName("에이전트가 verification 을 돌려주면 응답에도 그대로 실린다")
+        void generateCertificatePassesVerificationThrough() {
+            AgentDocumentServiceImpl service = newServiceForGenerateCertificate();
+            Map<String, Object> verification = Map.of("status", "flagged");
+            CertificateAgentResponse agentResponse = CertificateAgentResponse.builder()
+                    .medicalCertificate("환자는 통원 치료가 필요합니다.")
+                    .llmStatus("real")
+                    .verification(verification)
+                    .build();
+            when(certificateAgentClient.generate(any())).thenReturn(Optional.of(agentResponse));
+
+            GenerateCertificateResponseDTO response =
+                    service.generateCertificate(HISTORY_ID, "GENERAL", "FINAL", "제출용", "doctor1");
+
+            assertThat(response.getVerification()).isEqualTo(verification);
+        }
+
+        /** 에이전트 문장을 못 써서 템플릿으로 떨어지면 검증 결과도 없어야 한다. */
+        @Test
+        @DisplayName("에이전트 호출이 실패하면(Optional.empty) verification 도 없다")
+        void templateFallbackHasNoVerification() {
+            AgentDocumentServiceImpl service = newServiceForGenerateCertificate();
+            when(certificateAgentClient.generate(any())).thenReturn(Optional.empty());
+
+            GenerateCertificateResponseDTO response =
+                    service.generateCertificate(HISTORY_ID, "GENERAL", "FINAL", "제출용", "doctor1");
+
+            assertThat(response.getVerification()).isNull();
+        }
+
+        /**
+         * CRITICAL: 에이전트가 응답은 했지만 소견 텍스트가 공백이라 템플릿으로 떨어지는 경우.
+         * medicalCertificate 는 로컬 템플릿 문장인데 verification 은 (파이썬 검증기가 그 문장을
+         * 본 적도 없는데) "검증됨" 처럼 보이는 값을 그대로 흘려보내면 GC-2 위반이다.
+         */
+        @Test
+        @DisplayName("에이전트 텍스트가 공백이면 verification 도 없다 (검증기가 본 적 없는 템플릿 문장에 검증 결과를 붙이면 안 된다)")
+        void blankTextWithVerification_verificationIsNull() {
+            AgentDocumentServiceImpl service = newServiceForGenerateCertificate();
+            Map<String, Object> verification = Map.of("status", "passed");
+            CertificateAgentResponse agentResponse = CertificateAgentResponse.builder()
+                    .medicalCertificate("   ")
+                    .llmStatus("real")
+                    .verification(verification)
+                    .build();
+            when(certificateAgentClient.generate(any())).thenReturn(Optional.of(agentResponse));
+
+            GenerateCertificateResponseDTO response =
+                    service.generateCertificate(HISTORY_ID, "GENERAL", "FINAL", "제출용", "doctor1");
+
+            assertThat(response.getLlmStatus()).isEqualTo("fallback");
+            assertThat(response.getVerification()).isNull();
+        }
     }
 
     @Nested
@@ -269,6 +324,30 @@ class AgentDocumentServiceImplCertificateTest {
             GenerateCertificateResponseDTO result = service.generateTestCertificate(
                     "J00", "P001", "감기약", "GENERAL", "FINAL", "제출용", "doctor1");
 
+            assertThat(result.getVerification()).isNull();
+        }
+
+        /**
+         * CRITICAL: 에이전트가 응답은 했지만 소견 텍스트가 공백이라 템플릿으로 떨어지는 경우.
+         * medicalCertificate 는 로컬 템플릿 문장인데 verification 은 (파이썬 검증기가 그 문장을
+         * 본 적도 없는데) "검증됨" 처럼 보이는 값을 그대로 흘려보내면 GC-2 위반이다.
+         */
+        @Test
+        @DisplayName("에이전트 텍스트가 공백이면 verification 도 없다 (검증기가 본 적 없는 템플릿 문장에 검증 결과를 붙이면 안 된다)")
+        void blankTextWithVerification_verificationIsNull() {
+            AgentDocumentServiceImpl service = newServiceForGenerateTestCertificate();
+            Map<String, Object> verification = Map.of("status", "passed");
+            CertificateAgentResponse agentResponse = CertificateAgentResponse.builder()
+                    .medicalCertificate("   ")
+                    .llmStatus("real")
+                    .verification(verification)
+                    .build();
+            when(certificateAgentClient.generate(any())).thenReturn(Optional.of(agentResponse));
+
+            GenerateCertificateResponseDTO result = service.generateTestCertificate(
+                    "J00", "P001", "감기약", "GENERAL", "FINAL", "제출용", "doctor1");
+
+            assertThat(result.getLlmStatus()).isEqualTo("fallback");
             assertThat(result.getVerification()).isNull();
         }
     }

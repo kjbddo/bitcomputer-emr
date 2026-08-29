@@ -319,9 +319,9 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
         String llmStatus = resolveCertificateLlmStatus(
                 agentResponse.map(CertificateAgentResponse::getLlmStatus).orElse(null),
                 agentTextUsed);
-        Map<String, Object> verification = agentResponse
-                .map(CertificateAgentResponse::getVerification)
-                .orElse(null);
+        Map<String, Object> verification = agentTextUsed
+                ? agentResponse.map(CertificateAgentResponse::getVerification).orElse(null)
+                : null;
 
         return buildGenerateResponse(username, medicalCertificate, llmStatus, verification);
     }
@@ -380,9 +380,9 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
         String llmStatus = resolveCertificateLlmStatus(
                 agentResponse.map(CertificateAgentResponse::getLlmStatus).orElse(null),
                 agentTextUsed);
-        Map<String, Object> verification = agentResponse
-                .map(CertificateAgentResponse::getVerification)
-                .orElse(null);
+        Map<String, Object> verification = agentTextUsed
+                ? agentResponse.map(CertificateAgentResponse::getVerification).orElse(null)
+                : null;
 
         return buildGenerateResponse(username, medicalCertificate, llmStatus, verification);
     }
