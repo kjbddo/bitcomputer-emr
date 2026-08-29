@@ -19,7 +19,7 @@ from .tools import (
     prescription_validator,
     xray_result_loader,
 )
-from app.verification import verify_validation
+from .verification import verify_validation
 
 logger = logging.getLogger("validation_agent.agent")
 

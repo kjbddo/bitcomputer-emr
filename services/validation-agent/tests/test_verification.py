@@ -575,3 +575,285 @@ def test_response_actually_carries_verification(monkeypatch):
 
     assert response.verification is not None
     assert response.verification["status"] in {"passed", "flagged", "skipped"}
+
+
+# --- 리뷰 Important 1: cited_pmid_in_evidence 가 실제 응답 모양에서는 우연히만
+# 동작하고 있었다. response_dict.get("pubmedEvidenceSummary") 는 최상위 키인데,
+# _normalize_final_result 가 만드는 실제 응답에서 그 요약은
+# validation.pubmedEvidenceSummary 에 중첩돼 있다. 지금까지 탐지가 되던 이유는
+# 같은 텍스트가 checks[] 항목의 message 에도 우연히 중복돼 있었기 때문이다.
+# checks[] 워딩이 바뀌면(PMID 마커가 빠지면) 그 우연한 이중화가 깨지고 조작된
+# 인용이 조용히 skipped 로 빠진다. ---
+
+def test_cited_pmid_read_from_nested_validation_path():
+    """checks[] 에는 PMID 텍스트가 전혀 없다 — 최상위/checks 대조만으로는 이
+    조작된 인용을 절대 잡을 수 없다. validation.pubmedEvidenceSummary(실제
+    응답이 쓰는 중첩 경로)를 읽어야만 flagged 가 나온다."""
+    response = {
+        "checks": [{"type": "OTHER", "message": "인용과 무관한 메시지"}],
+        "candidatePrescriptions": [],
+        "reasoningTrace": [],
+        "validation": {"pubmedEvidenceSummary": "PMID 99999999 에 따르면 ..."},
+    }
+    result = verify_validation(
+        pubmed_articles=ARTICLES, finder_candidates=[], response_dict=response)
+
+    assert result.status == "flagged"
+    assert "flagged" in _outcomes(result, "cited_pmid_in_evidence")
+
+
+def test_cited_pmid_nested_path_also_catches_genuine_citation():
+    """반대 방향도 고정한다: 중첩 경로에 있는 정상 인용도 checks[] 없이 ok 로
+    판정돼야 한다 — 중첩 경로를 아예 안 읽는 회귀뿐 아니라, 읽되 최상위와
+    OR 로 합치지 않고 뒤엎어버리는 회귀도 잡는다."""
+    response = {
+        "checks": [],
+        "candidatePrescriptions": [],
+        "reasoningTrace": [],
+        "validation": {"pubmedEvidenceSummary": "PMID 11111111 에 따르면 ..."},
+    }
+    result = verify_validation(
+        pubmed_articles=ARTICLES, finder_candidates=[], response_dict=response)
+
+    assert _outcomes(result, "cited_pmid_in_evidence") == ["ok"]
+
+
+def test_top_level_pubmed_evidence_summary_still_read_for_backward_compat():
+    """실제 응답 모양은 중첩이지만, 검증기는 순수 함수라 호출자가 최상위
+    pubmedEvidenceSummary 를 직접 넘기는 다른 사용도 계속 지원해야 한다
+    (예: 이 파일의 기존 테스트들 전부)."""
+    response = {
+        "pubmedEvidenceSummary": "PMID 99999999 에 따르면 ...",
+        "checks": [],
+        "candidatePrescriptions": [],
+        "reasoningTrace": [],
+    }
+    result = verify_validation(
+        pubmed_articles=ARTICLES, finder_candidates=[], response_dict=response)
+
+    assert result.status == "flagged"
+
+
+def test_checks_wording_change_cannot_silently_disable_pmid_detection():
+    """리뷰어가 재현한 정확한 실패 시나리오를 고정한다: checks[] 의
+    PUBMED_EVIDENCE 항목 message 워딩이 바뀌어 PMID 마커를 전혀 담지 않게
+    되더라도(실제 서비스 코드에서 라벨/문구가 바뀔 수 있는 부분), 조작된
+    인용은 validation.pubmedEvidenceSummary 를 통해 여전히 flagged 여야
+    한다 — 탐지가 checks[] 안의 우연한 문자열 중복에 기대면 안 된다."""
+    response = {
+        "checks": [{
+            "type": "PUBMED_EVIDENCE",
+            "status": "REFERENCE",
+            # PMID 마커를 의도적으로 빼서 checks[] 만으로는 탐지가 불가능하게 만든다.
+            "message": "근거 요약: 관련 논문 2건을 참고했습니다",
+        }],
+        "candidatePrescriptions": [],
+        "reasoningTrace": [],
+        "validation": {"pubmedEvidenceSummary": "PMID 99999999 에 따르면 ..."},
+    }
+    result = verify_validation(
+        pubmed_articles=ARTICLES, finder_candidates=[], response_dict=response)
+
+    assert result.status == "flagged"
+    assert "flagged" in _outcomes(result, "cited_pmid_in_evidence")
+
+
+# --- 리뷰 Important 2: 원본 관측값 누적 지점(세 곳) 회귀 커버리지.
+# 이전 태스크가 추가한 state.setdefault(...).extend(raw_...) 세 곳은 각각
+# 독립적으로 되돌려도(리버트해도) 기존 스위트가 전부 초록으로 남았다 — 실제
+# 도구 호출을 거치는 end-to-end 테스트가 그 state 키를 전혀 채우지 않았고,
+# raw-vs-normalized 를 증명하는 테스트는 _safe_verify 를 직접 손으로 만든
+# state 로 불러 그 누적 경로 자체를 건너뛰었기 때문이다. 아래 테스트들은
+# verify_validation 을 스파이(진짜 구현은 그대로 통과시킴)로 감싸, 실제
+# run_validation_agent 실행 경로가 state 에 무엇을 쌓았는지 가로챈다. ---
+
+class _FakePubmedLoader:
+    """`agent.pubmed_loader` 를 대체하는 대역(tests/test_llm_status.py 의
+    동명 클래스 복제). 호출마다 다른 pmid 를 돌려줘, 누적과 덮어쓰기를
+    테스트에서 구분할 수 있게 한다."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def invoke(self, payload=None):
+        self.calls += 1
+        pmid = f"1000000{self.calls}"
+        return {
+            "status": "LOADED",
+            "evidence": [f"PubMed에서 근거 {self.calls}건을 조회했습니다."],
+            "articles": [
+                {
+                    "pmid": pmid,
+                    "title": f"Article {self.calls}",
+                    "source": "Test Journal",
+                    "pubdate": "2024",
+                    "abstract": "abstract",
+                    "abstractSnippet": "abstract",
+                }
+            ],
+        }
+
+
+class _FakePrescriptionFinder:
+    """`agent.prescription_finder` 를 대체하는 대역(tests/test_llm_status.py 의
+    동명 클래스 복제)."""
+
+    def invoke(self, payload=None):
+        return {
+            "status": "LOADED",
+            "evidence": ["기존 처방 RAG에서 참고 처방 후보를 조회했습니다."],
+            "candidatePrescriptions": [
+                {
+                    "id": 1,
+                    "rank": 1,
+                    "prescription_code": "C1",
+                    "prescription_name": "약1",
+                    "reason": "",
+                    "confidence_score": 0.9,
+                }
+            ],
+            "recommendationLlmStatus": "real",
+        }
+
+
+def _spy_on_verify_validation(monkeypatch, seen):
+    """`agent.verify_validation` 을 스파이로 감싼다 — 진짜 구현은 그대로
+    실행하면서, 호출부가 실제로 넘긴 kwargs 만 `seen` 에 기록한다."""
+    import app.agent as agent
+
+    real_verify = agent.verify_validation
+
+    def spy(*, pubmed_articles, finder_candidates, response_dict):
+        seen["pubmed_articles"] = list(pubmed_articles)
+        seen["finder_candidates"] = list(finder_candidates)
+        return real_verify(
+            pubmed_articles=pubmed_articles,
+            finder_candidates=finder_candidates,
+            response_dict=response_dict,
+        )
+
+    monkeypatch.setattr(agent, "verify_validation", spy)
+
+
+def test_load_pubmed_evidence_decision_branch_populates_state(monkeypatch):
+    """축적 지점 1/3: `_load_pubmed_evidence`(결정 루프 안, 빈 쿼리 Pubmed
+    Loader 분기)가 실제로 도구를 호출해 얻은 원본 관측값을
+    state["pubmed_articles"] 에 쌓는지, run_validation_agent 실행 경로를
+    통해 확인한다. 이 라인을 지우면 seen["pubmed_articles"] 가 빈 리스트로
+    남아 이 단언이 실패한다."""
+    import app.agent as agent
+
+    monkeypatch.setenv("LLM_PROVIDER", "real")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
+    monkeypatch.setattr(agent, "_create_llm", lambda: None)
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder())
+    monkeypatch.setattr(
+        agent,
+        "_llm_tool_decision",
+        _sequenced_llm_decision([
+            # actionInput 에 query 가 없으므로 _execute_decided_tool 의 빈
+            # 쿼리 분기 -> _load_pubmed_evidence 를 탄다.
+            {"thought": "문헌 근거 확보", "action": "Pubmed Loader", "actionInput": {}},
+            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
+        ]),
+    )
+
+    seen: dict = {}
+    _spy_on_verify_validation(monkeypatch, seen)
+
+    agent.run_validation_agent(_request())
+
+    assert seen["pubmed_articles"], (
+        "빈 쿼리 Pubmed Loader 분기(_load_pubmed_evidence)가 원본 관측값을 "
+        "state['pubmed_articles']에 쌓아야 한다"
+    )
+    assert seen["pubmed_articles"][0]["pmid"] == "10000001"
+
+
+def test_pubmed_loader_explicit_query_branch_populates_state(monkeypatch):
+    """축적 지점 2/3: `_execute_decided_tool` 의 명시적 쿼리 Pubmed Loader
+    분기(_load_pubmed_evidence 를 거치지 않는 별도 경로)가 원본 관측값을
+    state["pubmed_articles"] 에 쌓는지 확인한다."""
+    import app.agent as agent
+
+    monkeypatch.setenv("LLM_PROVIDER", "real")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
+    monkeypatch.setattr(agent, "_create_llm", lambda: None)
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder())
+    monkeypatch.setattr(
+        agent,
+        "_llm_tool_decision",
+        _sequenced_llm_decision([
+            {"thought": "문헌 근거 확보", "action": "Pubmed Loader",
+             "actionInput": {"query": "cough treatment guideline"}},
+            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
+        ]),
+    )
+
+    seen: dict = {}
+    _spy_on_verify_validation(monkeypatch, seen)
+
+    agent.run_validation_agent(_request())
+
+    assert seen["pubmed_articles"], (
+        "명시적 쿼리 Pubmed Loader 분기가 원본 관측값을 "
+        "state['pubmed_articles']에 쌓아야 한다"
+    )
+    assert seen["pubmed_articles"][0]["pmid"] == "10000001"
+
+
+def test_prescription_finder_populates_state_candidates(monkeypatch):
+    """축적 지점 3/3: `_invoke_prescription_finder` 가 처방 RAG 원본 관측값을
+    state["finder_candidates"] 에 쌓는지, 결정 루프를 통해 실제로 확인한다."""
+    import app.agent as agent
+
+    _install_llm_decisions(monkeypatch)
+    monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder())
+
+    seen: dict = {}
+    _spy_on_verify_validation(monkeypatch, seen)
+
+    agent.run_validation_agent(_request())
+
+    assert seen["finder_candidates"], (
+        "_invoke_prescription_finder가 원본 관측값을 "
+        "state['finder_candidates']에 쌓아야 한다"
+    )
+    assert seen["finder_candidates"][0]["prescription_code"] == "C1"
+
+
+def test_pubmed_articles_accumulate_not_overwrite_across_multiple_calls(monkeypatch):
+    """축적 의미론 고정: Pubmed Loader 가 한 실행에서 두 번 호출되면,
+    state["pubmed_articles"] 는 두 번째 호출 결과로 덮어써지지 않고 두 호출의
+    원본을 모두 담아야 한다 — 검증기가 최신 호출 결과만 보고 이전 호출에서
+    인용된 정상 PMID 를 "조회 결과에 없음"으로 오탐하면 안 된다."""
+    import app.agent as agent
+
+    monkeypatch.setenv("LLM_PROVIDER", "real")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
+    monkeypatch.setattr(agent, "_create_llm", lambda: None)
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder())
+    monkeypatch.setattr(
+        agent,
+        "_llm_tool_decision",
+        _sequenced_llm_decision([
+            {"thought": "1차 조회", "action": "Pubmed Loader",
+             "actionInput": {"query": "queryA"}},
+            {"thought": "2차 조회", "action": "Pubmed Loader",
+             "actionInput": {"query": "queryB"}},
+            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
+        ]),
+    )
+
+    seen: dict = {}
+    _spy_on_verify_validation(monkeypatch, seen)
+
+    agent.run_validation_agent(_request())
+
+    pmids = {a["pmid"] for a in seen["pubmed_articles"]}
+    assert pmids == {"10000001", "10000002"}, (
+        "두 번의 Pubmed Loader 호출 결과가 모두 누적돼야 한다(덮어쓰기 금지)"
+    )

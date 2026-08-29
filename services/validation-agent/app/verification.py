@@ -129,8 +129,20 @@ def verify_validation(
     # 전부 "조회 결과 밖"으로 flag 된다(있어야 할 skipped 대신 오탐성
     # flagged). 죽은 코드가 아니라 이 가드의 전제조건이다.
     known_pmids.discard("")
+    # 실제 응답 모양(_normalize_final_result 가 만드는 dict)에서는 요약이
+    # 최상위가 아니라 validation.pubmedEvidenceSummary 에 중첩돼 있다. 최상위
+    # 키만 읽으면 이 검사는 checks[] 안에 우연히 중복된 같은 텍스트에만
+    # 기대게 되고, 그 문구가 바뀌면(PMID 마커가 빠지면) 조작된 인용이 조용히
+    # skipped 로 빠진다(리뷰). 두 경로를 OR 로 합쳐서, response_dict 를 직접
+    # 만드는 다른 호출자(테스트 등)를 위해 최상위 키도 계속 지원한다.
+    validation_block = response_dict.get("validation")
+    nested_summary = (
+        validation_block.get("pubmedEvidenceSummary")
+        if isinstance(validation_block, dict) else None
+    )
     cited_text = " ".join([
         str(response_dict.get("pubmedEvidenceSummary") or ""),
+        str(nested_summary or ""),
         " ".join(str(c) for c in (response_dict.get("checks") or [])),
     ])
     cited: set = set()
