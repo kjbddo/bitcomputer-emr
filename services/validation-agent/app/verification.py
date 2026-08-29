@@ -10,6 +10,13 @@
 lookahead/lookbehind 로 둔다: 파이썬 `re` 는 한글 음절도 `\\w` 로 취급해
 `\\b` 가 숫자-한글 조사 경계에서 전혀 작동하지 않는다.
 
+마커 하나가 쉼표·`·`·`및`·공백으로 구분된 id 목록 전체에 걸린다
+(`PMID 11111111, 99999999`). 마커를 id 하나에만 결부시키면 목록의
+두 번째 이후 id 는 전혀 추출되지 않아, 실재하는 id 뒤에 붙은 조작된
+id 가 조회 결과와 대조조차 되지 않고 통과해버린다 — 이 검사가 막으려는
+바로 그 실패다. 그래서 마커는 한 번만 매칭하고 그 뒤에 이어지는 id
+목록 전체를 잡은 뒤, 그 구간에서 개별 id 를 모두 뽑아낸다.
+
 spec: Docs/superpowers/specs/2026-08-29-runtime-verification-design.md §6.3
 """
 from __future__ import annotations
@@ -33,9 +40,22 @@ from app.verification_contract import CheckResult, VerificationResult, aggregate
 #
 # 자릿수 범위(7~8)는 고정값이다. 넓히면 용량·날짜 같은 무관한 숫자를 다시
 # 주워 담고, 좁히면 실제 PMID 형식을 놓친다 — 회귀 테스트로 양쪽 다 고정한다.
+#
+# 마커(PMID)는 뒤따르는 id 목록 전체에 한 번만 매칭한다 — id 하나하나에
+# 마커를 요구하면 "PMID 11111111, 99999999" 같은 목록에서 두 번째 이후
+# id 가 전혀 추출되지 않는다(마커가 없다는 이유로). 목록 구분자는 쉼표,
+# `·`, `및`, 공백을 허용한다. 마지막 id 뒤 경계도 마커 뒤 첫 id 와 동일하게
+# ASCII 전용 lookahead 로 막아, 자릿수 범위를 벗어나는 숫자가 목록에 이어
+# 붙어도 그 앞부분만 잘라 먹지 않는다(뒤에 남은 숫자가 있으면 그 반복은
+# 통째로 실패하고 그 전까지 확정된 id 들만 남는다).
 PMID_PATTERN = re.compile(
-    r"(?i)(?<![0-9A-Za-z])PMID\s*:?\s*(\d{7,8})(?![0-9A-Za-z])"
+    r"(?i)(?<![0-9A-Za-z])PMID\s*:?\s*"
+    r"\d{7,8}(?:(?:\s*[,·]\s*|\s*및\s*|\s+)\d{7,8})*"
+    r"(?![0-9A-Za-z])"
 )
+# 마커 매칭 구간에서 개별 id 를 뽑아내는 보조 패턴. 구분자는 숫자가 아니므로
+# 이 패턴만으로 목록을 안전하게 쪼갤 수 있다.
+_PMID_ID_PATTERN = re.compile(r"\d{7,8}")
 
 
 def _code(row: Any) -> str:
@@ -74,7 +94,9 @@ def verify_validation(
         str(response_dict.get("pubmedEvidenceSummary") or ""),
         " ".join(str(c) for c in (response_dict.get("checks") or [])),
     ])
-    cited = set(PMID_PATTERN.findall(cited_text))
+    cited: set = set()
+    for marker_match in PMID_PATTERN.finditer(cited_text):
+        cited.update(_PMID_ID_PATTERN.findall(marker_match.group()))
 
     if not known_pmids:
         checks.append(CheckResult(

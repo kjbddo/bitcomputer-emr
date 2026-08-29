@@ -14,6 +14,10 @@ def _outcomes(result, check_id):
     return [c.outcome for c in result.checks if c.id == check_id]
 
 
+def _evidence(result, check_id):
+    return [c.evidence for c in result.checks if c.id == check_id]
+
+
 def test_cited_pmid_present_passes():
     response = {
         "pubmedEvidenceSummary": "PMID 11111111 에 따르면 ...",
@@ -159,6 +163,83 @@ def test_pmid_pattern_rejects_nine_digit_number():
         pubmed_articles=ARTICLES, finder_candidates=[], response_dict=response)
 
     assert _outcomes(result, "cited_pmid_in_evidence") == ["skipped"]
+
+
+# --- 리뷰 후속(2회차): 마커 공유 다중 PMID 목록에서 두 번째 이후 id 가
+# 전혀 추출되지 않던 문제. 리뷰어의 정확한 재현 케이스. ---
+def test_multiple_pmids_sharing_marker_second_is_fabricated_is_flagged():
+    response = {
+        "pubmedEvidenceSummary": "PMID 11111111, 99999999 근거로 처방함",
+        "checks": [], "candidatePrescriptions": [], "reasoningTrace": [],
+    }
+    result = verify_validation(
+        pubmed_articles=[{"pmid": "11111111"}], finder_candidates=[],
+        response_dict=response)
+
+    assert result.status == "flagged"
+    assert "flagged" in _outcomes(result, "cited_pmid_in_evidence")
+    evidence = _evidence(result, "cited_pmid_in_evidence")[0]
+    assert "99999999" in evidence
+
+
+def test_multiple_pmids_sharing_marker_reversed_order_still_flagged():
+    response = {
+        "pubmedEvidenceSummary": "PMID 99999999, 11111111 근거로 처방함",
+        "checks": [], "candidatePrescriptions": [], "reasoningTrace": [],
+    }
+    result = verify_validation(
+        pubmed_articles=[{"pmid": "11111111"}], finder_candidates=[],
+        response_dict=response)
+
+    assert result.status == "flagged"
+    assert "flagged" in _outcomes(result, "cited_pmid_in_evidence")
+
+
+def test_multiple_pmids_with_hangul_separator_both_present_ok():
+    response = {
+        "pubmedEvidenceSummary": "PMID 11111111 및 22222222 근거로",
+        "checks": [], "candidatePrescriptions": [], "reasoningTrace": [],
+    }
+    result = verify_validation(
+        pubmed_articles=ARTICLES, finder_candidates=[], response_dict=response)
+
+    assert _outcomes(result, "cited_pmid_in_evidence") == ["ok"]
+
+
+def test_two_separate_pmid_markers_both_extracted():
+    response = {
+        "pubmedEvidenceSummary": "PMID 11111111 근거, 이후 PMID 99999999 도 참고",
+        "checks": [], "candidatePrescriptions": [], "reasoningTrace": [],
+    }
+    result = verify_validation(
+        pubmed_articles=[{"pmid": "11111111"}], finder_candidates=[],
+        response_dict=response)
+
+    assert result.status == "flagged"
+    evidence = _evidence(result, "cited_pmid_in_evidence")[0]
+    assert "99999999" in evidence
+
+
+# --- 마커 무력화 뮤테이션을 잡는 회귀 테스트(리뷰 재요청): 두 속성이
+# 테스트로 고정돼 있지 않아 뮤테이션이 살아남았던 문제 ---
+def test_pmid_marker_embedded_in_longer_word_not_cited():
+    # 리딩 lookbehind 가 없으면 "SUBPMID" 안의 "PMID" 도 매칭된다.
+    response = {"pubmedEvidenceSummary": "SUBPMID 11111111 근거", "checks": [],
+                "candidatePrescriptions": [], "reasoningTrace": []}
+    result = verify_validation(
+        pubmed_articles=ARTICLES, finder_candidates=[], response_dict=response)
+
+    assert _outcomes(result, "cited_pmid_in_evidence") == ["skipped"]
+
+
+def test_lowercase_pmid_marker_still_extracted():
+    # (?i) 플래그가 없으면 소문자 "pmid" 는 매칭되지 않는다.
+    response = {"pubmedEvidenceSummary": "pmid 11111111 근거", "checks": [],
+                "candidatePrescriptions": [], "reasoningTrace": []}
+    result = verify_validation(
+        pubmed_articles=ARTICLES, finder_candidates=[], response_dict=response)
+
+    assert _outcomes(result, "cited_pmid_in_evidence") == ["ok"]
 
 
 # --- 리뷰 Important 4: _code 의 처방코드 fallback 이 테스트되지 않던 문제 ---
