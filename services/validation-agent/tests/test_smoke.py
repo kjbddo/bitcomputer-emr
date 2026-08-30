@@ -12,7 +12,7 @@ os.environ.setdefault("VALIDATION_RABBITMQ_ENABLED", "false")
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.llm_provider import resolve_provider, stub_tool_decision
+from app.llm_provider import resolve_provider
 
 client = TestClient(app)
 
@@ -31,5 +31,45 @@ def test_stub_provider_selected_by_env(monkeypatch):
     assert resolve_provider() == "stub"
 
 
-def test_stub_decision_terminates_with_finalize():
-    assert stub_tool_decision(99)["action"] == "FINALIZE"
+def test_stub_provider_never_calls_the_gateway(monkeypatch):
+    """stub 모드는 게이트웨이를 부르지 않는다.
+
+    옛 `stub_tool_decision` 은 ReAct 루프에 결정론적 도구 순서를 먹였다. 루프가
+    사라진 지금 stub 이 지켜야 하는 계약은 "모델 호출이 0회" 하나다 — 실행
+    순서는 provider 와 무관하게 고정 파이프라인이다.
+    """
+    import app.agent as agent
+    from app.models import ValidationAgentRequest
+
+    calls = {"n": 0}
+
+    def exploding_llm():
+        calls["n"] += 1
+        raise AssertionError("stub 모드에서 게이트웨이 클라이언트를 만들면 안 된다")
+
+    monkeypatch.setenv("LLM_PROVIDER", "stub")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
+    monkeypatch.setattr(agent, "create_llm", exploding_llm)
+    monkeypatch.setattr(agent, "pubmed_loader", _NoResultPubmedLoader())
+    monkeypatch.setattr(agent, "prescription_finder", _NoCandidateFinder())
+
+    response = agent.run_validation_agent(ValidationAgentRequest(historyId=1, symptoms="기침"))
+
+    assert calls["n"] == 0
+    assert response.llmStatus == "stub"
+
+
+class _NoResultPubmedLoader:
+    def invoke(self, payload=None):
+        return {"status": "NO_RESULT", "evidence": ["PubMed 검색 결과 없음"], "articles": []}
+
+
+class _NoCandidateFinder:
+    def invoke(self, payload=None):
+        return {
+            "status": "LOADED",
+            "evidence": [],
+            "candidatePrescriptions": [],
+            "recommendationLlmStatus": "stub",
+            "recommendationVerification": None,
+        }

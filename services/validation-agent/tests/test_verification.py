@@ -641,34 +641,15 @@ def _request():
     )
 
 
-def _sequenced_llm_decision(sequence):
-    """`_llm_tool_decision` 을 대신할 결정론적 대역(tests/test_llm_status.py 복제)."""
-    remaining = iter(sequence)
-
-    def fake(state, reasoning_trace, pubmed_queries, iteration):
-        return next(remaining, None)
-
-    return fake
-
-
-def _install_llm_decisions(monkeypatch):
-    """tests/test_llm_status.py 의 동명 헬퍼 복제. 결정 루프의 모든 반복이
-    LLM 결정이고 Prescription Finder 를 반드시 거치도록 시퀀스를 구성한다."""
+def _real_mode(monkeypatch):
+    """게이트웨이가 설정된 실행 모드. 도구 선택 루프가 사라졌으므로 결정 대역은
+    없다 — 파이프라인은 provider 와 무관하게 같은 순서로 돈다. 모델 호출
+    (PubMed 질의 생성/요약)만 폴백으로 고정해 네트워크 의존을 없앤다."""
     import app.agent as agent
     monkeypatch.setenv("LLM_PROVIDER", "real")
     monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
-    monkeypatch.setattr(agent, "_create_llm", lambda: None)
-    monkeypatch.setattr(
-        agent,
-        "_llm_tool_decision",
-        _sequenced_llm_decision([
-            {"thought": "x-ray 로드", "action": "X-ray Result Loader", "actionInput": {}},
-            {"thought": "상병 검증", "action": "Disease Validator", "actionInput": {}},
-            {"thought": "처방 검증", "action": "Prescription Validator", "actionInput": {}},
-            {"thought": "처방 후보 조회", "action": "Prescription Finder", "actionInput": {}},
-            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
-        ]),
-    )
+    monkeypatch.delenv("VALIDATION_JOB_BUDGET_SECONDS", raising=False)
+    monkeypatch.setattr(agent, "create_llm", lambda: None)
 
 
 def test_response_actually_carries_verification(monkeypatch):
@@ -676,7 +657,7 @@ def test_response_actually_carries_verification(monkeypatch):
     배선이 끊겨도 필드 존재 테스트는 통과하므로 이 단언이 필요하다."""
     from app.agent import run_validation_agent
 
-    _install_llm_decisions(monkeypatch)
+    _real_mode(monkeypatch)
 
     response = run_validation_agent(_request())
 
@@ -739,7 +720,7 @@ def test_prescription_verification_flows_from_finder_to_response(monkeypatch):
     verification 과 뒤섞이면 안 된다 — 후자는 항상 target="response" 다."""
     import app.agent as agent
 
-    _install_llm_decisions(monkeypatch)
+    _real_mode(monkeypatch)
     monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinderWithVerification())
 
     response = agent.run_validation_agent(_request())
@@ -913,29 +894,20 @@ def _spy_on_verify_validation(monkeypatch, seen):
     monkeypatch.setattr(agent, "verify_validation", spy)
 
 
-def test_load_pubmed_evidence_decision_branch_populates_state(monkeypatch):
-    """축적 지점 1/3: `_load_pubmed_evidence`(결정 루프 안, 빈 쿼리 Pubmed
-    Loader 분기)가 실제로 도구를 호출해 얻은 원본 관측값을
-    state["pubmed_articles"] 에 쌓는지, run_validation_agent 실행 경로를
+def test_pubmed_loader_populates_raw_observations_in_state(monkeypatch):
+    """축적 지점 1/2: `_load_pubmed_evidence` 가 실제로 도구를 호출해 얻은 원본
+    관측값을 state["pubmed_articles"] 에 쌓는지, run_validation_agent 실행 경로를
     통해 확인한다. 이 라인을 지우면 seen["pubmed_articles"] 가 빈 리스트로
-    남아 이 단언이 실패한다."""
+    남아 이 단언이 실패한다.
+
+    루프 제거 전에는 PubMed 조회 진입점이 둘이었다(결정 루프의 빈 쿼리 분기와
+    명시적 쿼리 분기). 지금은 고정 파이프라인의 한 자리뿐이라 이 테스트가 그
+    경로 전체를 덮는다."""
     import app.agent as agent
 
-    monkeypatch.setenv("LLM_PROVIDER", "real")
-    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
-    monkeypatch.setattr(agent, "_create_llm", lambda: None)
+    _real_mode(monkeypatch)
     monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
     monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder())
-    monkeypatch.setattr(
-        agent,
-        "_llm_tool_decision",
-        _sequenced_llm_decision([
-            # actionInput 에 query 가 없으므로 _execute_decided_tool 의 빈
-            # 쿼리 분기 -> _load_pubmed_evidence 를 탄다.
-            {"thought": "문헌 근거 확보", "action": "Pubmed Loader", "actionInput": {}},
-            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
-        ]),
-    )
 
     seen: dict = {}
     _spy_on_verify_validation(monkeypatch, seen)
@@ -943,51 +915,17 @@ def test_load_pubmed_evidence_decision_branch_populates_state(monkeypatch):
     agent.run_validation_agent(_request())
 
     assert seen["pubmed_articles"], (
-        "빈 쿼리 Pubmed Loader 분기(_load_pubmed_evidence)가 원본 관측값을 "
-        "state['pubmed_articles']에 쌓아야 한다"
-    )
-    assert seen["pubmed_articles"][0]["pmid"] == "10000001"
-
-
-def test_pubmed_loader_explicit_query_branch_populates_state(monkeypatch):
-    """축적 지점 2/3: `_execute_decided_tool` 의 명시적 쿼리 Pubmed Loader
-    분기(_load_pubmed_evidence 를 거치지 않는 별도 경로)가 원본 관측값을
-    state["pubmed_articles"] 에 쌓는지 확인한다."""
-    import app.agent as agent
-
-    monkeypatch.setenv("LLM_PROVIDER", "real")
-    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
-    monkeypatch.setattr(agent, "_create_llm", lambda: None)
-    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
-    monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder())
-    monkeypatch.setattr(
-        agent,
-        "_llm_tool_decision",
-        _sequenced_llm_decision([
-            {"thought": "문헌 근거 확보", "action": "Pubmed Loader",
-             "actionInput": {"query": "cough treatment guideline"}},
-            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
-        ]),
-    )
-
-    seen: dict = {}
-    _spy_on_verify_validation(monkeypatch, seen)
-
-    agent.run_validation_agent(_request())
-
-    assert seen["pubmed_articles"], (
-        "명시적 쿼리 Pubmed Loader 분기가 원본 관측값을 "
-        "state['pubmed_articles']에 쌓아야 한다"
+        "Pubmed Loader 가 원본 관측값을 state['pubmed_articles']에 쌓아야 한다"
     )
     assert seen["pubmed_articles"][0]["pmid"] == "10000001"
 
 
 def test_prescription_finder_populates_state_candidates(monkeypatch):
-    """축적 지점 3/3: `_invoke_prescription_finder` 가 처방 RAG 원본 관측값을
-    state["finder_candidates"] 에 쌓는지, 결정 루프를 통해 실제로 확인한다."""
+    """축적 지점 2/2: `_invoke_prescription_finder` 가 처방 RAG 원본 관측값을
+    state["finder_candidates"] 에 쌓는지, 실행 경로를 통해 확인한다."""
     import app.agent as agent
 
-    _install_llm_decisions(monkeypatch)
+    _real_mode(monkeypatch)
     monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder())
 
     seen: dict = {}
@@ -1002,36 +940,27 @@ def test_prescription_finder_populates_state_candidates(monkeypatch):
     assert seen["finder_candidates"][0]["prescription_code"] == "C1"
 
 
-def test_pubmed_articles_accumulate_not_overwrite_across_multiple_calls(monkeypatch):
-    """축적 의미론 고정: Pubmed Loader 가 한 실행에서 두 번 호출되면,
-    state["pubmed_articles"] 는 두 번째 호출 결과로 덮어써지지 않고 두 호출의
-    원본을 모두 담아야 한다 — 검증기가 최신 호출 결과만 보고 이전 호출에서
-    인용된 정상 PMID 를 "조회 결과에 없음"으로 오탐하면 안 된다."""
+def test_pubmed_articles_accumulate_not_overwrite(monkeypatch):
+    """축적 의미론 고정: state["pubmed_articles"] 는 덮어써지지 않는다.
+
+    검증기가 최신 조회 결과만 보면, 앞선 조회에서 인용된 정상 PMID 를
+    "조회 결과에 없음"으로 오탐한다.
+
+    루프가 있던 시절에는 한 실행에서 Pubmed Loader 가 두 번 결정될 수 있어
+    end-to-end 로 이 의미론을 관측할 수 있었다. 고정 파이프라인은 첫 성공에서
+    멈추므로(`_load_pubmed_evidence` 의 `if articles: break`) 실행 경로 하나로는
+    `.extend` 와 `=` 를 구분할 수 없다 — 그래서 축적 함수를 직접 부른다."""
     import app.agent as agent
 
-    monkeypatch.setenv("LLM_PROVIDER", "real")
-    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
-    monkeypatch.setattr(agent, "_create_llm", lambda: None)
+    _real_mode(monkeypatch)
     monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
-    monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder())
-    monkeypatch.setattr(
-        agent,
-        "_llm_tool_decision",
-        _sequenced_llm_decision([
-            {"thought": "1차 조회", "action": "Pubmed Loader",
-             "actionInput": {"query": "queryA"}},
-            {"thought": "2차 조회", "action": "Pubmed Loader",
-             "actionInput": {"query": "queryB"}},
-            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
-        ]),
-    )
 
-    seen: dict = {}
-    _spy_on_verify_validation(monkeypatch, seen)
+    state = {"symptoms": "기침", "saved_diseases": [], "saved_prescriptions": [],
+             "pubmed_articles": [{"pmid": "99999999", "title": "이전 조회"}]}
+    trace: list = []
 
-    agent.run_validation_agent(_request())
+    agent._load_pubmed_evidence(trace, state, "사유", [], agent.ModelCallLedger(), "real")
 
-    pmids = {a["pmid"] for a in seen["pubmed_articles"]}
-    assert pmids == {"10000001", "10000002"}, (
-        "두 번의 Pubmed Loader 호출 결과가 모두 누적돼야 한다(덮어쓰기 금지)"
-    )
+    pmids = {a["pmid"] for a in state["pubmed_articles"]}
+    assert "99999999" in pmids, "앞선 조회 결과가 덮어써지면 안 된다"
+    assert "10000001" in pmids, "이번 조회 결과가 누적돼야 한다"
