@@ -289,22 +289,33 @@ print('mask_version     ', r.mask_version)
 ```
 
 기대: `engine_status real`, `dim 1024`, `embedding_version densenet121_imagenet_1024`,
-`roi_status cv`, `mask_version cv_lung_heart_v1`.
+`roi_status pspnet`, `mask_version pspnet_chestxdet_v1`.
 
 `roi_status` 는 **일부러 `engine_status` 에 섞지 않았다**(이유는 `app/ml/factory.py` 의
-`BuildResult` 독스트링). `mock` 이면 ROI 마스크가 고정 타원이라는 뜻이고, ROI별
-임베딩(`--use-roi`)과 `roiStats` 의 의미가 달라진다 — 시드와 질의가 서로 다른 쪽이면
-`maskVersion` 이 같아도 ROI 벡터는 비교 불가능하다. 케이스 문서의 `roiMaskVersion` 으로
-어느 쪽으로 시드됐는지 확인할 수 있다.
+`BuildResult` 독스트링). 값이 셋이고 각각 다른 뜻이다.
 
-`mock` 이면 아래 넷 중 하나가 빠진 것이다. 넷 다 `infra/docker-compose.yml` 의 `xraygraph` 블록에 배선돼 있으니 그쪽을 본다.
+| `roi_status` | 무엇이 올라왔나 | `mask_version` |
+|---|---|---|
+| `pspnet` | ChestX-Det PSPNet — 학습된 해부학 분할 모델. **이것이 기대값이다** | `pspnet_chestxdet_v1` |
+| `cv` | 고전 CV 분할. 영상에 적응하지만 학습된 모델은 아니다 — PSPNet 가중치가 없으면 여기로 내려온다(§5.7) | `cv_lung_heart_v1` |
+| `mock` | 입력과 무관한 고정 타원. ROI별 임베딩이 해부학과 무관해진다 | `mock_ellipse_mask_v1` |
+
+셋 다 서비스는 뜬다. **조용히 내려갈 뿐이다** — 그래서 이 확인을 건너뛰면 안 된다.
+다만 내려간 사실 자체는 WARNING 로그와 이 값에 남으므로, real 인 척하지는 않는다.
+ROI별 임베딩(`--use-roi`)과 `roiStats` 의 의미가 이 값에 달려 있다 — 시드와 질의가
+서로 다른 분할기면 `maskVersion` 이 같아도 ROI 벡터는 비교 불가능하다. 케이스 문서의
+`roiMaskVersion` 으로 어느 쪽으로 시드됐는지 확인할 수 있다.
+
+기대와 다르면 아래 다섯 중 하나가 빠진 것이다. `infra/docker-compose.yml` 의
+`xraygraph` 블록을 본다.
 
 | 필요한 것 | 없으면 |
 |---|---|
 | SQUID 가중치 마운트 (`services/radiology-legacy` 통째로) | 로더가 부모에서 `config.py` 를 찾으므로 가중치 폴더만 주면 깨진다 |
 | 호스트 torch 캐시 마운트 | 컨테이너에 egress 가 없어 DenseNet 가중치를 못 받는다 |
-| `scipy`·`opencv-python-headless`·`matplotlib`·`tqdm` | SQUID 로더가 import 에서 실패한다 |
-| `USE_TORCH_ANOMALY`·`USE_TORCH_EMBEDDING`·`EMBEDDING_DIM` | 토글이 꺼져 있거나 차원이 어긋난다 |
+| **호스트 torchxrayvision 캐시 마운트** | 같은 이유로 PSPNet 가중치를 못 받는다 → `roi_status` 가 `cv` 로 내려간다(§5.7) |
+| `scipy`·`opencv-python-headless`·`matplotlib`·`tqdm`·`torchxrayvision` | SQUID 로더 / PSPNet 어댑터가 import 에서 실패한다 |
+| `USE_TORCH_ANOMALY`·`USE_TORCH_EMBEDDING`·`USE_PSPNET_ROI`·`EMBEDDING_DIM` | 토글이 꺼져 있거나 차원이 어긋난다 |
 
 `engine_status` 가 `mock` 이라고 서비스가 죽지는 않는다. **조용히 mock 으로 돌 뿐이다** — 그래서 이 확인을 건너뛰면 안 된다. 다만 `engine_status` 는 토글이 아니라 실제로 구성된 모델을 근거로 판정하므로, real 인 척하지는 않는다.
 
@@ -326,6 +337,65 @@ rm -f infer_out.json
 ```
 
 `similarCases` 가 0이면 인덱스 차원과 질의 벡터 차원이 어긋난 것이다(§5.3).
+
+### 5.7 PSPNet ROI 가중치 — 호스트에서 받아 컨테이너에 마운트한다
+
+ROI 분할기가 ChestX-Det PSPNet 으로 바뀌었다(EVALUATION.md §11). 가중치는
+**273MB** 이고 패키지에 들어 있지 않다. **컨테이너에는 egress 가 없다** — DenseNet
+가중치와 똑같은 상황이고, 해법도 똑같다: 호스트에서 받아 그 디렉터리를 마운트한다.
+
+어댑터는 기본적으로 런타임 다운로드를 하지 않는다(`PSPNET_ALLOW_DOWNLOAD=false`).
+켜두면 egress 없는 컨테이너에서 기동이 네트워크 타임아웃만큼 멈춘다. 파일이 이미
+있을 때만 올리고, 없으면 즉시 다음 후보(`cv`)로 내려간다.
+
+**호스트에서 한 번:**
+
+```bash
+cd services/xray-rag
+python scripts/fetch_pspnet_weights.py
+# -> ~/.torchxrayvision/models_data/pspnet_chestxray_best_model_4.pth (260MB)
+#    sha256 019b167eac6b729fc1bb92bbbc185fc1730aaa65819f4e3fe718186cadc044fc
+```
+
+스크립트는 sha256 을 검증한다. 상류 릴리스가 같은 파일명으로 다른 가중치를 올리면
+거기서 걸린다 — 조용히 다른 모델로 바뀌는 것이 제일 피해야 할 사고다.
+
+이미 받았는지만 보려면 `--verify-only` 를 준다.
+
+**컨테이너 쪽 — `infra/docker-compose.yml` 의 `xraygraph` 블록에 넣어야 할 변경.**
+이 파일은 infra 소유라 여기서 바꾸지 않았다. 아래를 적용해야 컨테이너의
+`roi_status` 가 `pspnet` 이 된다.
+
+```yaml
+    environment:
+      # ...기존 유지...
+      USE_PSPNET_ROI: ${USE_PSPNET_ROI:-true}
+      # 아래 마운트 경로와 반드시 같아야 한다. 비워두면 어댑터가
+      # ~/.torchxrayvision/models_data 를 보는데 컨테이너의 그 경로는 비어 있다.
+      PSPNET_CACHE_DIR: /root/.torchxrayvision/models_data
+      # egress 가 없다. true 로 두면 기동이 타임아웃만큼 멈춘다.
+      PSPNET_ALLOW_DOWNLOAD: "false"
+    volumes:
+      # ...기존 유지...
+      # ChestX-Det PSPNet 가중치 캐시. 없으면 ROI 가 cv 분할로 내려간다
+      # (조용히는 아니고 WARNING + roi_status="cv").
+      - ${PSPNET_HOST_CACHE_DIR:-~/.torchxrayvision/models_data}:/root/.torchxrayvision/models_data:ro
+```
+
+`torchxrayvision` 이 `services/xray-rag/requirements.txt` 에 추가됐으므로
+**이미지 재빌드가 필요하다**(`docker compose build xraygraph`). 의존으로
+`scikit-image` 계열이 함께 들어와 이미지가 커진다.
+
+같은 블록의 `USE_TORCH_ROI: "false"` 는 이제 읽는 곳이 없다. 지워도 되고 둬도
+동작에는 영향이 없다.
+
+`MASK_VERSION: lung_heart_mask_v1` 고정은 **그대로 둔다.** 이것은 비교 대상을 정하는
+운영 키이지 분할기 유래 값이 아니다. 모델 유래 값으로 바꾸면 컨테이너 `/infer` 가
+0건을 반환한다(시드된 케이스의 `maskVersion` 과 어긋나기 때문). 분할기 식별자는
+케이스 문서의 `roiMaskVersion` 에 따로 저장된다.
+
+**적용 후 확인:** §5.5 의 `docker exec` 명령이 `roi_status pspnet`,
+`mask_version pspnet_chestxdet_v1` 을 내야 한다.
 
 ---
 
