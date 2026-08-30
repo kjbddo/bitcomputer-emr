@@ -59,6 +59,7 @@ from ranking import (
     build_ranked_slate,
     describe_ranking_strategy,
 )
+from feedback_adjustment import DEFAULT_FEEDBACK_SMOOTHING
 from run_prescription_agent import (
     SYSTEM_PRESCRIPTION,
     cohort_stat_rows_to_top_rx_lines,
@@ -515,7 +516,9 @@ def recommend(
     accepted_boost = float(os.environ.get("CONFIDENCE_ACCEPTED_BOOST", "0.15"))
     rejected_penalty = float(os.environ.get("CONFIDENCE_REJECTED_PENALTY", "0.20"))
     missed_boost = float(os.environ.get("CONFIDENCE_MISSED_BOOST", "0.05"))
-    feedback_smoothing = float(os.environ.get("CONFIDENCE_FEEDBACK_SMOOTHING", "5.0"))
+    feedback_smoothing = float(
+        os.environ.get("CONFIDENCE_FEEDBACK_SMOOTHING", str(DEFAULT_FEEDBACK_SMOOTHING))
+    )
     confidence_by_code: dict[str, float] = {}
     if dx_codes:
         try:
