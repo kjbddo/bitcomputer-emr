@@ -7,6 +7,11 @@
 > **본 결과는 의학적 진단을 대체하지 않습니다.** 시스템의 *유사 사례 검색* 능력에 대한
 > 정량적 측정이며, 임상 의사결정 보조 자료로만 해석되어야 합니다.
 
+> **§1~§7 은 2026-05-07 mock 임베딩(dim=768) 기준이다.** 현재 임베딩은
+> DenseNet121 사전학습(dim=1024)이고 재측정 결과는 **[§8](#8-densenet121-재측정-2026-08-30)**
+> 에 있다. §2 의 지표를 현재 성능으로 읽지 않는다. §8.2 는 그 지표들이
+> 다수 라벨 기준선과 같다는 것도 함께 보여준다.
+
 ## 1. 실험 설정
 
 | 항목 | 값 |
@@ -170,3 +175,111 @@ python scripts/eval_retrieval.py --view PA
 (reconstruction-error pattern + case-based reasoning + graph reasoning) 의 정량적
 재현성 측정 자료이며, 임상 의사결정에는 영상의학 전문의의 판독이 반드시 선행되어야
 합니다.
+
+---
+
+## 8. DenseNet121 재측정 (2026-08-30)
+
+임베딩을 `mock_pca_v1`(seed 고정 random projection, dim=768)에서 **DenseNet121 ImageNet 사전학습 frozen feature extractor**(dim=1024)로 교체한 뒤 다시 측정했다. reconstruction 모델(SQUID)과 ROI mask(mock 휴리스틱)는 그대로다.
+
+| 항목 | 값 |
+| --- | --- |
+| 등록 케이스 | 202 (CheXpert valid frontal, smoke 없음) |
+| 평가 대상(라벨 ≥1) | 146 |
+| Embedding | `densenet121_imagenet_1024` |
+| 실행 | `python scripts/eval_retrieval.py` (global only) |
+| 산출물 | `storage/eval/20260830_143932/` |
+
+> **§1~§3 의 2026-05-07 수치와 모집단이 다르다.** 그때는 205건/174건 평가에 `support_devices` 라벨이 포함돼 있었고, 이번에는 202건/146건에 그 라벨이 없다. 절대 수치를 직접 빼서 비교하면 안 되고, **경향**만 본다.
+
+### 8.1 지표
+
+| metric | mock_pca_v1 (768) | densenet121 (1024) |
+| --- | ---: | ---: |
+| Hit@1 | 0.7184 | 0.7534 |
+| Hit@3 | 0.9425 | 0.9315 |
+| MRR | 0.8277 | 0.8472 |
+| mAP | 0.7532 | 0.7248 |
+| Top-1 disease (any-match) | 0.6034 | 0.8014 |
+| Top-3 disease (any-match) | 0.9598 | 0.9658 |
+
+### 8.2 이 숫자들이 뜻하지 않는 것
+
+**Top-1 any-match 0.8014 는 다수 라벨 기준선과 소수점 넷째 자리까지 같다.**
+
+평가 대상 146건 중 `lung_opacity` 를 가진 케이스가 117건이다. 즉 **아무것도 검색하지 않고 항상 `lung_opacity` 하나만 답해도 0.8014** 가 나온다.
+
+| | 값 |
+| --- | ---: |
+| 기준선: 항상 `lung_opacity` | 0.8014 |
+| 실측 top-1 any-match | 0.8014 |
+| 기준선: 항상 빈도 상위 3개 | 0.9795 |
+| 실측 top-3 any-match | 0.9658 |
+
+top-3 는 오히려 기준선보다 낮다.
+
+원인은 평가 정의에 있다. multi-label 에서 relevance 를 "라벨 집합의 교집합 ≠ ∅" 로 정의하면, 한 라벨이 80% 에 붙어 있는 분포에서는 **아무 이웃이나 뽑아도 겹칠 확률이 높다.** MRR 0.847 / mAP 0.725 / Hit@1 0.753 은 그 확률을 재고 있는 것이지 질환 변별력을 재는 것이 아니다.
+
+기준선 대조 없이 이 지표만 보면 시스템이 하지 않은 일을 했다고 읽게 된다.
+
+### 8.3 per-disease recall — 무엇이 바뀌고 무엇이 안 바뀌었나
+
+| disease | n | recall@1 mock → dense | recall@3 mock → dense |
+| --- | ---: | --- | --- |
+| lung_opacity | 117 | 0.563 → 0.667 | 0.992 → 1.000 |
+| enlarged_cardiomediastinum | 105 | 0.252 → 0.371 | 0.907 → 0.933 |
+| atelectasis | 75 | 0.000 → **0.000** | 0.107 → **0.467** |
+| cardiomegaly | 66 | 0.000 → **0.000** | 0.134 → 0.121 |
+| pleural_effusion | 64 | 0.000 → **0.000** | 0.031 → **0.453** |
+| edema | 42 | 0.000 → **0.000** | 0.023 → 0.048 |
+| consolidation | 32 | 0.000 → **0.000** | 0.000 → **0.000** |
+| pneumonia | 8 | 0.000 → 0.000 | 0.000 → 0.000 |
+| pneumothorax | 7 | 0.000 → 0.000 | 0.000 → 0.000 |
+
+**나아진 것:** `atelectasis` recall@3 0.107 → 0.467, `pleural_effusion` 0.031 → 0.453. 중위권 검색에서 실제 이득이 있다.
+
+**안 바뀐 것:** 다수 라벨 둘을 뺀 **아홉 개 질환 전부 recall@1 이 여전히 0.000** 이다. 1등 자리는 그대로 다수 라벨이 가져간다.
+
+### 8.4 그래서 병목은 임베딩이 아니었다
+
+§3 의 해석은 minority 라벨 회수 실패의 원인으로 "mock embedding 이 disease-discriminative 하지 않다(random projection)" 를 들고, 개선 방향으로 "contrastive / supervised pretrained encoder 도입" 을 제시했다.
+
+**사전학습 encoder 로 바꿨는데 recall@1 은 한 라벨도 0.000 에서 벗어나지 못했다.** 그 진단은 부분적으로만 맞았다 — 임베딩 교체는 중위권(recall@3)을 올렸지만 1등 자리를 바꾸지 못했다.
+
+남은 후보는 셋이고, 이번 측정으로 좁혀지지 않는다:
+
+- **ROI mask 가 여전히 mock** 이다(타원 휴리스틱). ROI별 임베딩이 해부학적으로 어긋나 있으면 공간 정보가 잡음이 된다. §2 에서 ROI 가중합이 Hit@1 을 +3.4%p 올린 것을 보면 이 신호는 살아 있고, 정합성이 개선되면 더 오를 여지가 있다
+- **ImageNet 사전학습을 단일 채널 reconstruction error map 에 적용한 것 자체가 근사**다. 흉부 X-ray 도메인 사전학습이 아니고, 입력도 원본 영상이 아니라 error map 이다
+- **reconstruction error 가 질환을 변별하지 못할 가능성.** 이상 여부는 잡아도 *어떤* 이상인지는 담지 않을 수 있다. 그렇다면 임베딩을 무엇으로 바꿔도 한계가 같다
+
+다음 실험은 이 셋을 가르는 것이어야 한다. 예컨대 ROI 가중합(`--use-roi`)을 DenseNet 임베딩으로 다시 돌려 §2 의 +3.4%p 가 재현되는지 보면 첫 번째 후보를 시험할 수 있다.
+
+### 8.5 재현
+
+```bash
+cd services/xray-rag
+export ARANGO_HOST=localhost ARANGO_PORT=8529 ARANGO_USER=root
+export XRAY_ARANGO_DATABASE=xray_graph_db PYTHONIOENCODING=utf-8
+export ARANGO_PASSWORD="$(grep '^ARANGO_PASSWORD=' ../../infra/.env | cut -d= -f2-)"
+python scripts/eval_retrieval.py
+```
+
+기준선 대조는 자동 산출물에 없다. 직접 계산한다:
+
+```bash
+PW=$(grep '^ARANGO_PASSWORD=' infra/.env | cut -d= -f2-)
+curl -s -X POST "http://localhost:8529/_db/xray_graph_db/_api/cursor" -u "root:$PW" \
+  -d '{"query":"FOR c IN xray_cases FILTER LENGTH(c.diseaseTags)>0 RETURN c.diseaseTags","batchSize":1000}' \
+  -o tags.json
+python -c "
+import json, collections
+rows=json.load(open('tags.json',encoding='utf-8'))['result']
+n=len(rows); cnt=collections.Counter(t for r in rows for t in r)
+top1=cnt.most_common(1)[0][0]; top3={k for k,_ in cnt.most_common(3)}
+print('기준선 top-1:', round(sum(1 for r in rows if top1 in r)/n,4))
+print('기준선 top-3:', round(sum(1 for r in rows if top3 & set(r))/n,4))
+"
+rm -f tags.json
+```
+
+**지표를 기록할 때는 항상 이 기준선을 옆에 둔다.** 그것 없이는 0.8014 가 무슨 뜻인지 알 수 없다.
