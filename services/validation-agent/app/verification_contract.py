@@ -50,12 +50,19 @@ VerificationStatus = Literal["passed", "flagged", "skipped"]
 # 아니라 prescription_api.py 의 Arango co-occurrence 주입이고, 그 주입은
 # 검증 호출보다 먼저 실행된다(spec §11.3 [환경 조건], §11.7). 검사가 복구된
 # 이상 이 집합의 항목도 함께 있어야 한다.
+#
+# code_is_medication 이 여기 든 이유: 그것은 처방코드 문자열이 이 데이터셋의
+# 약제 코드 형태(9자리 숫자)인지만 보고 조회된 어떤 데이터와도 대조하지
+# 않는다. 근거 검사로 집계하면, Arango 조회가 전부 실패해
+# code_in_candidates·name_matches_code 가 모두 skipped 인 응답도 "코드가
+# 약제 코드처럼 생겼다"는 이유 하나로 passed 가 되어 나간다.
 STRUCTURAL_CHECK_IDS = frozenset(
     {
         "schema_top3",
         "confidence_in_range",
         "trace_step_has_observation",
         "candidates_from_finder",
+        "code_is_medication",
     }
 )
 
