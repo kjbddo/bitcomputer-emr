@@ -21,9 +21,11 @@ _PH_TOP_RX = "<<<TOP_RX>>>"
 _PH_SIMILAR = "<<<SIMILAR_OUTCOMES>>>"
 _PH_OPTIONAL_MENTION = "<<<OPTIONAL_MENTION_BLOCK>>>"
 _PH_OPTIONAL_CLINICIAN = "<<<OPTIONAL_CLINICIAN_BLOCK>>>"
+_PH_RANKED_SLATE = "<<<RANKED_SLATE>>>"
 
 PRESCRIPTION_AGENT_PROMPT = """## Role
-당신은 ArangoDB 기반 의료 그래프 데이터를 분석하여 최적의 처방(Prescription)을 추천하는 AI 의료 어시스턴트입니다.
+당신은 ArangoDB 기반 의료 그래프 조회 결과를 의사에게 **설명하는** AI 의료 어시스턴트입니다.
+처방을 고르거나 순위를 매기는 것은 당신의 일이 아닙니다 — 그것은 아래 "확정된 추천 순위"가 이미 끝냈습니다.
 
 ## Context
 1. 데이터 소스: ArangoDB 그래프 — 문서: visits, diagnoses, prescription_masters, order_lines, special_notes, note_mentions
@@ -38,14 +40,13 @@ PRESCRIPTION_AGENT_PROMPT = """## Role
 
 ## Constraints
 1. 출력은 반드시 순수 JSON 형태여야 하며, 다른 서술형 문장은 포함하지 마십시오.
-2. Rank 1, 2, 3은 각각 '최적 처방', '유사 사례 기반 처방', '보조/대안 처방'의 논리를 따릅니다.
-3. **데이터 앵커 + 임상 해석**: 먼저 아래 Patient Context·top_rx·mention·similar_outcomes에 **실제로 등장한** 처방명·코드·증상·토큰을 인용한 뒤, `reason` 안에서만 **일반적인 의학·약리 지식**(약 계열, 상호작용 개념, 감시 항목 등)을 짧게 보강할 수 있습니다. 입력에 없는 진단·처방 **사실**을 새로 만들지는 마십시오.
-4. **name 필드(필수)**: top_rx가 구체 처방 객체들의 배열이고 각 행에 처방명 또는 처방코드가 있으면, 세 rank의 `name`은 **그 목록에 있는 처방명(없으면 처방코드)을 문자열 그대로** 사용하십시오. 목록에 없는 영문 제네릭·상품명을 name으로 쓰지 마십시오.
-5. **prescription_code 필드(필수)**: 각 추천 항목에 해당하는 처방 코드를 문자열로 넣으십시오. top_rx의 처방코드/prescription_code 값을 우선 사용하고, 데이터가 없으면 `"미기재"`를 사용하십시오.
-6. **dosage**: 입력에 용량이 없으면 `"미기재"` 또는 `"데이터에 용량 없음"`만 사용하고, 임의 mg/cc를 지어내지 마십시오.
-7. top_rx가 비어 있거나 안내용 메모 한 줄뿐이면, 임의 약품을 name으로 쓰지 말고 `name`에 `"데이터 부족: top_rx 비어 있음"` 등을 쓰고, `prescription_code`는 `"미기재"`로 두고, `reason`에 그 사실과 가능한 일반적 고려만 짧게 적으십시오.
+2. **순위·처방명·처방코드는 이미 확정되어 있습니다.** 아래 "확정된 추천 순위" 표의 rank·name·prescription_code를 **한 글자도 바꾸지 말고 그대로** 옮겨 적으십시오. 순서를 바꾸거나, 표에 없는 처방을 넣거나, 표의 처방을 빼지 마십시오. (서비스가 이 세 필드를 조회 결과로 덮어쓰므로 바꿔 봐야 반영되지 않습니다.)
+3. **당신이 실제로 쓰는 것은 각 항목의 `reason` 한 단락뿐입니다.** 이 환자 맥락에서 이 처방이 왜 타당한지 / 무엇을 주의해야 하는지를 한국어로 짧게 쓰십시오.
+4. **데이터 앵커 + 임상 해석**: `reason`은 먼저 아래 Patient Context·top_rx·mention·similar_outcomes에 **실제로 등장한** 처방명·코드·증상·토큰을 인용한 뒤, 그 안에서만 **일반적인 의학·약리 지식**(약 계열, 상호작용 개념, 감시 항목 등)을 짧게 보강할 수 있습니다. 입력에 없는 진단·처방 **사실**을 새로 만들지는 마십시오.
+5. **dosage**: 입력에 용량이 없으면 `"미기재"` 또는 `"데이터에 용량 없음"`만 사용하고, 임의 mg/cc를 지어내지 마십시오.
+6. 표의 어떤 순위가 `"데이터 부족: 조회된 처방 후보 없음"` 이면, 그 순위를 채울 약품을 **제안하지 마십시오**. `name`·`prescription_code`를 표 그대로 두고, `reason`에는 "이 상병에 대해 우리 데이터가 뒷받침하는 후보가 이 순위까지 없다"는 사실만 적으십시오. 그것이 유용한 신호입니다.
 
-아래의 환자 상태 및 ArangoDB 그래프 조회 결과를 바탕으로 상위 3개의 처방을 추천하십시오.
+아래의 환자 상태와 ArangoDB 그래프 조회 결과를 읽고, 확정된 3개 순위 각각에 대한 설명을 쓰십시오.
 
 ### Patient Context
 - Patient ID: <<<PATIENT_ID>>>
@@ -56,14 +57,17 @@ PRESCRIPTION_AGENT_PROMPT = """## Role
 - Top Frequency Prescriptions for Disease: <<<TOP_RX>>>
 - Similar Patient Outcomes: <<<SIMILAR_OUTCOMES>>>
 
+### 확정된 추천 순위 (조회 결과가 정했습니다 — 바꾸지 마십시오)
+<<<RANKED_SLATE>>>
+
 <<<OPTIONAL_MENTION_BLOCK>>><<<OPTIONAL_CLINICIAN_BLOCK>>>
 ### Required JSON Format (Strict)
 {
   "prescriptions": [
     {
       "rank": 1,
-      "name": "top_rx에 있는 처방명(또는 처방코드)을 그대로",
-      "prescription_code": "top_rx에 있는 처방코드(없으면 미기재)",
+      "name": "위 표 1순위의 name 을 그대로",
+      "prescription_code": "위 표 1순위의 prescription_code 를 그대로",
       "dosage": "미기재 또는 입력에 있는 용량만",
       "reason": "데이터 인용 후, 필요 시 짧은 임상·약리 보강(한국어)"
     },
@@ -72,7 +76,7 @@ PRESCRIPTION_AGENT_PROMPT = """## Role
   ]
 }
 
-추천 결과:
+설명 결과:
 """
 
 
@@ -82,57 +86,44 @@ def _as_prompt_text(value: Any) -> str:
     return str(value) if value is not None else ""
 
 
-def _distinct_prescription_row_count(top_rx: Any) -> int:
-    """top_rx 배열에서 처방명·코드가 있는 서로 다른 행 수(Arango/코호트 없을 때 희소 판단용)."""
-    if top_rx is None or isinstance(top_rx, str):
-        return 0
-    if not isinstance(top_rx, list):
-        return 0
-    keys_name = ("처방명", "prescription_name", "name")
-    keys_code = ("처방코드", "prescription_code", "code")
-    seen: set[tuple[str, str]] = set()
-    for row in top_rx:
+def _render_ranked_slate(ranked_slate: Any) -> str:
+    """조회가 확정한 순위를 프롬프트에 사람이 읽는 표로 넣는다.
+
+    `_sparse_top_rx_appendix`(구 `:118-135`)가 여기 있었다. 그 분기는 후보가
+    3건 미만이면 rank 2·3 에 "임상적으로 타당한 병용·대안 처방(실제 제품명·
+    성분명)"을 채우라고 모델에게 **명시적으로 허용**했다. 순위·처방명·코드가
+    조회로 확정된 지금 그 지시는 모순이다 — 모델이 채운 이름은 서비스가 어차피
+    조회 결과로 덮어쓰므로 반영되지 않고, `reason` 에만 존재하지 않는 약에 대한
+    설명이 남는다. 그래서 제거했다.
+
+    부수 효과로 §1.1 의 조건부 관측("모델은 지어내지 않는다 — 단 이 분기가
+    걸리지 않았을 뿐")이 무조건이 된다. 이는 설계 §3.2(step 2)가 예정한
+    제거이기도 하지만, step 1 이 이 분기를 논리적으로 성립 불가능하게 만들어
+    먼저 강제했다. §3.2 의 나머지 절반(3건을 채우지 않고 거절을 1급 답으로
+    허용 = 응답 항목 수를 줄이는 것)은 여기서 하지 않는다 — 응답 계약을
+    바꾸는 일이라 step 2 의 몫이다.
+    """
+    rows = ranked_slate if isinstance(ranked_slate, (list, tuple)) else []
+    if not rows:
+        return (
+            "(조회된 처방 후보가 0건입니다. 순위를 채울 약품을 제안하지 말고, "
+            "세 항목 모두 name 을 `데이터 부족: 조회된 처방 후보 없음`, "
+            "prescription_code 를 `미기재`로 두십시오.)"
+        )
+    lines: list[str] = []
+    for row in rows:
         if not isinstance(row, dict):
             continue
-        name = ""
-        for k in keys_name:
-            v = row.get(k)
-            if v is not None and str(v).strip():
-                name = str(v).strip()
-                break
-        code = ""
-        for k in keys_code:
-            v = row.get(k)
-            if v is not None and str(v).strip() and str(v).strip() != "미기재":
-                code = str(v).strip()
-                break
-        if not name and not code:
-            continue
-        key = (name, code)
-        if key in seen:
-            continue
-        seen.add(key)
-    return len(seen)
-
-
-def _sparse_top_rx_appendix(top_rx: Any) -> str:
-    """고유 처방 < 3일 때만: rank 2·3에 그래프 없이도 실제 약품명 제안 허용(플레이스홀더 금지)."""
-    if _distinct_prescription_row_count(top_rx) >= 3:
-        return ""
-    return """
-### Sparse data override (이 섹션은 위 Constraint 4·7보다 우선합니다)
-`top_rx`에서 **처방명 또는 처방코드가 있는 서로 다른 행**이 3개 미만입니다. (ArangoDB 미기동·연결 실패, 코호트 AQL 실패,
-과거 처방 MySQL 적재가 적은 경우 등으로 흔합니다.)
-
-1. **rank 1**: `top_rx`에 유효 처방 행이 **1건 이상**이면, 그중 임상적으로 가장 핵심인 1건의 **처방명(또는 코드)**을 그대로 사용하십시오.
-   유효 행이 **0건**(안내용 `note`만 있는 경우)이면, Patient Context의 상병·증상·history에 맞는 **실제 국내 처방명** 1건을 제안하십시오.
-2. **rank 2, 3**: `top_rx`에 남은 **서로 다른** 처방이 부족하면, 상병·증상·history 맥락에서 **임상적으로 타당한 병용·대안 처방**(실제 제품명·성분명)을 채우십시오.
-3. **`name`에 금지**: "데이터 부족", "유사 사례 없음", "top_rx 비어 있음" 등 **메타 문구만** 넣는 것. 반드시 **구체 처방명**을 쓰십시오.
-4. **rank 2·3**의 `reason` 첫 문장에 반드시 다음 취지를 포함하십시오:
-   「Arango 그래프·코호트 데이터가 부족하여 유사 환자 빈도 근거는 없으며, 일반 진료·지침 수준의 추론 제안입니다.」
-5. `prescription_code`는 확실할 때만 채우고, 불확실하면 `미기재`로 두어도 됩니다.
-6. `dosage`는 입력에 없으면 `미기재` 또는 `데이터에 용량 없음`만 사용하십시오.
-"""
+        rank = row.get("rank")
+        name = row.get("name", "")
+        code = row.get("prescription_code", "")
+        score = row.get("confidence_score")
+        if isinstance(score, (int, float)):
+            basis = f"confidence {float(score):.4f} (유사 환자 코호트 co-occurrence)"
+        else:
+            basis = "confidence 없음 — 이 순위는 조회가 준 후보 순서일 뿐 빈도 근거가 없습니다"
+        lines.append(f"{rank}. name={name!r}  prescription_code={code!r}  — {basis}")
+    return "\n".join(lines)
 
 
 def _coerce_mention_links_for_prompt(mention_links: Any) -> Any:
@@ -184,6 +175,7 @@ def build_prescription_agent_prompt(
     history: Any,
     top_rx: Any,
     similar_outcomes: Any,
+    ranked_slate: Any,
     clinician_question: str | None = None,
     mention_links: Any | None = None,
 ) -> str:
@@ -193,6 +185,10 @@ def build_prescription_agent_prompt(
     LangChain / Spring: 이 문자열 전체를 **user** 메시지로 보내는 것이 가장 단순합니다.
     system 메시지는 짧게 두고(역할·JSON만 출력 등), 긴 지시·데이터는 여기에만 두면 됩니다.
 
+    ranked_slate: `ranking.build_ranked_slate` 가 확정한 순위
+        (`RankedCandidate.to_prompt_row()` dict 목록). **기본값을 두지 않는다** —
+        기본값이 있으면 호출자가 인자를 빠뜨렸을 때 순위가 조용히 모델에게
+        되돌아간다. 이 파라미터를 빠뜨리는 것은 TypeError 여야 한다(spec §3.1).
     clinician_question: 의사/화면에서 온 자연어 질문이 있으면 그래프 요약 뒤에 붙습니다. 없으면 생략.
     mention_links: diagnosis_has_mention·prescription_has_mention·note_mentions 기반 AQL/REST 결과(선택).
         note_mentions 본문 필드(note_id, visit_id, mention_type, text, normalized_text, …)와 엣지 메타를 그대로 넣으면 됩니다.
@@ -207,10 +203,11 @@ def build_prescription_agent_prompt(
         .replace(_PH_HISTORY, _as_prompt_text(history))
         .replace(_PH_TOP_RX, _as_prompt_text(top_rx))
         .replace(_PH_SIMILAR, _as_prompt_text(similar_outcomes))
+        .replace(_PH_RANKED_SLATE, _render_ranked_slate(ranked_slate))
         .replace(_PH_OPTIONAL_MENTION, _optional_mention_section(mention_links))
         .replace(_PH_OPTIONAL_CLINICIAN, optional_block)
     )
-    return base + _sparse_top_rx_appendix(top_rx)
+    return base
 
 
 def load_prescription_context_file(path: Path) -> dict[str, Any]:

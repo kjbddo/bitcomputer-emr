@@ -48,6 +48,15 @@ from prescription_agent import (
     build_prescription_agent_prompt,
     parse_prescriptions_llm_response,
 )
+from ranking import (
+    NO_CANDIDATE_CODE,
+    NO_CANDIDATE_DOSAGE,
+    NO_CANDIDATE_NAME,
+    NO_CANDIDATE_REASON,
+    SLATE_SIZE,
+    build_ranked_slate,
+    describe_ranking_strategy,
+)
 from run_prescription_agent import (
     SYSTEM_PRESCRIPTION,
     cohort_stat_rows_to_top_rx_lines,
@@ -633,12 +642,40 @@ def recommend(
     if _is_empty_top_rx(effective_top_rx):
         effective_top_rx = [{"note": "데이터 부족: top_rx 비어 있음"}]
 
+    # 순위를 여기서 확정한다 — 모델 호출 **전에**(spec §3.1). 모델은 이 표를
+    # 받아서 각 항목의 reason 만 쓴다. 순서·처방명·코드는 아래에서 이 slate 로
+    # 덮어쓰므로 모델이 무엇을 내든 응답의 순위는 바뀌지 않는다.
+    ranked_slate = build_ranked_slate(effective_top_rx, confidence_by_code)
+    ranking_strategy = describe_ranking_strategy(ranked_slate)
+    scored_count = sum(1 for c in ranked_slate if c.confidence_score is not None)
+    if ranking_strategy != "confidence":
+        # 조용히 넘어가지 않는다. "후보는 있는데 점수가 없다"(호출자 top_rx,
+        # disease_codes 없음, confidence AQL 실패)와 "후보 자체가 없다"(E78)를
+        # 구분해 남긴다. 응답 쪽 진실은 각 항목의 confidence_score=None 이다.
+        logger.warning(
+            "순위가 confidence 로 뒷받침되지 않음: strategy=%s slate=%d disease_codes=%s "
+            "— 순서는 조회 후보 순서이며 빈도 근거가 아니다",
+            ranking_strategy,
+            len(ranked_slate),
+            dx_codes,
+        )
+    trace_tool(
+        "prescription_ranking",
+        True,
+        status="success",
+        strategy=ranking_strategy,
+        slateSize=len(ranked_slate),
+        scoredCandidates=scored_count,
+        confidenceRowCount=len(confidence_by_code),
+    )
+
     user_msg = build_prescription_agent_prompt(
         patient_id=req.patient_id,
         symptoms=req.symptoms,
         history=req.history,
         top_rx=effective_top_rx,
         similar_outcomes=similar_for_prompt,
+        ranked_slate=[c.to_prompt_row() for c in ranked_slate],
         clinician_question=req.clinician_question,
         mention_links=req.mention_links,
     )
@@ -706,21 +743,49 @@ def recommend(
         )
         raise HTTPException(status_code=502, detail=f"LLM JSON 파싱 실패: {exc}") from exc
 
-    items = [PrescriptionItem(**item) for item in data["prescriptions"]]
-
-    # confidence_by_code는 Arango co-occurrence 기반 계산 결과.
-    # LLM 출력에는 confidence_score가 없으므로 처방코드로 매칭해서 주입한다.
-    for it in items:
-        if not it.prescription_code:
+    # 응답 항목은 **조회가 확정한 slate** 로 조립한다. 모델 출력에서 가져오는
+    # 것은 rank 별 reason 과 dosage 뿐이다(spec §3.1 "모델에게 남는 일").
+    #
+    # 이 조립이 §11.5 의 코드중복을 구조적으로 없앤다 — slate 는 처방코드로
+    # 이미 접혀 있으므로 서로 다른 두 순위가 같은 실제 코드를 가질 수 없다.
+    #
+    # confidence_score 주입 방식이 바뀌었다. 이전에는
+    # `confidence_by_code.get(code, 0.0)` 로 조회에 없는 코드에도 0.0 을 넣어
+    # "조회된 0.0"과 "폴백된 0.0"이 구분되지 않았다(M-4 로 기록된 한계). 순위가
+    # 이 값에 걸리는 지금 그것은 한계가 아니라 결함이다 — 근거 없는 항목이
+    # 근거 있는 0.0 처럼 보이면 GC-2 가 뚫린다. 조회에 실제로 있을 때만
+    # 숫자를 싣고, 없으면 None 으로 남긴다(verification 의 confidence_in_range
+    # 는 None 을 skipped 로 판정한다 — 근거 없으면 통과가 아니다).
+    model_rows = list(data["prescriptions"])
+    items: List[PrescriptionItem] = []
+    for position in range(SLATE_SIZE):
+        model_row = model_rows[position] if position < len(model_rows) else {}
+        picked = ranked_slate[position] if position < len(ranked_slate) else None
+        if picked is None:
+            # 이 순위에 올릴 조회 후보가 없다. reason 까지 조회층이 쓴다 —
+            # 모델이 지시를 무시하고 약을 제안했더라도 그 문장이 빈 순위의
+            # 설명으로 새어 나가면 안 된다(GC-3 fail-closed).
+            items.append(
+                PrescriptionItem(
+                    rank=position + 1,
+                    name=NO_CANDIDATE_NAME,
+                    prescription_code=NO_CANDIDATE_CODE,
+                    dosage=NO_CANDIDATE_DOSAGE,
+                    reason=NO_CANDIDATE_REASON,
+                    confidence_score=None,
+                )
+            )
             continue
-        code = str(it.prescription_code).strip()
-        if not code or code == "미기재":
-            continue
-        if confidence_by_code:
-            # M-4(verification.py 의 confidence_in_range 문서화 참조): 코드가
-            # confidence_by_code 에 없어도 여기서 0.0 이 주입된다 — 조회된 0.0 과
-            # 폴백된 0.0 이 구분되지 않는다. 동작은 그대로 두고 한계만 기록한다.
-            it.confidence_score = confidence_by_code.get(code, 0.0)
+        items.append(
+            PrescriptionItem(
+                rank=picked.rank,
+                name=picked.name,
+                prescription_code=picked.prescription_code,
+                dosage=str(model_row.get("dosage") or NO_CANDIDATE_DOSAGE),
+                reason=str(model_row.get("reason") or ""),
+                confidence_score=picked.confidence_score,
+            )
+        )
 
     return PrescriptionRecommendResponse(
         prescriptions=items,

@@ -55,6 +55,7 @@ from prescription_agent import (
     load_prescription_context_file,
     parse_prescriptions_llm_response,
 )
+from ranking import build_ranked_slate
 
 SYSTEM_PRESCRIPTION = (
     "당신은 지시에 따르는 의료 데이터 분석 보조 도구입니다. "
@@ -708,12 +709,17 @@ def main() -> None:
             )
 
     cq = (args.query or "").strip() or None
+    # 이 CLI 는 상병코드를 받지 않으므로 confidence 조회가 없다 — spec §3.1 의
+    # "confidence 없음, 후보는 있음" 경우다. 순위를 모델에게 되돌려주지 않고
+    # 조회(여기서는 컨텍스트 JSON)가 준 후보 순서를 그대로 확정 순위로 쓴다.
+    ranked_slate = build_ranked_slate(ctx["top_rx"], {})
     user_msg = build_prescription_agent_prompt(
         patient_id=ctx["patient_id"],
         symptoms=ctx["symptoms"],
         history=ctx["history"],
         top_rx=ctx["top_rx"],
         similar_outcomes=ctx["similar_outcomes"],
+        ranked_slate=[c.to_prompt_row() for c in ranked_slate],
         clinician_question=cq,
         mention_links=ctx.get("mention_links"),
     )
