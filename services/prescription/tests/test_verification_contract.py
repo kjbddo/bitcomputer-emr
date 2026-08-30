@@ -47,8 +47,18 @@ def test_structural_ids_are_pinned():
             "confidence_in_range",
             "trace_step_has_observation",
             "candidates_from_finder",
+            "code_is_medication",
         }
     )
+
+
+# code_is_medication 은 코드 문자열의 모양만 본다 — 조회된 어떤 데이터와도
+# 대조하지 않는다. 근거 검사로 집계되면, Arango 조회가 전부 실패해
+# code_in_candidates·name_matches_code 가 모두 skipped 인 응답도 "코드가
+# 약제 코드처럼 생겼다"는 이유 하나로 "검증됨" 이 되어 나간다(GC-2).
+def test_code_is_medication_alone_never_passes():
+    checks = [_check("code_is_medication", "ok"), _check("code_in_candidates", "skipped")]
+    assert aggregate_status(checks) == "skipped"
 
 
 # confidence_in_range 는 0..1 범위만 본다 — 조회된 어떤 데이터와도 대조하지

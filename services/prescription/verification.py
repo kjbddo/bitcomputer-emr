@@ -52,12 +52,19 @@ I1). 애초에 이 면제가 빠져 있어서, 모델이 세 추천 중 둘 이�
 60% 수치에 이 오탐이 섞여 있었다(§11.4/§11.5 재측정 참조). rank 집합
 조건은 이 면제와 무관하며 그대로 둔다.
 
+code_is_medication 은 추천된 처방코드가 이 데이터셋의 약제 코드 형태인지만
+본다(medication_codes.py 가 규칙을 소유한다). 조회 데이터와 대조하지 않으므로
+구조 검사다(STRUCTURAL_CHECK_IDS) — 이 ok 하나로 passed 가 나가면 안 된다.
+후보가 아니라 출력 항목을 대상으로 하는 이유는 아래 검사 본문의 주석에 있다.
+근거: .superpowers/sdd/agent-architecture-review.md F-H1.
+
 spec: Docs/superpowers/specs/2026-08-29-runtime-verification-design.md §6.1, §11.2
 """
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Sequence
 
+from medication_codes import is_medication_code
 from verification_contract import CheckResult, VerificationResult, aggregate_status
 
 # 모델이 근거 없음을 정직하게 신고할 때 쓰는 고정 문자열들.
@@ -210,6 +217,36 @@ def verify_prescriptions(*, candidates: Sequence[Any], items: Sequence[Any]) -> 
                         id="name_matches_code", target=target,
                         outcome="ok" if expected_name == name else "flagged",
                         evidence=f"후보 {expected_name!r} vs 출력 {name!r}"))
+
+        # code_is_medication — 추천된 코드가 약제 코드인가(F-H1).
+        #
+        # 구조 검사다(STRUCTURAL_CHECK_IDS). 코드 문자열의 모양만 보고 조회된
+        # 어떤 데이터와도 대조하지 않으므로, 이 ok 하나로 passed 가 나가면
+        # 안 된다(GC-2).
+        #
+        # 후보가 아니라 **출력 항목**을 대상으로 한다. 후보를 대상으로 쓰면
+        # 조회 AQL 이 이미 약제만 올리므로 구조적으로 발화할 수 없는 검사가
+        # 된다 — 제거된 dosage_verbatim 과 같은 부류다. 출력 항목을 보면
+        # Arango 를 우회하는 경로에서 실제로 발화한다: 요청이 top_rx 를 직접
+        # 주면(시나리오 fixture, 상류 서비스가 채운 목록) 그 후보에는 무엇이든
+        # 들어올 수 있고 모델은 §11.8.2 대로 그것을 충실히 추천한다.
+        # F-H1 의 라이브 관측(AL801·AA254·KK052)이 정확히 그 모양이다.
+        if code in _PLACEHOLDER_VALUES:
+            # 코드를 기재하지 않은 것은 "약이 아니다" 가 아니라 판정 불가다.
+            # §11.3(code_in_candidates)·최종 리뷰 I1(schema_top3)이 두 번
+            # 걷어낸 오탐 — 정직한 신고를 근거 불일치로 보고하면 안 된다.
+            checks.append(CheckResult(
+                id="code_is_medication", target=target, outcome="skipped",
+                evidence=f"모델이 처방코드를 기재하지 않음(플레이스홀더 {code!r})"))
+        elif is_medication_code(code):
+            checks.append(CheckResult(
+                id="code_is_medication", target=target, outcome="ok",
+                evidence=f"코드 {code!r} 가 약제 코드 형태(9자리 숫자)"))
+        else:
+            checks.append(CheckResult(
+                id="code_is_medication", target=target, outcome="flagged",
+                evidence=f"코드 {code!r} 는 약제 코드 형태가 아님 — "
+                         "이 데이터셋에서 수가·검사·처치·재료 코드다"))
 
         if confidence is None:
             # Arango co-occurrence 주입이 일어나지 않았다(그래프가 비었거나

@@ -161,6 +161,13 @@ B0 의 Task 10·11 에서 확인된 함정이다. `@JsonIgnoreProperties(ignoreU
 | `code_in_candidates` | 각 `prescription_code` 가 조회된 후보 집합에 있는가(플레이스홀더 코드는 `skipped`) | `skipped` |
 | `name_matches_code` | 후보 집합에서 그 코드에 붙은 이름과 반환된 `name` 이 같은가(플레이스홀더 이름은 `skipped`) | `skipped` |
 | `confidence_in_range` | `confidence_score` 가 0..1 범위인가 (구조 검사 — 조회 데이터와 대조하지 않는다) | `skipped` |
+| `code_is_medication` | 각 `prescription_code` 가 이 데이터셋의 약제 코드 형태(9자리 숫자)인가 (구조 검사 — 조회 데이터와 대조하지 않는다) | `skipped` |
+
+**`code_is_medication` 은 F-H1 에서 추가됐다.** 조회 코퍼스(`order_lines` 6,809행)의 다수가 약이 아니라 진찰료·검사 결과 라인이고, §11.8.2 대로 모델은 건네받은 후보 밖으로 나가지 않으므로 후보 품질이 곧 답 품질이다. 같은 태스크에서 후보 조회 AQL 이 약제만 올리도록 필터를 넣었다 — 필터만 넣으면 잘못된 후보가 조용히 사라지고, 검사만 넣으면 화면이 온통 빨개진다.
+
+필터가 있는데도 이 검사가 발화할 수 있는 이유는 **요청이 `top_rx` 를 직접 주는 경로가 Arango 를 통째로 우회하기 때문**이다(시나리오 fixture, 상류 서비스가 채운 목록). 그래서 검사는 후보가 아니라 **출력 항목**을 대상으로 한다 — 후보를 대상으로 하면 필터 뒤에서 구조적으로 발화할 수 없는, 제거된 `dosage_verbatim` 과 같은 부류가 된다. 분류 규칙과 그 실측 근거·위음성 3건은 `services/prescription/medication_codes.py` 에 있다.
+
+약제 후보가 0건이면 필터를 푼 재조회로 폴백하지 않는다. 폴백은 없는 근거를 만들어내는 것이고(수가 코드가 후보에 들어가 `code_in_candidates` 가 ok 를 낸다) GC-2 가 금지하는 경로다. 후보가 비면 근거 검사는 전부 `skipped` 이고 응답은 `skipped` 다. 라이브에서 E78(고지혈증)이 실제로 이 경우다 — 연결된 `order_line` 14행 전부가 수가·검사다.
 
 **`reason` 검사는 A 에서 뺀다.** §2.1 의 `reason_supported` 를 이식하지 않는다. 산문으로 쓰인 이유의 타당성은 결정론적으로 판정할 수 없고, 단어 존재로 대신하는 순간 이 프로젝트가 고치려는 문제를 반복한다. 이유의 근거성은 B(NLI)가 할 일이고, 그때까지는 검증하지 않는다고 정직하게 둔다.
 

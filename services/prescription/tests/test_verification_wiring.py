@@ -114,3 +114,41 @@ def test_exception_fallback_shape_is_json_ready(monkeypatch):
     assert result["checks"] == []
     assert isinstance(result["skippedReason"], str)
     json.dumps(result)
+
+
+# --- F-H1 Half 1: 약제 후보가 0건일 때의 정직한 degradation ---
+
+def test_zero_medication_candidates_never_reports_passed(monkeypatch):
+    """약제 필터가 후보를 0건으로 만들면 응답은 passed 가 아니다(GC-2).
+
+    라이브에서 E78(고지혈증)이 정확히 이 경우다: 연결된 order_line 14행이
+    전부 수가·검사라 약제는 0건이다. 조회가 성공했다는 뜻의 필드
+    (used_arango_top_rx / used_cohort_rx)가 켜지지 않고, 검증은 대조할
+    근거가 없으므로 skipped 로 떨어지며 이유가 남는다.
+    """
+    monkeypatch.setattr(prescription_api, "fetch_top_rx_from_arango", lambda *a, **k: [])
+    monkeypatch.setattr(
+        prescription_api, "fetch_cohort_prescriptions_by_diagnosis_codes", lambda *a, **k: []
+    )
+    monkeypatch.setattr(
+        prescription_api, "fetch_confidence_scores_by_diagnosis_codes", lambda *a, **k: []
+    )
+    monkeypatch.setenv("LLM_PROVIDER", "stub")
+
+    req = prescription_api.PrescriptionRecommendRequest(
+        patient_id="p-e78",
+        symptoms="건강검진에서 콜레스테롤 높다고 들었다",
+        history="특이사항 없음",
+        top_rx=[],
+        disease_codes=["E78"],
+        fetch_top_rx_from_arango=True,
+        fetch_cohort_rx_from_arango=True,
+    )
+    resp = prescription_api.recommend(req, x_prescription_eval_trace=None)
+
+    assert resp.used_arango_top_rx is False
+    assert resp.arango_top_rx_count == 0
+    assert resp.used_cohort_rx is False
+    assert resp.cohort_rx_count == 0
+    assert resp.verification["status"] == "skipped"
+    assert resp.verification["skippedReason"]
