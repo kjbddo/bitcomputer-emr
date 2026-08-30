@@ -172,6 +172,72 @@ def fetch_top_rx_from_arango(patient_id: Any, *, limit: int = 80) -> list[dict[s
         return []
 
 
+# 신기능 관문(설계 §3.3)이 읽을 특이사항 노트. 도달 경로는
+# patient_id -> visits(`내원번호_norm` 또는 `_key`) -> visit_has_note -> special_notes.
+#
+# `v.visit_id` 를 조건에 넣지 않는다: visits 문서에는 그 필드가 없다(2026-08-31
+# 실측 — 1,070행 전부 `_key` 와 `내원번호_norm` 둘뿐이다). _TOP_RX_AQL 은
+# 그 조건을 갖고 있지만 항상 null 이라 실질적으로 `_key` 절이 일한다.
+# 반대로 special_notes 쪽에는 `visit_id` 가 있고 그것이 visits._key 와 같다 —
+# 그래도 문자열 비교 대신 visit_has_note 간선을 탄다. 간선이 1,025행 전부에
+# 존재하고, 나중에 노트가 방문에 다르게 붙어도 간선이 진실이기 때문이다.
+_SPECIAL_NOTES_AQL = """
+    WITH visits, visit_has_note, special_notes
+    FOR v IN visits
+      FILTER v.`내원번호_norm` == @pid OR v._key == @vid_key
+      FOR e IN visit_has_note
+        FILTER e._from == v._id
+        LET n = DOCUMENT(e._to)
+        FILTER n != null
+        RETURN { note: TO_STRING(n.`특이사항_norm`) }
+"""
+# 스칼라가 아니라 객체를 RETURN 한다. `_aql_rows` 가 커서를 `[dict(x) ...]` 로
+# 접기 때문에 문자열 행은 ValueError 로 터진다 — 그리고 그 예외는 ArangoError
+# 가 아니라서 `_aql_rows` 의 except 를 통과해 이 함수의 광범위 except 까지
+# 올라가 조용히 빈 리스트가 된다. 실측에서 실제로 그렇게 됐다(2026-08-31).
+_SPECIAL_NOTE_ROW_KEY = "note"
+
+
+def fetch_special_notes_from_arango(patient_id: Any) -> list[str]:
+    """이 환자의 특이사항 노트 원문을 그대로 돌려준다.
+
+    파싱하지 않는다 — 해석은 renal_gate 가 소유한다. 여기는 도달만 한다.
+
+    **실패는 빈 리스트다. 그리고 빈 리스트는 "신기능 정상"이 아니다.** 상류의
+    renal_gate.evaluate_renal_gate 가 빈 입력을 `undetermined` 로 읽고, 표 안의
+    약에 대해 `clear` 가 아니라 `unknown` 을 낸다(GC-3 fail-closed). 이 함수가
+    예외를 삼키는 것이 안전한 이유는 그 계약 하나뿐이므로, 상류에서 빈 노트를
+    "금기 없음"으로 바꿔 읽는 변경이 들어오면 여기도 함께 다시 봐야 한다.
+    """
+    import logging
+
+    _log = logging.getLogger("run_prescription_agent")
+
+    raw = str(patient_id).strip()
+    if not raw:
+        return []
+    vid_key = raw if raw.upper().startswith("VISIT_") else f"VISIT_{raw}"
+    try:
+        from run_graph_qa import _aql_rows, connect_arango, load_arango_config
+
+        cfg = load_arango_config()
+        try:
+            db = connect_arango(cfg)
+        except SystemExit as e:
+            _log.warning("ArangoDB 연결 실패 — 특이사항 노트 조회 생략. SystemExit: %s", e)
+            return []
+        rows = _aql_rows(db, _SPECIAL_NOTES_AQL, {"pid": raw, "vid_key": vid_key})
+        notes = []
+        for row in rows or []:
+            value = row.get(_SPECIAL_NOTE_ROW_KEY) if isinstance(row, dict) else row
+            if value is not None and str(value).strip():
+                notes.append(str(value))
+        return notes
+    except Exception as exc:
+        _log.warning("Arango 특이사항 노트 조회 예외: %s", exc, exc_info=True)
+        return []
+
+
 # 상병 코호트 후보도 약제만 올린다(F-H1). 상세는 _TOP_RX_AQL 위 주석 참조.
 # 여기서도 필터는 COLLECT/LIMIT 앞에 있어야 한다 — 뒤에 두면 상위 N개 집계가
 # 진찰료·검사 라인으로 채워지고 약제가 밀려난다.
