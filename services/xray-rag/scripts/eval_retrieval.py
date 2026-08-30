@@ -343,6 +343,26 @@ def _md_report(meta: Dict[str, Any], metrics: Dict[str, Any], pop: Dict[str, Any
     return "\n".join(L)
 
 
+def _build_meta(settings, embedding_version: Optional[str], weights: Dict[str, float],
+                 view: Optional[str]) -> Dict[str, Any]:
+    """리포트 메타데이터를 조립한다.
+
+    embedding_version 은 호출자가 넘긴다 — settings.EMBEDDING_VERSION 을 여기서
+    직접 읽지 않는다. 7bf1439 이 그 설정 기본값을 없앤 이유가 "config 기본값이
+    아니라 실제로 구성된 모델(app.ml.factory.BuildResult.embedding_version)에서
+    값이 나와야 한다"였고, 이 함수가 그 값을 직접 읽으면 같은 실수가 리포트에서
+    반복된다. 호출자(main)가 `container.embedding_version` 을 넘긴다.
+    """
+    return {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "model_version": settings.MODEL_VERSION,
+        "embedding_version": embedding_version,
+        "embedding_dim": settings.EMBEDDING_DIM,
+        "similarity_weights": json.dumps(weights),
+        "view_filter": view or "(all)",
+    }
+
+
 # ---------- 메인 ----------
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -406,14 +426,7 @@ def main() -> int:
     )
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    meta = {
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "model_version": settings.MODEL_VERSION,
-        "embedding_version": settings.EMBEDDING_VERSION,
-        "embedding_dim": settings.EMBEDDING_DIM,
-        "similarity_weights": json.dumps(weights),
-        "view_filter": args.view or "(all)",
-    }
+    meta = _build_meta(settings, container.embedding_version, weights, args.view)
 
     (out_dir / "metrics.json").write_text(
         json.dumps({"meta": meta, "metrics": metrics, "population": pop}, ensure_ascii=False, indent=2),
