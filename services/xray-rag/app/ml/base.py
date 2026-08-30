@@ -21,7 +21,13 @@ class ROIMaskModel(Protocol):
       upper_left_lung, lower_left_lung, upper_right_lung, lower_right_lung,
       pleural_region, mediastinum
     각 마스크는 [H, W] uint8 또는 float32(0/1).
+
+    `version` 은 이 마스크를 만든 구현의 식별자다(예: "cv_lung_heart_v1",
+    "mock_ellipse_mask_v1"). 케이스 문서에 함께 저장돼, 서로 다른 분할기에서 나온
+    ROI 임베딩이 섞였는지 나중에 판별할 수 있게 한다.
     """
+
+    version: str
 
     def generate_masks(self, image: np.ndarray) -> Dict[str, np.ndarray]:  # pragma: no cover
         ...

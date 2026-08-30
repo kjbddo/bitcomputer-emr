@@ -11,6 +11,11 @@
 > DenseNet121 사전학습(dim=1024)이고 재측정 결과는 **[§8](#8-densenet121-재측정-2026-08-30)**
 > 에 있다. §2 의 지표를 현재 성능으로 읽지 않는다. §8.2 는 그 지표들이
 > 다수 라벨 기준선과 같다는 것도 함께 보여준다.
+>
+> **ROI mask 도 더 이상 §1 표의 "mock 휴리스틱"이 아니다.** 영상 적응형 분할로
+> 교체한 뒤의 재측정은 **[§9](#9-roi-mask-를-영상-적응형-분할로-교체-2026-08-31)**
+> 에 있다. 결론부터: **기준선을 넘지 못했고, ROI 는 병목이 아니었다.**
+> §9.4 는 이 스크립트의 top-1 이 ±1건 흔들린다는 것도 함께 기록한다.
 
 ## 1. 실험 설정
 
@@ -283,3 +288,174 @@ rm -f tags.json
 ```
 
 **지표를 기록할 때는 항상 이 기준선을 옆에 둔다.** 그것 없이는 0.8014 가 무슨 뜻인지 알 수 없다.
+
+---
+
+## 9. ROI mask 를 영상 적응형 분할로 교체 (2026-08-31)
+
+§8.4 가 남긴 세 후보 중 첫 번째 — **ROI mask 가 여전히 고정 타원이라 ROI별 임베딩이
+해부학과 어긋나 있다** — 를 시험했다. 설계 문서(`Docs/superpowers/specs/2026-08-30-ai-service-redesign-design.md`) §5 의
+6번 항목이다.
+
+| 항목 | 값 |
+| --- | --- |
+| 바꾼 것 | ROI mask: 고정 타원(`MockROIModel`) → 영상 적응형 고전 CV 분할(`app/ml/cv_roi_model.py`) |
+| 그대로 둔 것 | reconstruction(SQUID `ae_squid_v1`), embedding(`densenet121_imagenet_1024`, dim=1024) |
+| 등록 케이스 | 202 (CheXpert valid frontal) — §8 과 **같은 모집단, 같은 라벨 분포** |
+| 평가 대상(라벨 ≥1) | 146 |
+| 재시드 | `xray_cases` / `case_has_*` truncate 후 202건 전량 재등록 (292.6s) |
+| 산출물 | `storage/eval/{before,after}_{global,roi}/` |
+
+분할은 학습된 모델이 아니다. 외부 가중치를 들이는 것은 의존성·출처 결정이라 이
+작업에서 하지 않았다. numpy/scipy 만으로 도는 고전 CV 파이프라인이다: 분위수 대비
+정규화 → 테두리에 붙은 **평탄한** 어두운 영역을 배경으로 제거 → 몸통 중앙에서 가장
+밝은 열(척추/종격동)을 찾아 좌/우를 나눔 → 각 반쪽의 밝기 분위수로 폐야 후보를 뽑아
+면적 × 위치 사전확률로 선택 → 두 폐 사이 빈틈을 세로 위치로 종격동(위)/심장(아래)
+으로 분할. 202건 중 **201건에서 분할이 성립**했고 1건은 mock 타원으로 fallback 했다
+(WARNING 로그로 남는다).
+
+### 9.1 지표 — 기준선을 항상 옆에 둔다
+
+**기준선(재시드 후 재계산, §8.5 방법): top-1 `lung_opacity` = 0.8014, top-3 빈도상위 = 0.9795.**
+§8 과 동일하다(모집단이 같으므로 당연하다).
+
+| metric | global-only 이전 | global-only 이후 | `--use-roi` 이전(타원) | `--use-roi` 이후(CV) | 기준선 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Hit@1 | 0.7534 | 0.7534 | 0.6986 | **0.6644** | - |
+| Hit@3 | 0.9315 | 0.9315 | 0.9247 | **0.8904** | - |
+| Hit@5 | 0.9589 | 0.9589 | 0.9658 | 0.9521 | - |
+| MRR | 0.8472 | 0.8472 | 0.8196 | **0.7866** | - |
+| mAP | 0.7248 | 0.7248 | 0.7331 | **0.7033** | - |
+| Top-1 disease (any-match) | 0.8014 | 0.8014 | 0.8151 | 0.8151 | **0.8014** |
+| Top-3 disease (any-match) | 0.9658 | 0.9658 | 0.9658 | 0.9726 | **0.9795** |
+
+**global-only 는 움직이지 않았다.** ROI 를 쓰지 않는 경로이므로 그래야 하고, 실제로
+집계 지표가 소수점 넷째 자리까지 전부 같다. (per-disease recall@3 두 값만 1건씩
+흔들렸는데 그 원인은 §9.4 에 있다 — 내 변경과 무관한 평가 스크립트의 tie-break
+불안정성이다.)
+
+### 9.2 per-disease recall — `--use-roi`
+
+| disease | n | recall@1 타원 → CV | recall@3 타원 → CV |
+| --- | ---: | --- | --- |
+| lung_opacity | 117 | 0.692 → 0.769 | 1.000 → 1.000 |
+| enlarged_cardiomediastinum | 105 | 0.362 → 0.276 | 0.962 → 0.933 |
+| atelectasis | 75 | 0.000 → **0.000** | 0.427 → **0.627** |
+| cardiomegaly | 66 | 0.000 → **0.000** | 0.258 → 0.273 |
+| pleural_effusion | 64 | 0.000 → **0.000** | 0.312 → 0.266 |
+| edema | 42 | 0.000 → **0.000** | 0.024 → 0.024 |
+| consolidation | 32 | 0.000 → **0.000** | 0.000 → 0.000 |
+| pneumonia | 8 | 0.000 → 0.000 | 0.000 → 0.000 |
+| pneumothorax | 7 | 0.000 → 0.000 | 0.000 → 0.000 |
+| lung_lesion | 1 | 0.000 → 0.000 | 0.000 → 0.000 |
+| pleural_other | 1 | 0.000 → 0.000 | 0.000 → 0.000 |
+
+**나아진 것:** `atelectasis` recall@3 0.427 → 0.627. top-3 any-match 0.9658 → 0.9726.
+
+**안 바뀐 것:** 다수 라벨 둘을 뺀 **아홉 개 질환 전부 recall@1 이 여전히 0.000**이다.
+§8.3 에서 임베딩을 바꿨을 때와 **똑같은 그림**이다. 1등 자리는 여전히
+`lung_opacity` / `enlarged_cardiomediastinum` 둘만 가져간다.
+
+**나빠진 것:** Hit@1 0.6986 → 0.6644, MRR 0.8196 → 0.7866, mAP 0.7331 → 0.7033.
+해부학적으로 더 맞는 마스크가 검색 순위를 **떨어뜨렸다**.
+
+### 9.3 사전에 못박은 성공 기준에 대한 판정: **실패**
+
+설계 §5 의 기준은 "다수 라벨 기준선을 넘지 못하면 서사에서 뺀다"였다. 넘었다고
+말할 수 없다.
+
+- `--use-roi` top-1 any-match **0.8151 vs 기준선 0.8014** — 146건 중 **2건** 차이다.
+- 그 0.8151 은 **고정 타원일 때와 소수점 넷째 자리까지 같다.** 즉 이 2건의 우위는
+  ROI 정합성 개선에서 온 것이 아니다. 분할을 고쳐도 이 숫자는 1건도 움직이지 않았다.
+- top-3 any-match 0.9726 은 여전히 **기준선 0.9795 아래**다.
+- 그 2건조차 §9.4 의 tie-break 노이즈(±1건)와 같은 크기다.
+
+**결론: ROI mask 정합성은 병목이 아니었다.** §8.4 의 첫 번째 후보는 이 실험으로
+탈락한다. 남은 둘 — ImageNet 사전학습을 단일 채널 error map 에 적용한 도메인
+불일치, reconstruction error 자체가 질환을 변별하지 못할 가능성 — 로 좁혀졌다.
+
+Hit@1/MRR/mAP 가 오히려 내려간 것은 그 방향을 가리킨다. 마스크가 **덜** 정확했을
+때(모든 영상에 같은 타원) ROI별 임베딩은 사실상 "영상 중앙부의 error map" 이라는
+안정적인 전역 요약이었다. 마스크를 영상마다 다르게 만들자 그 요약이 영상마다 다른
+영역을 재게 됐고, 두 케이스의 ROI 임베딩을 비교하는 것이 **서로 다른 것을 비교하는
+일**이 됐다. 공간 정보가 질환을 변별하려면 error map 자체가 질환별로 다른 공간 분포를
+가져야 하는데, 그 전제가 성립하지 않으면 마스크를 정확히 할수록 비교 가능성만
+잃는다.
+
+§2 가 기록한 "mock mask 로도 ROI 가중합이 Hit@1 을 +3.4%p 올렸다"는 관측도 다시 봐야
+한다. 그건 mock 임베딩(random projection, dim=768) 시절의 수치다. DenseNet 임베딩에서는
+타원 마스크로도 Hit@1 이 0.7534 → 0.6986 으로 **내려간다**. ROI 가중합의 이득은
+임베딩을 바꾼 시점에 이미 사라져 있었다.
+
+### 9.4 발견: 이 평가 스크립트의 top-1 은 ±1건 흔들린다
+
+§9.1 의 global-only per-disease recall@3 두 값이 재시드 전후로 1건씩 달라진 것을
+추적하다 나온 것이다. 임베딩·유사도 행렬은 완전히 결정론적임을 확인했고
+(재계산한 벡터가 저장된 벡터와 bit-exact 일치), 케이스 행 순서를 무작위로 섞어도
+지표는 변하지 않는다. 원인은 `scripts/eval_retrieval.py` 의 weighted voting 에 있다:
+
+```python
+for d in labels[j]:      # labels[j] 는 set - 문자열 해시 순서로 순회한다
+    scores[d] += s
+ranking = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)  # stable sort
+```
+
+점수가 **정확히 같은** 질환들의 최종 순위는 `scores` dict 의 삽입 순서, 즉 set 순회
+순서로 결정되고, 그것은 `PYTHONHASHSEED` 에 따라 프로세스마다 달라진다. 3위/4위
+상대 격차가 0인 케이스가 1건, 0.1% 이내가 8건 있다.
+
+`PYTHONHASHSEED` 를 0~9 로 바꿔가며 같은 DB 를 10회 평가한 결과:
+
+| mode | top-1 any-match | top-3 any-match |
+| --- | --- | ---: |
+| global-only | 0.8014 (6회) / 0.8082 (4회) | 0.9658 (고정) |
+| `--use-roi` | 0.8151 (6회) / 0.8219 (4회) | 0.9726 (고정) |
+
+**§8.2 의 "0.8014 는 기준선과 소수점 넷째 자리까지 같다"는 관측은 우연의 일치였다.**
+그 값 자체가 ±1건(±0.0068) 흔들린다. 기준선 대조라는 §8.2 의 교훈은 그대로 유효하지만,
+이 지표를 소수점 넷째 자리까지 읽는 것은 의미가 없다. 향후 측정은
+`PYTHONHASHSEED` 를 고정하거나 동점 처리를 결정론적으로 바꿔야 한다(예:
+`sorted(..., key=lambda kv: (-kv[1], kv[0]))`). **이번 판정에는 영향이 없다** — 어느
+seed 에서도 top-3 는 기준선 아래이고, 타원 대비 CV 의 top-1 차이는 0 이다.
+
+### 9.5 무엇이 코드에 남았나
+
+- `app/ml/cv_roi_model.py` — 영상 적응형 분할 어댑터. `build_cv_roi_model()` 은
+  `build_torch_*` 와 같은 계약이다(실패 시 `None`, mock 을 real 로 위장하지 않는다).
+- `USE_CV_ROI` (기본 **true**) 로 켜고 끈다. 외부 가중치가 필요 없어 기본값이 켜짐이다.
+  false 로 두면 예전 고정 타원으로 돌아간다. 읽는 곳이 없던 `USE_TORCH_ROI` 는 지웠다.
+- 케이스별 fallback 은 **조용하지 않다** — WARNING 로그 + `fallback_count` /
+  `last_source`. 202건 재시드에서 1건 발생했다.
+- `BuildResult.roi_is_real` / `roi_status` / `mask_version` 추가. **`engine_status`
+  판정에는 넣지 않았다**: 검색의 기본 경로(`globalErrorEmbedding`)는 ROI 를 쓰지 않으므로
+  ROI 가 mock 이라는 이유로 실제로 동작 중인 real 엔진을 mock 으로 표시하면 거짓이 된다.
+  또한 이것은 학습된 모델이 아니라 고전 CV 휴리스틱이라, real 의 필요조건으로 올리면
+  `engineStatus` 의 의미가 흐려진다. 대신 따로 보고한다.
+- 케이스 문서에 `roiMaskVersion` 을 저장한다(`cv_lung_heart_v1` / `mock_ellipse_mask_v1`).
+  `maskVersion` 은 비교 대상을 정하는 운영 키라 건드리지 않았다 — 둘을 합치면 분할기를
+  바꿔 재시드한 뒤 예전 벡터와 섞였는지 사후에 알 수 없다.
+
+### 9.6 재현
+
+```bash
+cd services/xray-rag
+export ARANGO_HOST=localhost ARANGO_PORT=8529 ARANGO_USER=root
+export XRAY_ARANGO_DATABASE=xray_graph_db PYTHONIOENCODING=utf-8
+export ARANGO_PASSWORD="$(grep '^ARANGO_PASSWORD=' ../../infra/.env | cut -d= -f2-)"
+export USE_TORCH_EMBEDDING=true
+
+# 재시드 전에 반드시 truncate 한다 - seed_chexpert.py 는 덮어쓰지 않고 "추가"한다.
+# 하지 않으면 타원 마스크 세대와 CV 마스크 세대가 한 컬렉션에 섞인다.
+for c in xray_cases case_has_disease case_has_finding case_has_roi_anomaly; do
+  curl -s -X PUT "http://localhost:8529/_db/xray_graph_db/_api/collection/$c/truncate" \
+    -u "root:$ARANGO_PASSWORD" -o /dev/null
+done
+python scripts/seed_chexpert.py --archive ./archive --split valid --frontal-only \
+  --uncertainty ones --batch 25 --use-real-model
+
+python scripts/eval_retrieval.py                    # global only (ROI 무관)
+python scripts/eval_retrieval.py --use-roi          # ROI 가중합
+```
+
+기준선은 §8.5 의 명령으로 매번 함께 계산한다. `USE_CV_ROI=false` 로 주면 타원 마스크
+기준선을 같은 방법으로 다시 만들 수 있다.

@@ -53,6 +53,12 @@ class CaseService:
         # 설정값이 아니다 — 어떤 인코더가 이 벡터를 만들었는지가 기록돼야
         # 나중에 재색인이 필요한지 판단할 수 있다.
         embedding_version: str = "unknown",
+        # 실제로 구성된 ROI 분할기의 식별자(factory.BuildResult.mask_version).
+        # maskVersion 과는 별개로 저장한다 - maskVersion 은 "어떤 케이스끼리
+        # 비교해도 되는가"를 정하는 운영 키(환경변수로 고정)이고, 이 값은 "그
+        # 마스크가 실제로 무엇이 만든 것인가"라는 출처다. 둘을 하나로 합치면
+        # 분할기를 바꿔 재시드한 뒤 예전 벡터와 섞였는지 사후에 알 수 없다.
+        roi_mask_version: str = "unknown",
     ) -> None:
         self.settings = settings
         self.repo = repo
@@ -69,6 +75,7 @@ class CaseService:
         # 알 수 없거나 넘어오지 않은 경우 기본값은 항상 "mock" (fail-safe).
         self.engine_status = engine_status
         self.embedding_version = embedding_version
+        self.roi_mask_version = roi_mask_version
 
     # ---------- 등록 ----------
     def register_case(
@@ -116,6 +123,7 @@ class CaseService:
             "view": metadata.view or "PA",
             "modelVersion": metadata.modelVersion or self.settings.MODEL_VERSION,
             "maskVersion": metadata.maskVersion or self.settings.MASK_VERSION,
+            "roiMaskVersion": self.roi_mask_version,
             "embeddingVersion": self.embedding_version,
             "globalErrorEmbedding": embeddings["global"].tolist(),
             "leftLungErrorEmbedding": embeddings["left_lung"].tolist(),
