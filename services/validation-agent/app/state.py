@@ -32,6 +32,10 @@ class ValidationState(TypedDict, total=False):
     # 응답 최상위에 별도 필드(prescriptionVerification)로만 얹는다 — 섞지
     # 않는다(최종 리뷰 C1, tools.py 의 recommendationVerification 주석).
     prescription_verification: Optional[Dict[str, Any]]
+    # prescription_api 자신이 보고한 `llmStatus` 원본. validation-agent 자신의
+    # 모델 호출 원장과는 다른 축이라 절대 그쪽에 섞지 않는다 — 응답 최상위
+    # prescriptionLlmStatus 로만 나간다(F-H3).
+    prescription_llm_status: Optional[str]
 
 
 def compact_state(state: ValidationState) -> Dict[str, Any]:

@@ -108,6 +108,43 @@ describe("itemVerificationOutcome", () => {
     expect(itemVerificationOutcome(verification, "prescription[1]")).toBe("flagged");
   });
 
+  // F-H1 — code_is_medication 은 구조 검사지만 flagged 는 반드시 화면까지 가야
+  // 한다. 이 검사가 잡는 것은 "폐렴 환자에게 재진진찰료를 추천했다" 이고, 그
+  // 코드는 실제로 조회된 후보에서 왔으므로 근거 검사(code_in_candidates·
+  // name_matches_code)는 전부 정직하게 ok 다 — IMP-2 의 구조 검사 예외가
+  // flagged 까지 삼키면 그 항목이 초록 배지로 나간다.
+  it("code_is_medication 이 flagged 면 근거 검사가 전부 ok 여도 flagged", () => {
+    const verification = {
+      status: "flagged",
+      checks: [
+        { id: "code_in_candidates", target: "prescription[1]", outcome: "ok", evidence: "" },
+        { id: "name_matches_code", target: "prescription[1]", outcome: "ok", evidence: "" },
+        {
+          id: "code_is_medication",
+          target: "prescription[1]",
+          outcome: "flagged",
+          evidence: "코드 'AA254' 는 약제 코드 형태가 아님",
+        },
+      ],
+    };
+    expect(itemVerificationOutcome(verification, "prescription[1]")).toBe("flagged");
+  });
+
+  // 반대 방향: code_is_medication 의 ok 하나로는 grounding 이 서지 않는다.
+  // 조회 데이터와 대조하지 않는 검사이기 때문이다(GC-2) — 파이썬
+  // aggregate_status 와 같은 규칙이다.
+  it("code_is_medication 만 ok 이고 근거 검사가 없으면 skipped", () => {
+    const verification = {
+      status: "skipped",
+      checks: [
+        { id: "code_is_medication", target: "prescription[1]", outcome: "ok", evidence: "" },
+        { id: "code_in_candidates", target: "prescription[1]", outcome: "skipped", evidence: "" },
+        { id: "name_matches_code", target: "prescription[1]", outcome: "skipped", evidence: "" },
+      ],
+    };
+    expect(itemVerificationOutcome(verification, "prescription[1]")).toBe("skipped");
+  });
+
   // M2 — fail-closed 는 verificationNotice.ts:43 에서 이미 맞게 동작하지만
   // 계약 밖 outcome 값(대소문자 오탈자 등)에 대한 고정 테스트가 없었다.
   // "ok"/"flagged" 정확 일치가 아니면 통과로 새지 않아야 한다(GC-3).

@@ -528,3 +528,68 @@ def test_prescription_finder_exception_fails_closed_not_rule(monkeypatch):
     assert finder_entries, "Prescription Finder 스텝이 트레이스에 있어야 한다"
     assert finder_entries[0]["source"] == "fallback"
     assert finder_entries[0]["observation"]["status"] == "FAILED"
+
+
+# ---------------------------------------------------------------------------
+# F-H3 — prescription-api 자신의 llmStatus 가 응답 최상위까지 도달하는가
+#
+# 처방 표의 모델 출처 배지는 이 값을 읽어야 한다. validation-agent 자신의
+# `llmStatus` 를 읽으면 prescription-api 가 스텁인데도 배지가 억제된다
+# (F-H3 라이브 재현). `prescriptionVerification` 이 이미 쓰는 것과 같은
+# 경로로, 같은 분리 원칙을 지키며 얹는다.
+# ---------------------------------------------------------------------------
+
+
+def test_prescription_llm_status_reaches_response_top_level(monkeypatch):
+    """처방 RAG 가 보고한 llmStatus 가 최상위 `prescriptionLlmStatus` 로
+    도달해야 한다. 도달하지 못하면 웹은 대신 읽을 값이 없어 다른 서비스의
+    `llmStatus` 를 읽게 되고, 그것이 정확히 F-H3 이다."""
+    _real_mode(monkeypatch)
+    monkeypatch.setattr(agent, "create_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder("stub"))
+
+    response = run_validation_agent(_request())
+
+    assert response.prescriptionLlmStatus == "stub"
+
+
+def test_prescription_llm_status_does_not_contaminate_top_level_llm_status(monkeypatch):
+    """두 축은 계속 분리돼 있어야 한다 — 이 서비스의 모델 호출은 성사됐고
+    처방 RAG 페이로드만 스텁이다."""
+    _real_mode(monkeypatch)
+    monkeypatch.setattr(agent, "create_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder("stub"))
+
+    response = run_validation_agent(_request())
+
+    assert response.llmStatus == "real"
+    assert response.prescriptionLlmStatus == "stub"
+
+
+def test_prescription_llm_status_real_does_not_promote_stub_mode(monkeypatch):
+    """반대 방향도 막는다. 처방 RAG 가 "real" 이어도 이 서비스가 스텁 모드면
+    최상위 llmStatus 는 "stub" 이다."""
+    monkeypatch.setenv("LLM_PROVIDER", "stub")
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder("real"))
+
+    response = run_validation_agent(_request())
+
+    assert response.llmStatus == "stub"
+    assert response.prescriptionLlmStatus == "real"
+
+
+def test_prescription_llm_status_is_none_when_finder_raises(monkeypatch):
+    """호출이 예외로 죽으면 관측값에 그 키가 없다. 그때 "real" 로 기울면
+    스텁·실패가 깨끗한 화면으로 지나간다 — None 그대로 두어 웹이 "미확인"
+    으로 렌더하게 한다(GC-3)."""
+    _real_mode(monkeypatch)
+    monkeypatch.setattr(agent, "create_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(agent, "prescription_finder", _RaisingPrescriptionFinder())
+
+    response = run_validation_agent(_request())
+
+    assert response.prescriptionLlmStatus is None

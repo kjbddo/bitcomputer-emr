@@ -80,6 +80,7 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
         "pubmed_articles": [],
         "finder_candidates": [],
         "prescription_verification": None,
+        "prescription_llm_status": None,
     }
     trace: List[Dict[str, Any]] = []
     pubmed_evidence: List[Dict[str, Any]] = []
@@ -222,6 +223,11 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
     # 않는다(최종 리뷰 C1). 후보 조회 자체가 없었으면(예: 예산 초과로 5단계를
     # 건너뛴 경우) None 그대로 두어 GC-2/GC-3(미검증 fail-closed)를 지킨다.
     response_payload["prescriptionVerification"] = state.get("prescription_verification")
+    # prescription_api 자신의 모델 출처. 위 `llmStatus`(이 서비스의 모델 호출
+    # 원장에서 도출)와 같은 자리에 섞지 않고 별도 필드로만 얹는다 —
+    # prescriptionVerification 과 정확히 같은 이유, 같은 방식이다(F-H3).
+    # 후보 조회가 아예 없었으면 None 그대로 둔다(GC-2/GC-3).
+    response_payload["prescriptionLlmStatus"] = state.get("prescription_llm_status")
     return ValidationAgentResponse(**response_payload)
 
 
@@ -288,6 +294,11 @@ def _invoke_prescription_finder(
         # 그대로 들고 있는다 — 최상위 응답의 prescriptionVerification 이 이 값을
         # 읽는다(최종 리뷰 C1).
         state["prescription_verification"] = observation.get("recommendationVerification")
+        # 같은 관측값에서 처방 RAG 자신의 llmStatus 도 들고 있는다. 이 값이
+        # 최상위까지 가지 않아서 처방 표의 모델 배지가 읽을 값이 없었고,
+        # 그래서 다른 서비스의 llmStatus 를 읽고 있었다(F-H3). 키가 없으면
+        # None 이 그대로 남아 웹이 "미확인" 으로 렌더한다(GC-3).
+        state["prescription_llm_status"] = observation.get("recommendationLlmStatus")
     return observation if isinstance(observation, dict) else {"status": "UNKNOWN", "raw": observation}
 
 

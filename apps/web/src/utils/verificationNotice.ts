@@ -58,6 +58,11 @@ export const STRUCTURAL_CHECK_IDS: ReadonlySet<string> = new Set([
   "confidence_in_range",
   "trace_step_has_observation",
   "candidates_from_finder",
+  // 처방코드가 이 데이터셋의 약제 코드 형태인지만 본다 — 조회 데이터와
+  // 대조하지 않으므로 grounding 을 확립하지 못한다(F-H1). 다만 flagged 는
+  // 항목 배지를 그대로 빨갛게 만든다: 구조 검사의 거부권을 뺀 것은 skipped
+  // 에 대해서지 flagged 에 대해서가 아니다.
+  "code_is_medication",
 ]);
 
 // 항목 단위 표시(spec §7.2). 전역 배지 하나로 뭉치면 어느 처방이 문제인지
