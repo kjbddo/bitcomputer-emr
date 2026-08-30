@@ -203,23 +203,109 @@ python -c "import kagglehub.config as c; print(c.get_access_token_from_env())"
 
 `--dest` 는 기본이 junction(Windows)/symlink(POSIX)이라 디스크를 추가로 쓰지 않는다. `--mode copy` 는 11GB 이상을 더 쓴다.
 
-### 5.3 시드와 인덱스 갱신
+### 5.3 벡터 인덱스 차원을 먼저 확인한다
+
+**`init_db.py` 는 이미 있는 인덱스를 `exists` 로 그냥 통과시킨다.** 차원이 달라도 다시 만들지 않는다. 임베딩 모델을 바꿨다면(현재 DenseNet121, 1024차원) 예전 차원의 인덱스가 남아 벡터와 어긋난다.
 
 ```bash
-python scripts/seed_chexpert.py --archive ./archive --split train --frontal-only --uncertainty ones --batch 100
-python scripts/init_db.py
+PW=$(grep '^ARANGO_PASSWORD=' infra/.env | cut -d= -f2-)
+curl -s "http://localhost:8529/_db/xray_graph_db/_api/index?collection=xray_cases" -u "root:$PW" \
+  | python -c "
+import sys,json
+for ix in json.load(sys.stdin).get('indexes',[]):
+    if ix.get('type')=='vector':
+        print(ix.get('name'),'dim=',(ix.get('params') or {}).get('dimension'))
+"
 ```
 
-두 번째 `init_db.py` 는 시드 후 벡터 인덱스 상태를 갱신한다. 생략하지 않는다.
-
-확인:
+`dim=1024` 가 아니면 지우고 다시 만든다. **케이스가 이미 있으면 그 벡터도 전부 무효가 되므로 `xray_cases` 가 0인지 먼저 본다.**
 
 ```bash
-curl -s "http://localhost:8529/_db/xray_graph_db/_api/collection/xray_cases/count" -u "root:$PW" \
-  | python -c "import sys,json; print('xray_cases:',json.load(sys.stdin)['count'])"
+IDS=$(curl -s "http://localhost:8529/_db/xray_graph_db/_api/index?collection=xray_cases" -u "root:$PW" \
+  | python -c "
+import sys,json
+print(' '.join(ix['id'] for ix in json.load(sys.stdin).get('indexes',[]) if ix.get('type')=='vector'))
+")
+for id in $IDS; do curl -s -X DELETE "http://localhost:8529/_db/xray_graph_db/_api/index/$id" -u "root:$PW" -o /dev/null; done
+python scripts/init_db.py    # 이번에는 status=created 로 나와야 한다
 ```
 
-0이면 시드가 안 된 것이다. `X-ray 분석에서 view=PA/AP 는 적재된 view 와 맞아야 한다.`
+### 5.4 시드
+
+**실제 모델로 적재한다.** `--use-real-model` 은 SQUID 이상탐지만 켠다 — 임베딩까지 실제 모델로 하려면 `USE_TORCH_EMBEDDING=true` 를 함께 준다.
+
+```bash
+cd services/xray-rag
+export ARANGO_HOST=localhost ARANGO_PORT=8529 ARANGO_USER=root XRAY_ARANGO_DATABASE=xray_graph_db
+export ARANGO_PASSWORD="$(grep '^ARANGO_PASSWORD=' ../../infra/.env | cut -d= -f2-)"
+export USE_TORCH_EMBEDDING=true
+python scripts/seed_chexpert.py --archive ./archive --split valid --frontal-only --uncertainty ones --batch 25 --use-real-model
+```
+
+`valid` 는 202건에 약 6분(0.59 rows/s)이다. `train` 은 훨씬 크므로 수 시간을 예상한다.
+
+확인 — 건수만 보지 말고 **무엇이 저장됐는지** 본다:
+
+```bash
+curl -s -X POST "http://localhost:8529/_db/xray_graph_db/_api/cursor" -u "root:$PW" \
+  -d '{"query":"FOR c IN xray_cases LIMIT 1 RETURN {v:c.embeddingVersion, dim:LENGTH(c.globalErrorEmbedding)}"}' \
+  | python -c "import sys,json; print(json.load(sys.stdin)['result'][0])"
+```
+
+기대: `{'v': 'densenet121_imagenet_1024', 'dim': 1024}`
+
+`v` 가 `mock_pca_v1` 이면 임베딩이 mock 으로 돌았다는 뜻이다 — `USE_TORCH_EMBEDDING` 을 안 줬거나 가중치 로드에 실패했다. 건수만 확인하고 넘어가면 이걸 놓친다.
+
+### 5.5 컨테이너도 같은 모델을 올려야 한다
+
+**시드를 실제 모델로 했으면 질의도 같은 모델이어야 한다.** error map 이 달라지면 임베더가 같아도 벡터가 비교 불가능해져, 유사 검색이 조용히 엉뚱한 결과를 낸다.
+
+컨테이너가 무엇을 올렸는지 확인한다:
+
+```bash
+docker exec bit-xraygraph python -c "
+from app.config import get_settings
+from app.ml.factory import build_models
+r = build_models(get_settings())
+print('anomaly_is_real  ', r.anomaly_is_real)
+print('embedding_is_real', r.embedding_is_real)
+print('engine_status    ', r.engine_status)
+print('embedding_version', r.embedding_version)
+print('dim              ', r.embedder.dim)
+"
+```
+
+기대: `engine_status real`, `dim 1024`, `embedding_version densenet121_imagenet_1024`.
+
+`mock` 이면 아래 넷 중 하나가 빠진 것이다. 넷 다 `infra/docker-compose.yml` 의 `xraygraph` 블록에 배선돼 있으니 그쪽을 본다.
+
+| 필요한 것 | 없으면 |
+|---|---|
+| SQUID 가중치 마운트 (`services/radiology-legacy` 통째로) | 로더가 부모에서 `config.py` 를 찾으므로 가중치 폴더만 주면 깨진다 |
+| 호스트 torch 캐시 마운트 | 컨테이너에 egress 가 없어 DenseNet 가중치를 못 받는다 |
+| `scipy`·`opencv-python-headless`·`matplotlib`·`tqdm` | SQUID 로더가 import 에서 실패한다 |
+| `USE_TORCH_ANOMALY`·`USE_TORCH_EMBEDDING`·`EMBEDDING_DIM` | 토글이 꺼져 있거나 차원이 어긋난다 |
+
+`engine_status` 가 `mock` 이라고 서비스가 죽지는 않는다. **조용히 mock 으로 돌 뿐이다** — 그래서 이 확인을 건너뛰면 안 된다. 다만 `engine_status` 는 토글이 아니라 실제로 구성된 모델을 근거로 판정하므로, real 인 척하지는 않는다.
+
+### 5.6 종단 확인
+
+실제 이미지로 추론을 돌려 유사 사례가 나오는지 본다:
+
+```bash
+IMG=$(ls services/xray-rag/archive/valid/*/*/*.jpg | head -1)
+curl -s -X POST http://localhost:8000/infer -F "image=@$IMG" -F "view=PA" -m 240 -o infer_out.json -w "http=%{http_code}\n"
+python -c "
+import json
+d=json.load(open('infer_out.json',encoding='utf-8'))
+print('engineStatus:', d['engineStatus'])
+print('similarCases:', len(d['similarCases']))
+print('top sim:', round(float(d['similarCases'][0]['similarity']),4))
+"
+rm -f infer_out.json
+```
+
+`similarCases` 가 0이면 인덱스 차원과 질의 벡터 차원이 어긋난 것이다(§5.3).
 
 ---
 
