@@ -234,6 +234,17 @@ python scripts/init_db.py    # 이번에는 status=created 로 나와야 한다
 
 **실제 모델로 적재한다.** `--use-real-model` 은 SQUID 이상탐지만 켠다 — 임베딩까지 실제 모델로 하려면 `USE_TORCH_EMBEDDING=true` 를 함께 준다.
 
+**`seed_chexpert.py` 는 덮어쓰지 않고 "추가"한다.** 이미 등록된 상태에서 다시 돌리면
+같은 202건이 새 `_key` 로 한 벌 더 들어가고, 모델을 바꿨다면 두 세대의 벡터가 한
+컬렉션에 섞인다. 재시드라면 먼저 비운다:
+
+```bash
+PW=$(grep '^ARANGO_PASSWORD=' infra/.env | cut -d= -f2-)
+for c in xray_cases case_has_disease case_has_finding case_has_roi_anomaly; do
+  curl -s -X PUT "http://localhost:8529/_db/xray_graph_db/_api/collection/$c/truncate" -u "root:$PW" -o /dev/null
+done
+```
+
 ```bash
 cd services/xray-rag
 export ARANGO_HOST=localhost ARANGO_PORT=8529 ARANGO_USER=root XRAY_ARANGO_DATABASE=xray_graph_db
@@ -272,10 +283,19 @@ print('embedding_is_real', r.embedding_is_real)
 print('engine_status    ', r.engine_status)
 print('embedding_version', r.embedding_version)
 print('dim              ', r.embedder.dim)
+print('roi_status       ', r.roi_status)
+print('mask_version     ', r.mask_version)
 "
 ```
 
-기대: `engine_status real`, `dim 1024`, `embedding_version densenet121_imagenet_1024`.
+기대: `engine_status real`, `dim 1024`, `embedding_version densenet121_imagenet_1024`,
+`roi_status cv`, `mask_version cv_lung_heart_v1`.
+
+`roi_status` 는 **일부러 `engine_status` 에 섞지 않았다**(이유는 `app/ml/factory.py` 의
+`BuildResult` 독스트링). `mock` 이면 ROI 마스크가 고정 타원이라는 뜻이고, ROI별
+임베딩(`--use-roi`)과 `roiStats` 의 의미가 달라진다 — 시드와 질의가 서로 다른 쪽이면
+`maskVersion` 이 같아도 ROI 벡터는 비교 불가능하다. 케이스 문서의 `roiMaskVersion` 으로
+어느 쪽으로 시드됐는지 확인할 수 있다.
 
 `mock` 이면 아래 넷 중 하나가 빠진 것이다. 넷 다 `infra/docker-compose.yml` 의 `xraygraph` 블록에 배선돼 있으니 그쪽을 본다.
 

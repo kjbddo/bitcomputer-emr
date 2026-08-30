@@ -120,8 +120,15 @@ class Settings:
 
     # ML toggles
     USE_TORCH_ANOMALY: bool = _bool(os.environ.get("USE_TORCH_ANOMALY"), False)
-    USE_TORCH_ROI: bool = _bool(os.environ.get("USE_TORCH_ROI"), False)
     USE_TORCH_EMBEDDING: bool = _bool(os.environ.get("USE_TORCH_EMBEDDING"), False)
+    # 영상 적응형 ROI 분할(app.ml.cv_roi_model). 외부 가중치가 필요 없고 numpy/scipy
+    # 만 쓰므로 기본값이 true 다 - USE_TORCH_* 와 달리 "받아와야 하는 파일"이 없다.
+    # false 로 두면 예전 고정 타원(MockROIModel)으로 돌아간다.
+    # 예전 USE_TORCH_ROI 는 읽는 곳이 없는 no-op 이었다
+    # (Docs/superpowers/specs/2026-08-26-phase-a-foundation-design.md 미결 항목 9번). 실
+    # 어댑터가 생긴 지금 그 이름을 살려두면 "torch ROI 모델이 있다"는 잘못된 신호가
+    # 되므로 지운다. 학습된 ROI 모델을 붙이는 날 별도 토글을 새로 만든다.
+    USE_CV_ROI: bool = _bool(os.environ.get("USE_CV_ROI"), True)
 
     # SQUID 모델 폴더. 가중치는 scripts/fetch-models.sh 로 내려받는다.
     # 주의: services/radiology-legacy/ 의 직계 자식이어야 한다. torch_anomaly_model.py 가

@@ -30,6 +30,9 @@ class ServiceContainer:
         # 실제로 구성된 모델(build_result)을 근거로 판정. 토글 값을 직접 읽지 않는다.
         self.engine_status: str = build_result.engine_status
         self.embedding_version: str = build_result.embedding_version
+        # ROI 는 engine_status 에 섞지 않고 따로 보고한다(factory.BuildResult 참고).
+        self.roi_status: str = build_result.roi_status
+        self.roi_mask_version: str = build_result.mask_version
 
         self.similarity = SimilarityService(self.repo)
         self.reasoning = ReasoningService(self.repo, self.settings)
@@ -53,6 +56,7 @@ class ServiceContainer:
             storage_heatmap=self.s_heatmap,
             engine_status=self.engine_status,
             embedding_version=self.embedding_version,
+            roi_mask_version=self.roi_mask_version,
         )
 
 

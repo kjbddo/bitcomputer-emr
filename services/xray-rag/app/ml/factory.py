@@ -20,9 +20,21 @@ class BuildResult(NamedTuple):
     fallback 한다). anomaly_is_real / embedding_is_real 은 그 "결과"를 담아,
     engineStatus 가 토글이 아니라 실제로 만들어진 모델을 근거로 판정되도록 한다.
 
-    roi_is_real 필드는 없다: 실제 ROI 어댑터(HybridGNet 등)가 아직 구현되지
-    않아 USE_TORCH_ROI 는 no-op 이고 factory 는 항상 MockROIModel 을 반환한다.
-    따라서 ROI 는 engineStatus 판정에서 제외한다.
+    roi_is_real 도 같은 규칙이다. 예전에는 이 필드가 없었다 - 실 ROI 어댑터가
+    없어 USE_TORCH_ROI 가 no-op 이었고 factory 가 항상 MockROIModel 을 돌려줬기
+    때문이다. 이제 영상 적응형 어댑터(app.ml.cv_roi_model)가 있으므로 그 이유는
+    만료됐고, 어느 쪽이 구성됐는지 기록한다.
+
+    다만 **engine_status 판정에는 여전히 ROI 를 넣지 않는다.** 이유는 두 가지다:
+
+    1. 검색의 기본 경로(globalErrorEmbedding)는 ROI 마스크를 전혀 쓰지 않는다.
+       SQUID 와 DenseNet 이 둘 다 실제로 올라온 엔진을 ROI 가 mock 이라는 이유로
+       "mock" 으로 표시하면, 실제로 동작 중인 real 엔진을 거짓으로 깎아내린다.
+    2. cv_roi_model 은 학습된 모델이 아니라 고전 CV 휴리스틱이다. 이것을 real 의
+       필요조건으로 승격시키면 engineStatus 가 뜻하는 바("실제 학습 모델이
+       올라왔는가")가 흐려진다.
+
+    대신 roi_status 로 따로 보고한다 - 감추지 않되, 다른 것과 섞지도 않는다.
     """
 
     anomaly: AnomalyModel
@@ -30,6 +42,7 @@ class BuildResult(NamedTuple):
     embedder: EmbeddingModel
     anomaly_is_real: bool
     embedding_is_real: bool
+    roi_is_real: bool = False
     settings_embedding_version: Optional[str] = None
 
     @property
@@ -41,6 +54,23 @@ class BuildResult(NamedTuple):
         이 값이 engineStatus 의 유일한 산출 경로여야 한다.
         """
         return "real" if (self.anomaly_is_real and self.embedding_is_real) else "mock"
+
+    @property
+    def roi_status(self) -> str:
+        """ROI 마스크가 영상 적응형 분할("cv")인지 고정 타원 mock("mock")인지.
+
+        engine_status 와 달리 별도로 보고된다(위 독스트링 참고). roiStats 와
+        ROI별 임베딩의 의미가 이 값에 달려 있다.
+        """
+        return "cv" if self.roi_is_real else "mock"
+
+    @property
+    def mask_version(self) -> str:
+        """저장된 ROI 마스크/임베딩이 어느 분할기에서 나왔는지.
+
+        embedding_version 과 같은 규칙이다 - 실제로 구성된 모델이 답한다.
+        """
+        return getattr(self.roi, "version", "unknown")
 
     @property
     def embedding_version(self) -> str:
@@ -76,7 +106,14 @@ def build_models(settings: Settings) -> BuildResult:
             anomaly_is_real = True
 
     roi: ROIMaskModel = MockROIModel()
-    # 실제 ROI(HybridGNet 등)는 향후 어댑터 추가 위치. 그때까지는 항상 mock.
+    roi_is_real = False
+    if settings.USE_CV_ROI:
+        from app.ml import cv_roi_model
+
+        r = cv_roi_model.build_cv_roi_model()
+        if r is not None:
+            roi = r
+            roi_is_real = True
 
     embedder: EmbeddingModel = MockEmbeddingModel(dim=settings.EMBEDDING_DIM)
     embedding_is_real = False
@@ -94,5 +131,6 @@ def build_models(settings: Settings) -> BuildResult:
         embedder=embedder,
         anomaly_is_real=anomaly_is_real,
         embedding_is_real=embedding_is_real,
+        roi_is_real=roi_is_real,
         settings_embedding_version=settings.EMBEDDING_VERSION,
     )
