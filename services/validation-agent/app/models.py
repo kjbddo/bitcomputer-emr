@@ -61,3 +61,13 @@ class ValidationAgentResponse(BaseModel):
     # `verification`(validation-agent 자신의 판정) 과는 별개의 서비스,
     # 별개의 판정이라 절대 병합하지 않는다(최종 리뷰 C1).
     prescriptionVerification: Optional[Dict[str, Any]] = None
+    # prescription_api 자신의 `llmStatus`. 위 `llmStatus`(validation-agent 가
+    # 자기 결정을 어떻게 냈는지)와는 다른 서비스, 다른 축이라 절대 병합하지
+    # 않는다 — 섞으면 Task 6 회귀다(tools.py:205-211). 처방 표의 모델 출처
+    # 배지는 이 값을 읽어야 한다(F-H3).
+    #
+    # 기본값을 "fallback" 으로 두지 않고 None 으로 둔다. validation-agent 자신의
+    # llmStatus 와 달리 이 값은 "조회를 아예 안 했다" 라는 상태가 실재한다 —
+    # 그 경우 "폴백으로 만들었다" 고 말하면 하지 않은 주장을 하는 것이다(GC-2).
+    # 웹은 None 을 "출처 미확인" 으로 렌더한다(GC-3).
+    prescriptionLlmStatus: Optional[str] = None

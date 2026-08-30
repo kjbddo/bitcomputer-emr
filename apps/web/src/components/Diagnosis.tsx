@@ -329,7 +329,14 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
       }
 
       setAiRecommendations(recommended);
-      setAiLlmStatus(result.llmStatus);
+      // 이 배지는 아래 표 안의 처방에 붙는다. 그 처방을 실제로 만든 것은
+      // prescription-api 이므로 읽어야 하는 값은 그쪽의 llmStatus 다.
+      // result.llmStatus 는 validation-agent 가 자기 검증 결정을 어떻게 냈는지라
+      // 표의 출처와 무관하다 — 그 값을 읽으면 prescription-api 가 스텁인데도
+      // validation-agent 가 real 이라는 이유로 배지가 사라진다(F-H3, 라이브 재현).
+      // 바로 아래 검증 축이 이미 지키고 있는 구분과 같은 구분이다.
+      // 값이 없으면 llmStatusNotice 가 "모델 출처 미확인"을 낸다(GC-3).
+      setAiLlmStatus(result.prescriptionLlmStatus);
       // 처방 항목 배지(getVerificationOutcome)는 `prescription[N]` 타깃을 조회한다.
       // result.verification 은 validation-agent 자기 자신의 검증이고 검사 전부
       // target="response" 다 — 그 값을 읽으면 조회가 영원히 0건이 되어 배지가

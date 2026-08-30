@@ -8,6 +8,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Python(FastAPI) prescription_api → Spring 응답 본문.
@@ -41,6 +42,37 @@ public class PrescriptionAgentResponse {
     /** 코호트에서 가져온 처방 통계 행 수. */
     @JsonProperty("cohort_rx_count")
     private Integer cohortRxCount;
+
+    /**
+     * 추론 엔진이 실제 구현인지 대역인지. 설정이 아니라 실행 경로에서 나온다
+     * (services/prescription/prescription_api.py).
+     *
+     * <p>기본값을 두지 않는다 — 상류가 안 주면 null 이고, null 은 "모른다"이지
+     * "real"이 아니다(GC-3).
+     */
+    @JsonProperty("engineStatus")
+    private String engineStatus;
+
+    /**
+     * 이 응답이 실제로 모델에서 나왔는지. {@code engineStatus} 와 다른 축이다.
+     *
+     * <p>파이썬 쪽은 이 필드에 기본값을 두지 않는다(빠뜨리면 응답 생성 자체가
+     * 실패한다). 그러므로 여기 도달한 null 은 계약 위반 신호이며, 그때도
+     * "real" 로 새면 안 된다.
+     */
+    @JsonProperty("llmStatus")
+    private String llmStatus;
+
+    /**
+     * prescription_api 자신의 항목 단위 검증. {@code checks[].target} 이
+     * {@code "prescription[N]"} 인 유일한 출처다
+     * (services/prescription/verification.py).
+     *
+     * <p>기본값을 만들지 않는다 — 검증하지 않은 것이 검증된 것처럼 보이면
+     * 이 필드가 존재할 이유가 사라진다.
+     */
+    @JsonProperty("verification")
+    private Map<String, Object> verification;
 
     @Data
     @Builder

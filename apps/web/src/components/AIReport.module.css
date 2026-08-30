@@ -170,3 +170,9 @@
 .errorMessage p {
   margin: 0;
 }
+
+.uncertaintyReasons {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+  list-style: disc;
+}

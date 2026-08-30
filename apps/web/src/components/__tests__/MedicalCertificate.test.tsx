@@ -123,7 +123,9 @@ describe("진단서 AI 미리보기의 llmStatus 배선", () => {
   });
 
   // 필드가 없는 응답을 "모델이 돌았다"로 읽으면 이 표시가 존재할 이유가 사라진다.
-  it("llmStatus 가 없으면 모델이 돌았다고 가정하지 않는다", async () => {
+  // 다만 "폴백으로 만들었다"고 말하지도 않는다 — 없는 값은 그 근거가 되지
+  // 못한다(GC-2). 배지는 뜨되(fail-closed) 문구는 "모른다"여야 한다.
+  it("llmStatus 가 없으면 모델이 돌았다고 가정하지 않고 미확인으로 표시한다", async () => {
     vi.mocked(generateDocumentCertificateByHistory).mockResolvedValue({
       grantType: "Bearer",
       accessToken: "a",
@@ -135,7 +137,8 @@ describe("진단서 AI 미리보기의 llmStatus 배선", () => {
     fireEvent.click(screen.getByRole("button", { name: /AI/ }));
 
     const dialog = await screen.findByRole("dialog");
-    await within(dialog).findByText(/모델 미사용/);
+    const badge = await within(dialog).findByText("모델 출처 미확인");
+    expect(badge).toHaveAttribute("data-tone", "warning");
   });
 
   // 근거 배지가 추가되면서 llmStatus 배지도 나란히 설 수 있다. 접두어가 없으면

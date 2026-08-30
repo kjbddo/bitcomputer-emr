@@ -48,6 +48,19 @@ public class ValidationAgentResponse {
      */
     private Map<String, Object> prescriptionVerification;
 
+    /**
+     * prescription_api 자신의 {@code llmStatus}. 위 {@code llmStatus}
+     * (validation-agent 가 자기 결정을 어떻게 냈는지)와는 다른 서비스, 다른
+     * 축이므로 병합하지 않는다 — 처방 표의 모델 출처 배지가 읽어야 하는 값은
+     * 이쪽이다(F-H3).
+     *
+     * <p>{@code @Builder.Default} 를 붙이지 않는다. 위 {@code llmStatus} 와
+     * 달리 이 값은 "처방 후보 조회를 아예 안 했다" 라는 상태가 실재하고, 그때
+     * "폴백으로 만들었다"고 말하면 하지 않은 주장을 하게 된다(GC-2). null 이
+     * 그대로 웹까지 가고, 웹은 그것을 "출처 미확인"으로 렌더한다(GC-3).
+     */
+    private String prescriptionLlmStatus;
+
     @JsonProperty("shouldNotifyDoctor")
     private Boolean shouldNotifyDoctor;
 

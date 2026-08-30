@@ -117,6 +117,10 @@ export interface ValidationJobResponse {
     // 인 유일한 출처다(services/prescription/verification.py). 위 verification
     // 과는 다른 서비스, 다른 판정이므로 병합하지 않는다.
     prescriptionVerification?: Verification | null;
+    // prescription_api 자신의 llmStatus. 위 llmStatus(validation-agent 가 자기
+    // 결정을 어떻게 냈는지)와는 다른 서비스, 다른 축이다 — 처방 표의 모델 출처
+    // 배지는 이 값을 읽어야 한다(F-H3). 값이 없으면 "미확인"으로 렌더한다.
+    prescriptionLlmStatus?: string | null;
     [key: string]: unknown;
   } | null;
   lastError?: string | null;

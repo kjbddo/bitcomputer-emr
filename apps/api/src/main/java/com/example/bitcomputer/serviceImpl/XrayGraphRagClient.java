@@ -74,6 +74,11 @@ public class XrayGraphRagClient {
         out.setHeatmapUrl(toAbsoluteUrl(xray.getHeatmapPath()));
         out.setWarning(xray.getWarning());
         out.setPredictedDiseases(toPredictedDiseases(xray.getPredictedDiseases()));
+        // F-H4: xray-rag 가 계산한 정직성 신호를 여기서 떨어뜨리면 의사 화면에는
+        // 병명과 점수만 남는다. 상류가 안 주면 null 그대로 둔다 — 기본값을 만들면
+        // "모른다"가 "괜찮다"로 바뀐다(GC-3).
+        out.setEngineStatus(xray.getEngineStatus());
+        out.setUncertainty(toUncertainty(xray.getUncertainty()));
         return out;
     }
 
@@ -99,6 +104,15 @@ public class XrayGraphRagClient {
                 : publicBaseUrl;
         String normalizedPath = heatmapPath.startsWith("/") ? heatmapPath : "/" + heatmapPath;
         return normalizedBase + normalizedPath;
+    }
+
+    private RadiologyAnalysisResponseDTO.Uncertainty toUncertainty(XrayUncertainty uncertainty) {
+        if (uncertainty == null) {
+            return null;
+        }
+        return new RadiologyAnalysisResponseDTO.Uncertainty(
+                uncertainty.getLevel(),
+                uncertainty.getReasons() == null ? new ArrayList<>() : uncertainty.getReasons());
     }
 
     private List<RadiologyAnalysisResponseDTO.PredictedDisease> toPredictedDiseases(
@@ -130,6 +144,17 @@ public class XrayGraphRagClient {
         private List<XrayPredictedDisease> predictedDiseases = new ArrayList<>();
         private String heatmapPath;
         private String warning;
+        // 이 두 필드를 선언하지 않으면 Jackson 이 조용히 버린다. 그 결과가
+        // F-H4 였다 — xray-rag 는 uncertainty="high" 와 사유 넷을 정확히
+        // 계산해 보내는데 Spring 이 병명과 점수만 넘겼다.
+        private String engineStatus;
+        private XrayUncertainty uncertainty;
+    }
+
+    @Data
+    public static class XrayUncertainty {
+        private String level;
+        private List<String> reasons = new ArrayList<>();
     }
 
     @Data

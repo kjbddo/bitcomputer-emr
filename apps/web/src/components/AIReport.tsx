@@ -3,7 +3,12 @@
 import { useState, useRef } from "react";
 import { Badge, Button, EmptyState, Panel } from "@/components/ui";
 import styles from "./AIReport.module.css";
-import { PredictedDisease, uploadAndAnalyzeImage, XrayView } from "@/services/radiology";
+import {
+  PredictedDisease,
+  uploadAndAnalyzeImage,
+  XrayUncertainty,
+  XrayView,
+} from "@/services/radiology";
 
 const EXCLUDED_DISEASE_TAGS = new Set(["no_finding", "support_devices"]);
 const MAX_VISIBLE_DISEASES = 3;
@@ -33,6 +38,7 @@ export default function AIReport({
   const [predictedDiseases, setPredictedDiseases] = useState<PredictedDisease[]>([]);
   const [warning, setWarning] = useState<string | null>(null);
   const [engineStatus, setEngineStatus] = useState<string | null>(null);
+  const [uncertainty, setUncertainty] = useState<XrayUncertainty | null>(null);
   const [view, setView] = useState<XrayView>("PA");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,6 +79,7 @@ export default function AIReport({
     setPredictedDiseases([]);
     setWarning(null);
     setEngineStatus(null);
+    setUncertainty(null);
     setError(null);
     selectedFileRef.current = null;
     if (fileInputRef.current) {
@@ -110,6 +117,7 @@ export default function AIReport({
       setPredictedDiseases(getVisiblePredictedDiseases(response.predictedDiseases));
       setWarning(response.warning || null);
       setEngineStatus(response.engineStatus || null);
+      setUncertainty(response.uncertainty || null);
     } catch (err: unknown) {
       console.error("AI 분석 오류:", err);
       const apiError = err as { response?: { data?: { error?: string } }; message?: string };
@@ -199,12 +207,49 @@ export default function AIReport({
       {(predictedDiseases.length > 0 || warning) && (
         <div className={styles.resultTextSection}>
           <div className={styles.resultContent}>
-            {engineStatus && engineStatus !== "real" && (
+            {/*
+              GC-3 fail-closed: "real" 정확 일치만 무표시다. 값이 없거나 계약 밖이면
+              "괜찮다"가 아니라 "모른다"로 드러낸다 — 예전에는 engineStatus 가
+              없을 때 이 경고 자체가 안 떠서, 값을 떨어뜨리는 경계 결함이 화면에서
+              정상 상태와 구별되지 않았다(F-H4 가 눈에 띄지 않은 이유).
+            */}
+            {engineStatus !== "real" && (
               <div role="status" className={styles.engineWarning}>
-                <Badge tone="warning">{engineStatus}</Badge>
+                <Badge tone="warning">{engineStatus || "미확인"}</Badge>
                 <span>
-                  이 결과는 <strong>{engineStatus}</strong> 엔진에서 생성되었습니다. 실제 모델
-                  추론이 아니므로 임상 판단에 사용할 수 없습니다.
+                  {engineStatus ? (
+                    <>
+                      이 결과는 <strong>{engineStatus}</strong> 엔진에서 생성되었습니다. 실제 모델
+                      추론이 아니므로 임상 판단에 사용할 수 없습니다.
+                    </>
+                  ) : (
+                    <>
+                      이 결과를 만든 엔진이 <strong>미확인</strong>입니다. 실제 모델 추론인지
+                      확인되지 않았으므로 임상 판단에 사용할 수 없습니다.
+                    </>
+                  )}
+                </span>
+              </div>
+            )}
+            {/*
+              xray-rag 자신이 계산한 확신도. engineStatus 와 다른 축이라 따로 낸다 —
+              "실제 모델이 돌았다"와 "그 결과를 믿을 수 있다"는 다른 정보다.
+              level 만 쓰고 reasons 를 버리면 "확신 없음"의 근거가 화면에서 사라진다.
+              uncertainty 자체가 없을 때는 경고하지 않는다 — 없는 것은 "확신 없음"의
+              근거가 아니다(GC-2). 그 경우는 위 엔진 축이 미확인으로 알린다.
+            */}
+            {uncertainty?.level === "high" && (
+              <div role="alert" className={styles.engineWarning}>
+                <Badge tone="warning">확신 낮음</Badge>
+                <span>
+                  이 추론은 유사 사례 근거가 약합니다.
+                  {uncertainty.reasons && uncertainty.reasons.length > 0 ? (
+                    <ul className={styles.uncertaintyReasons}>
+                      {uncertainty.reasons.map((reason, index) => (
+                        <li key={`${index}-${reason}`}>{reason}</li>
+                      ))}
+                    </ul>
+                  ) : null}
                 </span>
               </div>
             )}
