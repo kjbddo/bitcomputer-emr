@@ -44,6 +44,8 @@ from llm_provider import resolve_provider, stub_prescription_response
 
 from verification import verify_prescriptions
 
+from renal_gate import evaluate_renal_gate
+
 from prescription_agent import (
     build_prescription_agent_prompt,
     parse_prescriptions_llm_response,
@@ -62,6 +64,7 @@ from run_prescription_agent import (
     cohort_stat_rows_to_top_rx_lines,
     fetch_cohort_prescriptions_by_diagnosis_codes,
     fetch_confidence_scores_by_diagnosis_codes,
+    fetch_special_notes_from_arango,
     fetch_top_rx_from_arango,
     format_cohort_similar_outcomes_summary,
 )
@@ -176,6 +179,20 @@ class PrescriptionRecommendResponse(BaseModel):
     # 출력이 조회 결과로 추적되는지. llmStatus 와 다른 축이다 —
     # llmStatus 는 "모델이 돌았나", 이건 "돈 결과에 근거가 있나"다(spec §7.1).
     verification: Optional[Dict[str, Any]] = None
+    # 추천이 이 환자의 신기능에 금기인가. verification 과 **다른 축이다** —
+    # verification 은 "조회 결과로 추적되나", 이건 "추적되는 그것이 이 환자에게
+    # 위험한가"다(설계 §1.3: 근거 있음 ≠ 옳음).
+    #
+    # 검증 체크로 넣지 않은 이유(설계 §3.3, GC-2). 검증의 status 는 추적
+    # 가능성 한 축의 집계다. 신기능 판정을 그 안에 넣으면 (a) `flagged` 가
+    # "근거가 없다"와 "임상적으로 위험하다"를 동시에 뜻하게 되어 화면이 둘을
+    # 구분할 수 없고, (b) 근거 검사로 집계하면 조회가 전부 실패한 응답도
+    # 신기능 `clear` 하나로 passed 가 나가 GC-2 가 뚫린다(candidates_from_finder·
+    # code_is_medication 이 STRUCTURAL_CHECK_IDS 로 간 것과 같은 이유), (c)
+    # STRUCTURAL_CHECK_IDS 는 validation-agent 와 apps/web 에 사본이 있어
+    # structuralCheckIds.sync.test.ts 가 고정한다 — 이 관문 하나 때문에 그
+    # 세 곳을 함께 움직일 이유가 없다. 축이 다르면 필드도 다른 것이 옳다.
+    renalGate: Optional[Dict[str, Any]] = None
 
 
 class PrescriptionFeedbackItem(BaseModel):
@@ -432,6 +449,26 @@ def _safe_verify(*, candidates: Any, items: Any) -> Dict[str, Any]:
             "status": "skipped",
             "checks": [],
             "skippedReason": f"검증기 예외: {type(exc).__name__}",
+        }
+
+
+def _safe_renal_gate(*, notes: Any, items: Any) -> Dict[str, Any]:
+    """신기능 관문을 돌리되 절대 본 응답을 실패시키지 않는다(GC-4).
+
+    예외는 `unknown` 으로 흡수한다 — **`clear` 가 아니다.** 관문이 터진 것은
+    "확인해 보니 해당 없음"이 아니라 "확인하지 못함"이고, 이 둘이 같은 값으로
+    나가는 순간 이 부품이 있는 이유가 사라진다(GC-3, 설계 §3.3).
+    """
+    try:
+        return evaluate_renal_gate(notes=notes, items=items).to_dict()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("신기능 관문 실패, unknown 으로 처리")
+        return {
+            "status": "unknown",
+            "renalStatus": "undetermined",
+            "renalEvidence": "",
+            "items": [],
+            "undeterminedReason": f"관문 예외: {type(exc).__name__}",
         }
 
 
@@ -787,6 +824,26 @@ def recommend(
             )
         )
 
+    # 신기능 관문(설계 §3.3). 요청 플래그로 끄지 않는다 — 안전 검사는 옵션이
+    # 아니다. 조회가 실패하면 노트가 빈 리스트가 되고, 관문은 그것을
+    # "금기 없음"이 아니라 "확인 못 함"으로 읽는다(GC-3).
+    renal_notes = fetch_special_notes_from_arango(req.patient_id)
+    trace_tool(
+        "special_notes",
+        True,
+        status="success" if renal_notes else "empty",
+        input={"patient_id": req.patient_id},
+        rowCount=len(renal_notes),
+    )
+    renal_gate = _safe_renal_gate(notes=renal_notes, items=items)
+    if renal_gate.get("status") == "warn":
+        logger.warning(
+            "신기능 관문 경고 (patient_id=%r): renalStatus=%s evidence=%s",
+            req.patient_id,
+            renal_gate.get("renalStatus"),
+            renal_gate.get("renalEvidence"),
+        )
+
     return PrescriptionRecommendResponse(
         prescriptions=items,
         used_arango_top_rx=used_arango,
@@ -802,6 +859,7 @@ def recommend(
         engineStatus=provider,
         llmStatus=llm_status,
         verification=_safe_verify(candidates=effective_top_rx, items=items),
+        renalGate=renal_gate,
     )
 
 
