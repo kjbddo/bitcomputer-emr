@@ -227,17 +227,35 @@ services:
       ARANGO_USERNAME: root
       ARANGO_PASSWORD: ${ARANGO_PASSWORD}
       STORAGE_DIR: /app/storage
-      EMBEDDING_DIM: 768
+      # 벡터 인덱스 차원과 반드시 같아야 한다. DenseNet121 pooled feature 가
+      # 1024 다. 이 값을 바꾸면 저장된 벡터가 전부 무효가 된다.
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
       MODEL_VERSION: ae_squid_v1
       MASK_VERSION: lung_heart_mask_v1
-      EMBEDDING_VERSION: mock_pca_v1
-      USE_TORCH_ANOMALY: "false"
+      # 비워 둔다. 값이 있으면 그것으로 고정되지만, 비어 있으면 실제로 구성된
+      # 임베딩 모델이 스스로 답한다. 예전에 여기 박혀 있던 mock_pca_v1 은
+      # DenseNet 벡터에도 그대로 기록됐다.
+      EMBEDDING_VERSION: ${EMBEDDING_VERSION:-}
+      USE_TORCH_ANOMALY: ${USE_TORCH_ANOMALY:-true}
       USE_TORCH_ROI: "false"
-      USE_TORCH_EMBEDDING: "false"
+      USE_TORCH_EMBEDDING: ${USE_TORCH_EMBEDDING:-true}
+      # 가중치는 빌드 컨텍스트(services/xray-rag) 밖에 있어 이미지에 없다.
+      # 아래 마운트로 넣어준다. 없으면 factory 가 mock 으로 fallback 하고
+      # engineStatus 가 mock 이 된다 - 조용히 real 인 척하지는 않는다.
+      # 로더가 model_dir 의 *부모* 를 AI_BackEnd 루트로 보고 거기서 config.py /
+      # model_loader.py 를 강제로 로드한다. 그래서 가중치 디렉터리만 마운트하면
+      # "AI_BackEnd/config.py not found" 로 깨진다 - 부모까지 통째로 넣는다.
+      SQUID_MODEL_DIR: /app/weights/squid_exp1_256_mask
     ports:
       - "8000:8000"
     volumes:
       - xray-storage:/app/storage
+      # SQUID 가중치와 그 로더(config.py / model_loader.py). read-only.
+      - ../services/radiology-legacy:/app/weights:ro
+      # torchvision 사전학습 가중치 캐시. 컨테이너에 egress 가 없어 런타임
+      # 다운로드가 불가능하므로 호스트 캐시를 그대로 쓴다. 없으면 임베딩이
+      # mock 으로 fallback 한다.
+      - ${TORCH_CACHE_DIR:-~/.cache/torch}:/root/.cache/torch:ro
     depends_on:
       arangodb:
         condition: service_healthy

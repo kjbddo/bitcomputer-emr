@@ -19,3 +19,13 @@ torchvision>=0.15
 
 #선택 의존(CheXpert 데이터셋 다운로드 시)
 kagglehub>=0.3
+
+#선택 의존(SQUID 이상탐지 어댑터). services/radiology-legacy 의 model_loader.py /
+#config.py / squid.py 가 요구하는 것들이다. 이 패키지들이 없으면 factory 가
+#mock 으로 fallback 하고 engineStatus 가 mock 이 된다 - 조용히 real 인 척하지는
+#않지만, 시드를 실제 모델로 했다면 질의도 같은 모델이어야 벡터가 비교 가능하다.
+#opencv 는 headless 를 쓴다 - slim 베이스에는 libGL 이 없어 일반 빌드가 깨진다.
+scipy>=1.10
+opencv-python-headless>=4.8
+matplotlib>=3.7
+tqdm>=4.66
