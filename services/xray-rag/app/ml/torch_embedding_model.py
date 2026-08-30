@@ -115,6 +115,16 @@ class TorchDenseNetEmbedding:
         self._mean = torch.tensor(_IMAGENET_MEAN, dtype=torch.float32).view(1, 3, 1, 1)
         self._std = torch.tensor(_IMAGENET_STD, dtype=torch.float32).view(1, 3, 1, 1)
 
+    @property
+    def version(self) -> str:
+        """인코더 식별자. 차원을 포함한다.
+
+        dim != _NATIVE_DIM 이면 _PROJECTION_SEED 로 초기화된 투영을 한 번 더
+        거치므로, 같은 backbone 이라도 나오는 벡터가 다르다. 그 둘을 같은
+        이름으로 기록하면 비교 불가능한 벡터가 한 이름 아래 섞인다.
+        """
+        return f"densenet121_imagenet_{self.dim}"
+
     def _preprocess(self, error_map: np.ndarray):
         torch = self._torch
         F = self._F

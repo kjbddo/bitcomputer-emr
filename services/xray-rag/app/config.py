@@ -112,7 +112,11 @@ class Settings:
     # Model versioning(같은 modelVersion / maskVersion끼리만 비교하도록 필터에 사용)
     MODEL_VERSION: str = os.environ.get("MODEL_VERSION", "ae_squid_v1")
     MASK_VERSION: str = os.environ.get("MASK_VERSION", "lung_heart_mask_v1")
-    EMBEDDING_VERSION: str = os.environ.get("EMBEDDING_VERSION", "mock_pca_v1")
+    # 기본값을 두지 않는다. 값이 있으면 embeddingVersion 을 그것으로 고정하지만,
+    # 비어 있으면 실제로 구성된 임베딩 모델이 스스로 답한다
+    # (factory.BuildResult.embedding_version). 예전 기본값 "mock_pca_v1" 은
+    # DenseNet 벡터에도 그대로 박혀, 저장된 벡터의 출처를 알 수 없게 만들었다.
+    EMBEDDING_VERSION: Optional[str] = os.environ.get("EMBEDDING_VERSION") or None
 
     # ML toggles
     USE_TORCH_ANOMALY: bool = _bool(os.environ.get("USE_TORCH_ANOMALY"), False)

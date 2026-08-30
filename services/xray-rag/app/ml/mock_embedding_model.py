@@ -24,6 +24,15 @@ class MockEmbeddingModel:
     def dim(self) -> int:
         return self._dim
 
+    @property
+    def version(self) -> str:
+        """저장된 벡터가 어느 인코더에서 나왔는지 식별한다.
+
+        설정이 아니라 모델 자신이 답한다 — 설정 기본값으로 두면 어떤 모델이
+        돌든 같은 문자열이 기록돼, 재색인이 필요한 순간을 알 수 없게 된다.
+        """
+        return "mock_pca_v1"
+
     def embed(self, error_map: np.ndarray) -> np.ndarray:
         feat = _avg_pool_to_grid(error_map.astype(np.float32), self._grid).reshape(-1)
         v = feat @ self._proj
