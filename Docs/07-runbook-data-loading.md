@@ -175,14 +175,31 @@ python scripts/init_db.py
 
 `diseases`·`findings`·`rois` 등 온톨로지 컬렉션을 만든다. 사례는 아직 0건이다.
 
-### 5.2 CheXpert 내려받기 — 사용자 직접 수행
+### 5.2 CheXpert 내려받기
+
+`kagglehub>=0.3` 은 `services/xray-rag/requirements.txt` 에 선택 의존으로 들어 있다. 따로 설치했다면:
 
 ```bash
 pip install kagglehub
+```
+
+**토큰은 `infra/.env` 의 `KAGGLE_API_TOKEN` 에 둔다.** 발급은 Kaggle 계정 페이지의 Settings → API → Create New Token. 값 자체를 넣어도 되고 토큰이 담긴 파일 경로를 넣어도 된다.
+
+적재는 컨테이너가 아니라 호스트에서 돌기 때문에 compose 가 이 값을 실어주지 않는다. 셸에 직접 올린다:
+
+```bash
+cd services/xray-rag
+export KAGGLE_API_TOKEN="$(grep '^KAGGLE_API_TOKEN=' ../../infra/.env | cut -d= -f2-)"
 python scripts/download_chexpert.py --dest ./archive
 ```
 
-처음 실행하면 Kaggle 인증을 요구한다(브라우저 또는 `~/.kaggle/kaggle.json`). **자격증명이 필요한 단계라 자동화 대상이 아니다.** 토큰은 Kaggle 계정 페이지의 Account → Create New API Token 에서 만든다.
+`kagglehub` 는 `KAGGLE_API_TOKEN` 을 `~/.kaggle/kaggle.json` 보다 **먼저** 읽는다(`kagglehub.config.get_kaggle_credentials`). 둘 다 있으면 환경변수가 이긴다. 배선만 먼저 확인하려면:
+
+```bash
+python -c "import kagglehub.config as c; print(c.get_access_token_from_env())"
+```
+
+`('<토큰>', 'KAGGLE_API_TOKEN')` 이 나오면 인증 경로가 살아 있는 것이다. `(None, None)` 이면 export 가 안 된 것이다.
 
 `--dest` 는 기본이 junction(Windows)/symlink(POSIX)이라 디스크를 추가로 쓰지 않는다. `--mode copy` 는 11GB 이상을 더 쓴다.
 
