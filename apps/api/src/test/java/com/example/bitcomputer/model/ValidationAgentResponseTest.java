@@ -127,4 +127,43 @@ class ValidationAgentResponseTest {
 
         assertThat(parsed.getPrescriptionVerification()).isNull();
     }
+
+    /**
+     * F-H3: 처방 표의 모델 출처 배지가 읽어야 하는 값은 prescription_api 자신의
+     * llmStatus 다. 그 값이 이 DTO 를 거치며 사라지면 웹에는 읽을 값이 없고,
+     * 그래서 웹이 validation-agent 의 llmStatus 를 대신 읽고 있었다 — 스텁이
+     * 만든 처방이 "모델이 돌았다"는 화면으로 의사에게 간다.
+     */
+    @Test
+    void roundTripPreservesPrescriptionLlmStatus() throws Exception {
+        String upstream = "{"
+                + "\"overallStatus\":\"PASS\",\"summary\":\"ok\","
+                + "\"llmStatus\":\"real\","
+                + "\"prescriptionLlmStatus\":\"stub\""
+                + "}";
+
+        ValidationAgentResponse parsed =
+                objectMapper.readValue(upstream, ValidationAgentResponse.class);
+        String roundTripped = objectMapper.writeValueAsString(parsed);
+
+        assertThat(parsed.getPrescriptionLlmStatus()).isEqualTo("stub");
+        // 두 축이 서로 덮어쓰지 않아야 한다. 이것이 F-H3 의 라이브 재현 상태다:
+        // validation-agent 는 real, prescription-api 는 stub.
+        assertThat(parsed.getLlmStatus()).isEqualTo("real");
+        assertThat(roundTripped).contains("\"prescriptionLlmStatus\":\"stub\"");
+        assertThat(roundTripped).contains("\"llmStatus\":\"real\"");
+    }
+
+    /**
+     * 상류가 안 주면 null 이어야 한다. 여기에 "fallback" 같은 기본값을 넣으면
+     * "조회를 아예 안 했다"와 "폴백으로 만들었다"가 구분되지 않는다(GC-2).
+     * 웹은 null 을 "출처 미확인"으로 렌더한다(GC-3).
+     */
+    @Test
+    void missingPrescriptionLlmStatusIsNullNotReal() throws Exception {
+        ValidationAgentResponse parsed = objectMapper.readValue(
+                "{\"overallStatus\":\"PASS\",\"summary\":\"s\"}", ValidationAgentResponse.class);
+
+        assertThat(parsed.getPrescriptionLlmStatus()).isNull();
+    }
 }

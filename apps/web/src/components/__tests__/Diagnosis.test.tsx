@@ -75,6 +75,24 @@ describe("llmStatusNotice", () => {
     expect(llmStatusNotice(undefined)).not.toBeNull();
   });
 
+  // GC-2: 값이 없는 것과 "폴백으로 만들었다"는 다른 사실이다. 없는 값을
+  // fallback 문구로 렌더하면 확립되지 않은 것을 주장하게 된다. fail-closed 는
+  // 지키되(배지는 뜬다) 문구는 "모른다"여야 한다.
+  it("필드가 없으면 폴백이라고 단정하지 않고 미확인으로 표시한다", () => {
+    const missing = llmStatusNotice(undefined);
+    const fallback = llmStatusNotice("fallback");
+    expect(missing!.label).toBe("모델 출처 미확인");
+    expect(missing!.label).not.toBe(fallback!.label);
+    expect(missing!.tone).toBe("warning");
+    expect(llmStatusNotice(null)!.label).toBe("모델 출처 미확인");
+  });
+
+  // 계약 밖 값도 마찬가지다. "REAL" 은 real 이 아니지만 fallback 이라는 근거도
+  // 없다 — 아는 것만 말한다.
+  it("계약 밖 값은 폴백이 아니라 미확인이다", () => {
+    expect(llmStatusNotice("REAL")!.label).toBe("모델 출처 미확인");
+  });
+
   // "real" 정확 일치만 통과시켜야 한다. 대소문자를 관대하게 받아주면(예:
   // .toLowerCase() === "real") 오늘은 우연히 안전해도 계약을 느슨하게 만드는
   // 변경이 조용히 들어올 수 있다. 대문자 "REAL" 은 계약 밖 값이므로 여전히
@@ -104,6 +122,10 @@ describe("검증 모달의 llmStatus 배선", () => {
     );
   }
 
+  // 모달 배지는 validation-agent 자신의 llmStatus 를, 패널 배지는
+  // prescription-api 의 prescriptionLlmStatus 를 읽는다(F-H3). 이 헬퍼는 모달
+  // 배선을 보는 것이 목적이라 두 값을 같게 두어 패널/모달 문구를 일치시킨다 —
+  // 두 축이 실제로 갈라지는 경우는 아래 전용 describe 에서 따로 고정한다.
   function mockJobWithLlmStatus(jobId: string, llmStatus: string) {
     mockedRecommend.mockResolvedValue({ jobId, historyId: 10, status: "RUNNING" });
     mockedGetJob.mockResolvedValue({
@@ -114,6 +136,7 @@ describe("검증 모달의 llmStatus 배선", () => {
         overallStatus: "PASS",
         summary: "이상 없음",
         llmStatus,
+        prescriptionLlmStatus: llmStatus,
         recommendedPrescriptions: [
           {
             id: 1,
@@ -897,6 +920,9 @@ describe("환자·진료 전환 시 AI 추천/검증 상태가 초기화된다",
         overallStatus: "PASS",
         summary: "이상 없음",
         llmStatus: "fallback",
+        // 패널 배지는 prescription-api 의 값을 읽는다(F-H3). 이 describe 는
+        // 배지의 출처가 아니라 "전환 시 초기화되는가"를 보므로 두 축을 같게 둔다.
+        prescriptionLlmStatus: "fallback",
         prescriptionVerification: {
           status: "flagged",
           checks: [
@@ -984,5 +1010,104 @@ describe("환자·진료 전환 시 AI 추천/검증 상태가 초기화된다",
     expect(screen.queryByText("AI 추천 처방")).not.toBeInTheDocument();
     expect(screen.queryByText("근거 불일치")).not.toBeInTheDocument();
     expect(screen.queryByText("규칙 기반 결과 — 모델 미사용")).not.toBeInTheDocument();
+  });
+});
+
+// F-H3: "AI 추천 처방" 패널의 모델 출처 배지는 그 표 안의 처방을 실제로 만든
+// 서비스(prescription-api)의 llmStatus 를 읽어야 한다. 응답 최상위 llmStatus 는
+// validation-agent 가 자기 검증 결정을 어떻게 냈는지이지, 표에 있는 처방이
+// 어디서 나왔는지가 아니다 — 그 둘을 섞으면 prescription-api 가 스텁인데도
+// validation-agent 가 real 이라는 이유로 배지가 사라진다(라이브 재현됨).
+//
+// 바로 아래 검증 축(prescriptionVerification)은 이미 이 구분을 지키고 있었다.
+// 같은 블록에서 모델 출처 축만 구분되지 않았다.
+describe("처방 패널 모델 배지는 prescription-api 의 llmStatus 를 읽는다", () => {
+  const clinicVisit = { patientId: 1, deptId: 1 };
+
+  function renderDiagnosis() {
+    return render(
+      <MedicalSelectionProvider>
+        <Diagnosis clinicVisit={clinicVisit} ensureHistory={async () => 10} employeeId={1} />
+      </MedicalSelectionProvider>
+    );
+  }
+
+  function mockJob(
+    jobId: string,
+    llmStatus: string,
+    prescriptionLlmStatus: string | null | undefined
+  ) {
+    mockedRecommend.mockResolvedValue({ jobId, historyId: 10, status: "RUNNING" });
+    mockedGetJob.mockResolvedValue({
+      jobId,
+      historyId: 10,
+      status: "DONE",
+      result: {
+        overallStatus: "PASS",
+        summary: "이상 없음",
+        llmStatus,
+        prescriptionLlmStatus,
+        recommendedPrescriptions: [
+          {
+            id: 1,
+            rank: 1,
+            prescription_code: "C1",
+            prescription_name: "약1",
+            reason: "",
+            confidence_score: 0.9,
+            dose: 1,
+            time: 1,
+            days: 1,
+          },
+        ],
+      },
+    } as unknown as ValidationJobResponse);
+  }
+
+  // 모달을 닫아야 패널만 남는다 — 같은 문구가 모달에도 뜰 수 있어 스코프를 분리한다.
+  async function openThenClosePanel() {
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+    await screen.findByRole("dialog");
+    fireEvent.click(screen.getByRole("button", { name: "확인" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  }
+
+  it("validation-agent 가 real 이어도 처방 RAG 가 stub 이면 패널에 스텁 배지가 뜬다", async () => {
+    // F-H3 의 라이브 재현 상태 그대로다: 최상위 real, 처방 RAG stub.
+    mockJob("job-fh3-1", "real", "stub");
+
+    renderDiagnosis();
+    await openThenClosePanel();
+
+    const badge = screen.getByText("스텁 응답 (모델 미사용)");
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveAttribute("data-tone", "neutral");
+  });
+
+  it("처방 RAG 가 real 이면 최상위가 stub 이어도 패널에는 배지가 없다", async () => {
+    // 반대 방향도 고정한다. 이 단언이 없으면 "항상 배지를 띄운다"는 구현으로도
+    // 위 테스트가 통과해버린다.
+    mockJob("job-fh3-2", "stub", "real");
+
+    renderDiagnosis();
+    await openThenClosePanel();
+
+    expect(screen.getByText("AI 추천 처방")).toBeInTheDocument();
+    expect(screen.queryByText("스텁 응답 (모델 미사용)")).toBeNull();
+    expect(screen.queryByText(/모델 미사용/)).toBeNull();
+    expect(screen.queryByText("모델 출처 미확인")).toBeNull();
+  });
+
+  it("처방 RAG 의 llmStatus 가 없으면 미확인 배지가 뜬다", async () => {
+    // GC-3: 필드가 없다는 것은 "모델이 돌았다"도 "규칙으로 만들었다"도 아니다.
+    // 둘 중 아무거나로 말하면 확립되지 않은 것을 주장하게 된다(GC-2).
+    mockJob("job-fh3-3", "real", undefined);
+
+    renderDiagnosis();
+    await openThenClosePanel();
+
+    const badge = screen.getByText("모델 출처 미확인");
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveAttribute("data-tone", "warning");
   });
 });

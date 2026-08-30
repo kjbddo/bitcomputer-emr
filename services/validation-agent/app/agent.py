@@ -66,6 +66,10 @@ class ValidationState(TypedDict, total=False):
     # 응답 최상위에 별도 필드(prescriptionVerification)로만 얹는다 — 섞지
     # 않는다(최종 리뷰 C1, tools.py:205-211).
     prescription_verification: Optional[Dict[str, Any]]
+    # prescription_api 자신이 보고한 `llmStatus` 원본. validation-agent 자신의
+    # 결정 출처(decision_sources)와는 다른 축이라 절대 그쪽에 섞지 않는다 —
+    # 응답 최상위 prescriptionLlmStatus 로만 나간다(F-H3).
+    prescription_llm_status: Optional[str]
     final_result: Dict[str, Any]
 
 
@@ -234,6 +238,11 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
     # candidate_prescriptions 가 채워져 있어 finder 를 다시 부를 필요가 없던 경우)
     # None 그대로 두어 GC-2/GC-3(미검증 fail-closed)를 지킨다.
     response_payload["prescriptionVerification"] = state.get("prescription_verification")
+    # prescription_api 자신의 모델 출처. 위 `llmStatus`(validation-agent 자신의
+    # 결정 출처)와 같은 자리에 섞지 않고 별도 필드로만 얹는다 —
+    # prescriptionVerification 과 정확히 같은 이유, 같은 방식이다(F-H3).
+    # 후보 조회가 아예 없었으면 None 그대로 둔다(GC-2/GC-3).
+    response_payload["prescriptionLlmStatus"] = state.get("prescription_llm_status")
     return ValidationAgentResponse(**response_payload)
 
 
@@ -360,6 +369,12 @@ def _invoke_prescription_finder(
         # 읽는다(최종 리뷰 C1). 여러 번 호출되면 가장 최근 관측값이 이긴다 —
         # state["candidate_prescriptions"] 를 덮어쓰는 것과 같은 규칙이다.
         state["prescription_verification"] = observation.get("recommendationVerification")
+        # 같은 관측값에서 처방 RAG 자신의 llmStatus 도 그대로 들고 있는다. 위
+        # `payload_status` 는 이 스텝의 트레이스 source 를 강등하는 데만 쓰이고
+        # 응답 최상위까지는 가지 않았다 — 그래서 처방 표의 모델 배지가 읽을 값이
+        # 없어 다른 서비스의 llmStatus 를 읽고 있었다(F-H3). 키가 없으면(예외
+        # 경로) None 이 그대로 남아 웹이 "미확인" 으로 렌더한다(GC-3).
+        state["prescription_llm_status"] = payload_status
     return observation if isinstance(observation, dict) else {"status": "UNKNOWN", "raw": observation}
 
 
