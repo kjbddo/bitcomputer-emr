@@ -29,3 +29,13 @@ scipy>=1.10
 opencv-python-headless>=4.8
 matplotlib>=3.7
 tqdm>=4.66
+
+#선택 의존(ChestX-Det PSPNet ROI 분할 어댑터, app/ml/pspnet_roi_model.py).
+#없으면 factory 가 cv 분할로 내려가고 roi_status 가 "cv" 가 된다 - 조용히
+#pspnet 인 척하지는 않는다. 가중치(273MB)는 패키지에 들어 있지 않고
+#~/.torchxrayvision/models_data/ 에 캐시된다. 컨테이너에는 egress 가 없으므로
+#호스트 캐시를 마운트해야 한다(Docs/07-runbook-data-loading.md §5.7).
+#라이브러리는 Apache-2.0 이지만 baseline 모델별 라이선스는 따로다 -
+#chestx_det(PSPNet)은 상류가 Apache-2.0, chestx_anatomy(CXAS)는 CC BY-NC-SA 라
+#쓰지 않는다. 근거는 app/ml/pspnet_roi_model.py 독스트링.
+torchxrayvision>=1.5,<2.0

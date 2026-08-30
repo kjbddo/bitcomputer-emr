@@ -316,6 +316,14 @@ def main() -> int:
     print(f"view skip     : {n_skipped_view}")
     print(f"cap skip      : {n_skipped_disease_cap}")
     print(f"elapsed       : {elapsed:.1f}s ({n_total/max(elapsed,1e-3):.2f} rows/s)")
+    # 어떤 ROI 분할기로 시드했는지, 그리고 몇 건이 fallback 했는지를 요약에 남긴다.
+    # 로그를 스크롤해서 세는 것 말고는 알 방법이 없었다 - 케이스 문서의
+    # roiMaskVersion 은 어댑터 단위 값이라 케이스별 fallback 을 구분하지 못한다.
+    roi_model = getattr(container.roi, "model", None)
+    print(f"roi adapter   : {container.roi_status} ({container.roi_mask_version})")
+    fb = getattr(roi_model, "fallback_count", None)
+    if fb is not None:
+        print(f"roi fallbacks : {fb} / {n_ok} 건 (fallback 은 WARNING 으로도 남는다)")
     print("disease distribution (registered):")
     for k, v in per_disease.most_common():
         print(f"  {k:35s} {v}")
