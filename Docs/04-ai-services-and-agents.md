@@ -94,6 +94,66 @@ flowchart TD
 
 추천 결과에 대해 프론트에서 `accepted`, `rejected`, `missed` 피드백을 보낼 수 있다. Spring은 MySQL에 저장하고, Prescription API는 ArangoDB 피드백 그래프에 반영한다.
 
+### 4.3 호출 주체 (2026-08-30 결정)
+
+`POST /api/agent/prescription/recommend` 를 호출하는 주체는 **validation-agent 하나뿐이다**
+(`services/validation-agent/app/tools.py` 의 `prescription_finder`).
+
+Spring 에도 같은 엔드포인트를 부르는 동기 경로(`AgentServiceImpl.callAgentAndMap` →
+`PrescriptionAgentClient.recommend`)가 있었으나, 웹이 실제로 쓰는 경로가
+`recommendPrescription` → RabbitMQ validation job → `ValidationAgentResponse` 로 옮겨 간 뒤로
+호출자가 하나도 남지 않은 죽은 코드였다. 되살리는 대신 **삭제**했다.
+
+- 근거: 동기 경로를 되살리면 검증 루프를 거치지 않는 두 번째 추천 경로가 생겨
+  "AI 추천은 검증 루프를 반드시 거친다"는 현재 설계와 충돌한다. Python → Python 직통
+  호출이 한 홉 더 짧기도 하다.
+- 같이 삭제된 것: `PrescriptionAgentRequest`, `PrescriptionAgentResponse`,
+  `PrescriptionRecommendResponseDTO`, `RecommendedPrescriptionItemDTO`,
+  `AgentServiceImpl` 의 프롬프트 조립 헬퍼(`buildAgentRequest`, `buildTopRx`,
+  `buildHistoryText`, `applyExampleContextIfRequested`, `findDiagnoseMaster` 등),
+  `ai.prescription-agent.path` / `.fetch-top-rx-from-arango` / `.arango-top-rx-limit` /
+  `.fetch-cohort-rx-from-arango` / `.arango-cohort-rx-limit` / `.example-context-path` 설정.
+- 같이 삭제된 테스트: `PrescriptionAgentResponseTest`(대상 DTO 가 사라졌다),
+  `PythonProvenanceFieldsSurviveJavaDtoTest` 의 `prescription_api.py` 경계 한 쌍.
+  그 경계의 출처·검증 신호는 이제 `ValidationAgentResponse` 의
+  `prescriptionLlmStatus` / `prescriptionVerification` 로 건너오므로 같은 목록의 첫 경계가 덮는다.
+- 남긴 것: `PrescriptionAgentClient.saveFeedbackToGraph` 와 `ai.prescription-agent.base-url` /
+  `.feedback-path` — 피드백 적재는 여전히 Spring 이 담당한다.
+- 부수 효과: `PrescriptionRecommendRequestDTO` 의 `use_example_context` / `arango_patient_id` 는
+  이제 읽는 코드가 없다. 필드는 요청 호환성을 위해 남겼지만 **무시된다**.
+
+### 4.4 그래프 조회 결과 노출 (F-M6)
+
+`used_arango_top_rx` / `arango_top_rx_count` / `used_cohort_rx` / `cohort_rx_count` 는
+예전에는 Spring 로그 한 줄로만 남고 사라졌다. 그래프가 빈손이면 추천은 모델의 일반지식에만
+기대게 되는데, 화면에서는 그 차이가 보이지 않았다. E78(고지혈증)은 PR #9 의 약제 코드 필터
+이후 실제로 약제 후보가 0건이라 가정이 아니라 실재하는 상태다.
+
+```
+prescription_api /recommend   used_arango_top_rx, arango_top_rx_count, ...
+  → prescription_finder       graphLookup {status, usedArangoTopRx, arangoTopRxCount,
+                                           usedCohortRx, cohortRxCount, foundNothing, evidence[]}
+  → run_validation_agent      validation.graphLookup + checks[] 의 GRAPH_LOOKUP 한 줄
+  → RabbitMQ result           ValidationJob.result (Map 그대로 통과, Java DTO 변경 없음)
+  → Diagnosis.tsx             검증 모달의 그래프 배지 + 근거 문장
+```
+
+**세 상태를 구분한다** (설계 문서 §3.2, GC-3 fail-closed). "확인함·0건", "확인 못 함",
+"근거 있음"은 셋 다 다르다.
+
+| 상태 | `graphLookup` | `checks` | 화면 |
+|---|---|---|---|
+| 근거 있음 | `status=LOADED`, `foundNothing=false` | 없음 | 표시 없음 |
+| 확인함·0건 | `status=LOADED`, `foundNothing=true` | `GRAPH_LOOKUP` / `NO_DATA` | "그래프 근거 0건" |
+| 조회 실패 | `status=FAILED`, `foundNothing=false` | `GRAPH_LOOKUP` / `UNKNOWN` | "그래프 근거 미확인" |
+| 단계 미실행 | `null` | 없음 | "그래프 근거 미확인" |
+
+`foundNothing` 은 **조회에 성공한 경우에만** 의미가 있다. 조회 실패나 예산 초과로 5단계를
+건너뛴 경우를 0건으로 접으면 모르는 것을 아는 것처럼 말하게 된다.
+
+- 회귀 테스트: `services/validation-agent/tests/test_graph_lookup_visibility.py`,
+  `apps/web/src/utils/__tests__/graphLookupNotice.test.ts`
+
 ## 5. Certificate API
 
 Certificate API는 Spring이 MySQL에서 모은 환자/진료/상병/처방 데이터를 받아 진단서 소견 문장을 생성한다.
@@ -196,6 +256,7 @@ URL(`LLM_GATEWAY_BASE_URL`)만 안다.
 - `llmStatus`: 이 실행에서 실제로 성사된 모델 호출에서만 도출한다. 게이트웨이가 설정돼 있다는 사실은 근거가 되지 않는다
 - `validation.pubmedEvidence`: PubMed 논문 근거
 - `validation.pubmedEvidenceSummary`: 초록 요약
+- `validation.graphLookup`: ArangoDB 처방 그래프 조회 결과. 후보 조회 단계를 돌지 않았으면 `null` 이고, 그 "확인 못 함"은 "0건"과 다른 상태다 (§4.4)
 
 ## 7. AI 서비스 간 관계
 
@@ -203,10 +264,10 @@ URL(`LLM_GATEWAY_BASE_URL`)만 안다.
 flowchart LR
   Spring[Spring Boot] --> Xray[XrayGraphRAG]
   Spring --> Cert[Certificate API]
-  Spring --> Rx[Prescription API]
+  Spring -- 피드백 적재만 --> Rx[Prescription API]
   Spring --> RMQ[RabbitMQ]
   RMQ --> Val[ValidationAgent]
-  Val --> Rx
+  Val -- 추천 조회 --> Rx
   Val --> PubMed[PubMed]
   Val --> OpenAI[OpenAI]
   Rx --> Gemini[Gemini]

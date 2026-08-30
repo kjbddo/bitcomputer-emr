@@ -16,6 +16,7 @@ import {
   type ValidationJobResponse,
 } from "@/services/history";
 import { HttpError } from "@/services/http/types";
+import { graphLookupNotice, type GraphLookup } from "@/utils/graphLookupNotice";
 import { llmStatusNotice } from "@/utils/llmStatus";
 import {
   itemVerificationOutcome,
@@ -552,6 +553,15 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
 
   const validationReasons = extractValidationReasons(validationModal);
   const pubmedReferences = extractPubmedReferences(validationModal);
+  // 검증 결과가 아직 없는 동안(PENDING/RUNNING)에는 "그래프 근거 미확인" 을
+  // 띄우지 않는다 — 아직 조회할 차례가 오지 않은 것이지 확인에 실패한 것이
+  // 아니다. 결과가 도착한 뒤부터 세 상태를 구분해 표시한다.
+  const graphNotice = validationModal?.result
+    ? graphLookupNotice(
+        (validationModal.result.validation as { graphLookup?: GraphLookup } | undefined)
+          ?.graphLookup
+      )
+    : null;
   const validationTopItems = (
     validationModal?.result?.recommendedPrescriptions ??
     validationModal?.result?.candidatePrescriptions ??
@@ -610,6 +620,19 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
                 <ul>
                   {validationReasons.map((reason) => (
                     <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {graphNotice && (
+              <div className={styles.modalGraphNotice}>
+                <div className={styles.modalGraphNoticeHead}>
+                  <span className={styles.modalVerificationLabel}>그래프</span>
+                  <Badge tone={graphNotice.tone}>{graphNotice.label}</Badge>
+                </div>
+                <ul>
+                  {graphNotice.lines.map((line) => (
+                    <li key={line}>{line}</li>
                   ))}
                 </ul>
               </div>

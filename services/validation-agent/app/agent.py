@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from . import pubmed
 from .deadline import JobDeadline
@@ -193,6 +193,13 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
         })
         final_result["checks"] = checks
 
+    graph_lookup = state.get("graph_lookup")
+    graph_check = _graph_lookup_check(state, graph_lookup)
+    if graph_check:
+        checks = final_result.get("checks") if isinstance(final_result.get("checks"), list) else []
+        checks.append(graph_check)
+        final_result["checks"] = checks
+
     candidates = normalize_prescription_candidates(state.get("candidate_prescriptions", []))
     final_result.update({
         "jobId": request.jobId,
@@ -206,6 +213,9 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
             "pubmedEvidence": pubmed_evidence,
             "pubmedQueries": pubmed_queries,
             "pubmedEvidenceSummary": pubmed_evidence_summary,
+            # 후보 조회 단계를 돌지 않았으면 None 이다. "확인 못 함" 은 "0건" 과
+            # 다른 상태이므로 빈 dict 로 채우지 않는다(GC-3, 설계 문서 §3.2).
+            "graphLookup": graph_lookup,
         },
         "reasoningTrace": trace,
         # 이 실행에서 실제로 성사된 모델 호출만 본다(GC-5). 도구 실행 결과나
@@ -259,6 +269,48 @@ def _budget_ok(
     return False
 
 
+def _graph_lookup_check(
+    state: ValidationState,
+    graph_lookup: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """ArangoDB 처방 그래프 조회 결과를 checks 한 줄로 만든다(F-M6).
+
+    세 상태를 구분한다(설계 문서 §3.2, GC-3).
+
+    - `None` — 후보 조회 단계를 아예 돌지 않았다. 트레이스가 이미 그 사실을
+      남기므로 여기서 check 를 만들지 않는다. 없는 근거를 "0건" 으로 바꾸지 않는다
+    - `status == "FAILED"` — 조회하지 못했다. "확인 못 함" 이다
+    - `foundNothing` — 조회했고 참고할 처방이 정말 0건이다
+    """
+    if not isinstance(graph_lookup, dict):
+        return None
+    status = str(graph_lookup.get("status") or "")
+    evidence = list(graph_lookup.get("evidence") or [])
+    related = {
+        "relatedDiseases": state.get("saved_diseases", []),
+        "relatedPrescriptions": state.get("saved_prescriptions", []),
+    }
+    if status == "FAILED":
+        return {
+            "type": "GRAPH_LOOKUP",
+            "status": "UNKNOWN",
+            "message": "처방 그래프를 조회하지 못해 과거 처방·코호트 근거를 확인하지 못했습니다.",
+            "evidence": evidence,
+            **related,
+            "recommendedAction": "그래프 근거가 확인되지 않은 추천이므로 의료진이 더 보수적으로 확인하세요.",
+        }
+    if graph_lookup.get("foundNothing"):
+        return {
+            "type": "GRAPH_LOOKUP",
+            "status": "NO_DATA",
+            "message": "처방 그래프에 이 상병을 뒷받침하는 과거 처방·코호트 처방이 없습니다.",
+            "evidence": evidence,
+            **related,
+            "recommendedAction": "그래프 근거 없이 생성된 추천이므로 의료진이 더 보수적으로 확인하세요.",
+        }
+    return None
+
+
 def _invoke_prescription_finder(
     trace: List[Dict[str, Any]],
     thought: str,
@@ -299,6 +351,9 @@ def _invoke_prescription_finder(
         # 그래서 다른 서비스의 llmStatus 를 읽고 있었다(F-H3). 키가 없으면
         # None 이 그대로 남아 웹이 "미확인" 으로 렌더한다(GC-3).
         state["prescription_llm_status"] = observation.get("recommendationLlmStatus")
+        # ArangoDB 처방 그래프 조회 결과(F-M6). 키가 없으면 None 이 남아 "확인
+        # 못 함" 으로 렌더된다 — "0건" 이라고 주장하지 않는다(GC-3).
+        state["graph_lookup"] = observation.get("graphLookup")
     return observation if isinstance(observation, dict) else {"status": "UNKNOWN", "raw": observation}
 
 

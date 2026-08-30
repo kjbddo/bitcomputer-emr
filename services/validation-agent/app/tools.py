@@ -158,6 +158,61 @@ def prescription_validator(
     }
 
 
+def _int_or_zero(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _graph_lookup_loaded(body: Dict[str, Any]) -> Dict[str, Any]:
+    """prescription_api 의 ArangoDB 조회 플래그를 화면까지 갈 형태로 정리한다(F-M6).
+
+    그래프가 빈손이면 추천은 모델의 일반지식에만 기대게 된다. 그 차이가 화면에
+    보이지 않으면 의사는 두 경우를 구분할 수 없으므로, 로그가 아니라 관측값으로
+    싣는다(설계 문서 §3.2).
+    """
+    arango_count = _int_or_zero(body.get("arango_top_rx_count"))
+    cohort_count = _int_or_zero(body.get("cohort_rx_count"))
+
+    evidence: List[str] = []
+    if arango_count:
+        evidence.append(f"환자 그래프에서 이 환자의 과거 처방 {arango_count}건을 참고했습니다.")
+    else:
+        evidence.append("환자 그래프에서 이 환자의 과거 처방을 찾지 못했습니다 (0건).")
+    if cohort_count:
+        evidence.append(f"같은 상병 코호트의 처방 {cohort_count}건을 참고했습니다.")
+    else:
+        evidence.append("같은 상병 코호트의 처방을 그래프에서 찾지 못했습니다 (0건).")
+
+    return {
+        "status": "LOADED",
+        "usedArangoTopRx": bool(body.get("used_arango_top_rx")),
+        "arangoTopRxCount": arango_count,
+        "usedCohortRx": bool(body.get("used_cohort_rx")),
+        "cohortRxCount": cohort_count,
+        "foundNothing": not (arango_count or cohort_count),
+        "evidence": evidence,
+    }
+
+
+def _graph_lookup_failed(error: str) -> Dict[str, Any]:
+    """조회 실패는 "0건" 이 아니다.
+
+    GC-3 fail-closed: 확인하지 못한 것을 "확인했는데 없었다" 로 읽히게 하면
+    안 된다. `foundNothing` 은 False 로 남기고 status 로만 구분한다.
+    """
+    return {
+        "status": "FAILED",
+        "usedArangoTopRx": False,
+        "arangoTopRxCount": 0,
+        "usedCohortRx": False,
+        "cohortRxCount": 0,
+        "foundNothing": False,
+        "evidence": [f"처방 그래프를 조회하지 못했습니다: {error}"],
+    }
+
+
 @tool
 def prescription_finder(
     patient_id: str,
@@ -202,12 +257,21 @@ def prescription_finder(
             "candidatePrescriptions": [],
             "recommendationLlmStatus": "fallback",
             "recommendationVerification": None,
+            "graphLookup": _graph_lookup_failed(str(exc)),
         }
 
+    graph_lookup = _graph_lookup_loaded(body)
     return {
         "status": "LOADED",
-        "evidence": ["기존 처방 RAG에서 참고 처방 후보를 조회했습니다."],
+        "evidence": [
+            "기존 처방 RAG에서 참고 처방 후보를 조회했습니다.",
+            *graph_lookup["evidence"],
+        ],
         "candidatePrescriptions": body.get("prescriptions") or [],
+        # ArangoDB 처방 그래프 조회 결과(F-M6). 이 스텝의 근거 출처이지 검증
+        # 판정이 아니므로 최상위 상태와 섞지 않고 validation.graphLookup 으로만
+        # 나간다 — recommendationVerification 과 같은 원칙.
+        "graphLookup": graph_lookup,
         # 처방 RAG 자신이 모델을 썼는지. 이 스텝의 페이로드 출처이지, 검증 결정의
         # 출처가 아니다 — 최상위 llmStatus 에 섞으면 안 된다(Task 6 회귀).
         "recommendationLlmStatus": body.get("llmStatus"),
