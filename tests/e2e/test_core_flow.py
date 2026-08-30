@@ -110,8 +110,17 @@ def test_doctor_reaches_ai_recommendation(doctor: httpx.Client, history_id: int)
     assert body["jobId"]
 
 
-def test_stub_engine_status_is_exposed():
-    """처방 서비스가 stub 으로 돌고 있음을 응답에서 확인할 수 있어야 한다."""
+def test_engine_status_is_exposed_and_matches_the_running_provider():
+    """처방 서비스가 어떤 엔진으로 돌고 있는지 응답에서 확인할 수 있어야 한다.
+
+    예전에는 `engineStatus == "stub"` 을 하드코딩했다. CI 는 LLM_PROVIDER=stub
+    로 돌아 통과했지만, **실제 모델로 도는 스택에 이 스위트를 돌리면 반드시
+    실패했다** — 배포 전에 하고 싶은 바로 그 검증을 테스트가 막고 있었다.
+
+    엔진 종류는 이 테스트가 정할 일이 아니다. 여기서 지켜야 할 계약은
+    "engineStatus 가 계약 안의 값으로 노출되고, 응답 형태가 그에 맞다" 이다.
+    stub 고유의 단언은 stub 으로 돌 때만 한다.
+    """
     with httpx.Client(base_url="http://localhost:8001", timeout=60.0) as client:
         response = client.post(
             "/api/agent/prescription/recommend",
@@ -128,8 +137,18 @@ def test_stub_engine_status_is_exposed():
         )
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["engineStatus"] == "stub"
+
+    engine_status = body["engineStatus"]
+    assert engine_status in {"real", "stub", "fallback"}, (
+        f"계약 밖의 engineStatus: {engine_status!r}"
+    )
     assert len(body["prescriptions"]) == 3
+
+    if engine_status != "stub":
+        pytest.skip(
+            f"스택이 engineStatus={engine_status!r} 로 돌고 있어 stub 고유 단언은 건너뛴다. "
+            "이 테스트의 나머지(계약 준수, 추천 3건)는 이미 확인했다."
+        )
 
 
 def test_receptionist_is_denied_ai_recommendation(receptionist: httpx.Client):
