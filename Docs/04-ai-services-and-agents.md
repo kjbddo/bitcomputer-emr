@@ -10,7 +10,7 @@ BitComputer의 AI 기능은 하나의 모델에 몰려 있지 않고, 기능별 
 | `AI_BackEnd` | Flask, PyTorch | 기존 X-ray 이상 탐지 | 없음 |
 | `certificate-api` | FastAPI, LangChain | 진단서 의사소견 생성 | Gemini |
 | `prescription-api` | FastAPI, ArangoDB, LangChain | 그래프 기반 처방 추천 | Gemini |
-| `validation-agent` | FastAPI, RabbitMQ, ReAct loop | 상병/처방/X-ray/PubMed 검증 및 추천 후보 조합 | OpenAI |
+| `validation-agent` | FastAPI, RabbitMQ, 고정 파이프라인 + 모델 호출 2회 | 상병/처방/X-ray/PubMed 검증 및 추천 후보 조합 | OpenAI |
 
 ## 2. XrayGraphRAG
 
@@ -119,27 +119,34 @@ flowchart TD
 
 ## 6. ValidationAgent
 
-ValidationAgent는 처방 추천 버튼을 계기로 실행되는 검증 에이전트다. Spring이 만든 job 메시지를 RabbitMQ에서 소비하고, 여러 도구를 선택적으로 호출한 뒤 검증 결과를 JSON으로 반환한다.
+ValidationAgent는 처방 추천 버튼을 계기로 실행되는 검증 에이전트다. Spring이 만든 job 메시지를 RabbitMQ에서 소비하고, 정해진 순서로 도구를 호출한 뒤 검증 결과를 JSON으로 반환한다.
 
-### 6.1 전체 루프
+### 6.1 전체 파이프라인
+
+도구 선택은 모델이 하지 않는다. 실행 순서는 도메인이 정한 고정 순서이며, 모델은
+**두 자리에서만** 쓴다: PubMed 질의 생성과 근거 요약. 이전에는 매 단계 게이트웨이에
+"다음에 어떤 도구를 부를까" 를 물었으나, 측정 결과 그 결정은 하드코딩 순서를
+재생산했을 뿐이고 관측값이 다음 행동을 바꾼 사례가 없었다(`.superpowers/sdd/agent-architecture-review.md` §5,
+`.superpowers/sdd/react-loop-removal-report.md`). 결정 호출 4회가 0회가 됐다.
 
 ```mermaid
 flowchart TD
-  A[ValidationAgentRequest] --> B[초기 State 구성]
-  B --> C{LLM_GATEWAY_BASE_URL 존재?}
-  C -->|예| D[게이트웨이 경유 tool_decider]
-  C -->|아니오| E[Fallback 순서 결정]
-  D --> F[도구 1개 선택]
-  E --> F
-  F --> G[도구 실행]
-  G --> H[Observation 저장]
-  H --> I{PASS 또는 max iteration?}
-  I -->|아니오| C
-  I -->|예| J[규칙 기반/LLM 보조 final result]
-  J --> K[PubMed 근거 요약]
-  K --> L[Prescription 후보 보강]
-  L --> M[ValidationAgentResponse]
+  A[ValidationAgentRequest] --> B[초기 State 구성 + 전역 예산 시작]
+  B --> C[1. X-ray Result Loader]
+  C --> D[2. Disease Validator]
+  D --> E[3. Prescription Validator]
+  E --> F[4. PubMed 질의 생성 - 모델 호출 1/2]
+  F --> G[Pubmed Loader - 첫 성공까지 재시도]
+  G --> H[5. Prescription Finder]
+  H --> I[6. 규칙 기반 최종 판정]
+  I --> J[PubMed 근거 요약 - 모델 호출 2/2]
+  J --> K[verification 대조]
+  K --> L[ValidationAgentResponse]
 ```
+
+각 단계 앞에서 전역 예산(`VALIDATION_JOB_BUDGET_SECONDS`, 기본 110초)을 확인한다.
+소진되면 남은 단계를 건너뛰고 지금까지 모은 관측값으로 규칙 기반 판정을 내되,
+건너뛴 단계를 `reasoningTrace` 에 `BUDGET_EXCEEDED` 로 남긴다.
 
 ### 6.2 도구 목록
 
@@ -151,19 +158,29 @@ flowchart TD
 | `Prescription Finder` | 기존 처방 RAG에서 후보 처방 조회 | 환자 ID, 상병, 증상/검증 사유 | 후보 처방 배열 |
 | `Pubmed Loader` | PubMed 논문 검색과 초록 조회 | 검색어, max_results | 논문 제목, PMID, 초록 |
 
-### 6.3 tool_decider 설계
+### 6.3 모델 호출 두 자리
 
 ```mermaid
 flowchart LR
-  State[현재 state] --> Prompt[도구 선택 프롬프트]
-  Trace[최근 reasoningTrace] --> Prompt
-  Tools[availableTools 목록] --> Prompt
-  Prompt --> Gateway[llm-gateway 경유 LLM_MODEL]
-  Gateway --> Decision["{ thought, action, actionInput }"]
-  Decision --> Executor[도구 실행기]
+  State[검증 컨텍스트] --> Q[PubMed 질의 생성 프롬프트]
+  Q --> Gateway[llm-gateway 경유 LLM_MODEL]
+  Gateway --> Queries["{ queries: [영어 검색어] }"]
+  Queries --> Loader[Pubmed Loader]
+  Loader --> Articles[초록]
+  Articles --> Sum[근거 요약 프롬프트]
+  Sum --> Gateway
+  Gateway --> Summary[한국어 요약문]
 ```
 
-`LLM_MODEL` 기본값은 `openai.gpt-5.6-luna`다. 비용과 속도를 우선하면서도 도구 선택, PubMed query 생성, 초록 요약 같은 경량 reasoning에 적합하도록 설정했다. 자격증명은 `services/llm-gateway` 가 갖고 있으며, ValidationAgent 는 게이트웨이 base URL(`LLM_GATEWAY_BASE_URL`)만 안다.
+이 둘만 모델을 필요로 한다. 질의 생성은 한국어 임상 맥락을 영어 검색어로 번역하는
+일이고, 15항목짜리 하드코딩 사전(`app/pubmed.py` 의 `KOREAN_PUBMED_TERMS`)으로는
+할 수 없다. 두 호출 모두 실패하면 결정론적 대체물로 강등되고 그 사실이
+`llmStatus` 와 트레이스 `source` 에 남는다.
+
+`LLM_MODEL` 기본값은 `openai.gpt-5.6-luna`다. 비용과 속도를 우선하면서도 PubMed
+query 생성과 초록 요약 같은 경량 생성에 적합하도록 설정했다. 자격증명은
+`services/llm-gateway` 가 갖고 있으며, ValidationAgent 는 게이트웨이 base
+URL(`LLM_GATEWAY_BASE_URL`)만 안다.
 
 ### 6.4 결과 구조
 
@@ -175,7 +192,8 @@ flowchart LR
 - `recommendedPrescriptions`, `candidatePrescriptions`
 - `checks`: 검증 항목별 결과
 - `suspectedIssues`: 의심 문제 목록
-- `reasoningTrace`: Thought/Action/Observation 기록
+- `reasoningTrace`: 파이프라인 단계별 기록. 각 항목은 `thought`/`action`/`actionInput`/`observation`/`source` 를 갖는다. `source` 는 그 단계가 실제로 쓴 내용의 출처다 — `rule`(결정론적), `llm`(모델이 생성), `stub`, `fallback`
+- `llmStatus`: 이 실행에서 실제로 성사된 모델 호출에서만 도출한다. 게이트웨이가 설정돼 있다는 사실은 근거가 되지 않는다
 - `validation.pubmedEvidence`: PubMed 논문 근거
 - `validation.pubmedEvidenceSummary`: 초록 요약
 
