@@ -25,7 +25,7 @@
    - XrayGraphRAG
    - 처방 추천 API
    - 진단서 소견 생성 API
-   - ValidationAgent ReAct 루프와 도구 구성
+   - ValidationAgent 고정 파이프라인과 도구 구성
 
 5. [데이터, 메시징, 배포 구조](./05-data-and-deployment.md)
    - MySQL/ArangoDB/RabbitMQ/Redis/볼륨 역할

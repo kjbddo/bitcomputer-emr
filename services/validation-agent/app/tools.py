@@ -147,7 +147,12 @@ def prescription_validator(
         "status": "APPROPRIATE",
         "evidence": [
             f"저장 처방 {len(saved_prescriptions)}건, 저장 상병 {len(saved_diseases)}건을 확인했습니다.",
-            "상세 약물 적합성 판단은 LLM 최종 검토 단계에서 근거와 함께 보수적으로 평가합니다.",
+            # 이 문장은 evidence[] 를 타고 checks[] 와 트레이스로 의사 화면에 간다.
+            # 이전 문구("상세 약물 적합성 판단은 LLM 최종 검토 단계에서 근거와 함께
+            # 보수적으로 평가합니다")가 가리키던 단계는 도달 불가능한 `_llm_finalize`
+            # 였고(F-M2), 그 단계는 삭제됐다. 하지도 않을 일을 약속하지 않는다.
+            "이 검사는 저장 처방과 상병/증상이 함께 존재하는지만 확인했습니다 — "
+            "약물 적합성은 판단하지 않습니다.",
         ],
         "suspiciousItems": [],
     }

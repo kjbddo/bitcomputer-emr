@@ -123,6 +123,8 @@ flowchart LR
 | `LLM_TIMEOUT_SECONDS` | LLM Gateway | 상류(OpenAI) 호출 1회 시도당 타임아웃(초), 기본 45 |
 | `LLM_GATEWAY_TIMEOUT_SECONDS` | Certificate API, Prescription API | 게이트웨이 응답을 기다리는 총 시간(초), 기본 180. `LLM_TIMEOUT_SECONDS`(게이트웨이 1회 시도당)와 이름이 다르다 |
 | `VALIDATION_LLM_TIMEOUT_SECONDS` | ValidationAgent | 게이트웨이 호출 타임아웃(초), 기본 180. RabbitMQ 컨슈머 스레드가 무기한 멈추지 않도록 명시한다 |
+| `VALIDATION_JOB_BUDGET_SECONDS` | ValidationAgent | 검증 작업 하나의 전역 예산(초), 기본 110. RabbitMQ 하트비트 주기의 두 배(=브로커가 연결을 닫는 120초)보다 작아야 한다. 초과하면 남은 단계를 건너뛰고 규칙 기반 판정으로 마감하며, 건너뛴 단계를 `reasoningTrace` 에 남긴다 |
+| `VALIDATION_PUBMED_MAX_QUERY_ATTEMPTS` | ValidationAgent | PubMed 검색 재시도 상한, 기본 4 |
 | `PRESCRIPTION_AGENT_TIMEOUT_SECONDS` | ValidationAgent | Prescription API 호출(처방 RAG 조회) 타임아웃(초), 기본 180 |
 | `GEMINI_API_KEY` | Spring | 진단서 NLI 평가(`CertificateEvaluationServiceImpl`, `/api/agent/document/evaluate`)에 쓰는 자격증명. 아직 Gemini |
 | `NEXT_PUBLIC_API_BASE_URL` | Front-End | Spring API base URL |

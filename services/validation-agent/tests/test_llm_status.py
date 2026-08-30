@@ -1,5 +1,17 @@
-import os
+"""`llmStatus` 와 트레이스 스텝 `source` 의 계약.
 
+ReAct 도구 선택 루프를 제거한 뒤(아키텍처 리뷰 §5) 이 두 값의 근거가 바뀌었다.
+
+- 예전: `llmStatus` 는 **도구 이름을 고른 결정**의 출처에서 나왔다. "real" 은
+  "모델이 도구 이름을 골랐다" 를 뜻했다.
+- 지금: `llmStatus` 는 **응답 본문의 문장을 만든 모델 호출**에서만 나온다
+  (`gateway.ModelCallLedger`). 남은 호출은 PubMed 질의 생성과 근거 요약 둘뿐이고,
+  "real" 은 처음으로 "모델이 이 응답에 무언가를 썼다" 를 뜻한다.
+
+이 파일이 고정하는 것은 그 경계다. 특히 **오염 금지** 규율 — 도구 실행 결과나
+상류 서비스(`recommendationLlmStatus`)가 장부에 들어가면 안 된다 — 는 루프가
+사라진 지금 오히려 더 중요하다. 신호가 둘뿐이라 오염 한 건의 무게가 크다.
+"""
 from app import agent, tools
 from app.agent import run_validation_agent
 from app.models import ValidationAgentRequest
@@ -28,10 +40,11 @@ def _passing_request() -> ValidationAgentRequest:
 
 
 class _FakeLLM:
-    """`_create_llm()` 대신 쓰는 대역. 실제 게이트웨이 네트워크 호출 없이
-    보조 호출(PubMed 쿼리 생성/요약)이 실제로 LLM 경로를 타는 상황을
-    재현한다(리뷰 finding 5) — 기존 세 테스트는 모두 `_create_llm` 을 `None`
-    으로 고정해 두어서, "real" 경로인데도 보조 호출은 늘 폴백만 탔다."""
+    """`create_llm()` 대신 쓰는 대역. 실제 게이트웨이 네트워크 호출 없이
+    두 모델 호출(PubMed 질의 생성/요약)이 실제로 LLM 경로를 타는 상황을
+    재현한다."""
+
+    QUERY = "cough treatment guideline"
 
     def __init__(self, summary_text="PubMed 초록에 따르면 기침 관련 대증치료가 보고되었다 (PMID: 111)."):
         self.summary_text = summary_text
@@ -39,7 +52,7 @@ class _FakeLLM:
     def invoke(self, messages):
         prompt = str(messages[-1].content)
         if "PubMed ESearch" in prompt:
-            content = '{"queries": ["cough treatment guideline"]}'
+            content = '{"queries": ["%s"]}' % self.QUERY
         else:
             content = self.summary_text
 
@@ -81,6 +94,31 @@ class _FakePubmedLoader:
         return _fake_pubmed_articles(payload)
 
 
+class _EmptyForQueryPubmedLoader:
+    """지정한 질의에만 0건을 돌려주는 대역.
+
+    "모델 질의는 0건, 사전 빌더 질의가 성공" 이라는 실제 관측 상황(아키텍처
+    리뷰 §5.3 의 컨테이너 로그)을 재현한다.
+    """
+
+    def __init__(self, empty_query: str) -> None:
+        self.empty_query = empty_query
+        self.queries: list[str] = []
+
+    def invoke(self, payload=None):
+        query = (payload or {}).get("query", "")
+        self.queries.append(query)
+        if query == self.empty_query:
+            return {"status": "NO_RESULT", "evidence": [f"PubMed 검색 결과 없음: {query}"], "articles": []}
+        return _fake_pubmed_articles(payload)
+
+
+def _real_mode(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "real")
+    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
+    monkeypatch.delenv("VALIDATION_JOB_BUDGET_SECONDS", raising=False)
+
+
 def test_stub_provider_reports_stub(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "stub")
     response = run_validation_agent(_request())
@@ -99,10 +137,7 @@ def test_fallback_trace_entries_are_marked(monkeypatch):
     monkeypatch.delenv("LLM_GATEWAY_BASE_URL", raising=False)
     response = run_validation_agent(_request())
     assert response.reasoningTrace, "트레이스가 비어 있으면 이 테스트가 무의미하다"
-    # 폴백으로 결정된 스텝은 트레이스만 보고 구분 가능해야 한다(spec §6.3).
-    # "rule" 은 결정 루프 지원 없이 항상 실행되는 규칙 기반 후처리 전용 값이며
-    # (리뷰 finding 2), 게이트웨이가 없는 이 시나리오에서는 "llm" 이 단 하나도
-    # 나오지 않아야 한다는 것이 실제로 의미 있는 신호다.
+    # 게이트웨이가 없는 시나리오에서는 "llm" 이 단 하나도 나오지 않아야 한다.
     assert all(e["source"] in {"fallback", "rule"} for e in response.reasoningTrace)
     assert "llm" not in {e["source"] for e in response.reasoningTrace}  # 실제 신호
 
@@ -114,159 +149,115 @@ def test_trace_entries_always_carry_source(monkeypatch):
         assert "source" in entry, "source 가 없으면 출처를 구분할 수 없다"
 
 
-def _sequenced_llm_decision(sequence):
-    """`_llm_tool_decision` 을 대신할 결정론적 대역. 게이트웨이 네트워크 호출 없이
-    "이번 반복은 LLM 이 실제로 결정했다" 는 상황을 재현한다."""
-    remaining = iter(sequence)
-
-    def fake(state, reasoning_trace, pubmed_queries, iteration):
-        return next(remaining, None)
-
-    return fake
+# ---------------------------------------------------------------------------
+# 모델이 실제로 쓴 것만 "llm" / "real" 이다
+# ---------------------------------------------------------------------------
 
 
-def test_llm_decision_reports_real_and_marks_trace_llm(monkeypatch):
-    # "real" 경로에는 이 태스크 이전까지 실패할 수 있는 테스트가 없었다(리뷰 finding 3).
-    # M1(agent.py:261, "_source"="llm" -> "fallback")과 M2(agent.py:222,
-    # "source": source -> "source": "fallback") 모두 이 테스트로 잡혀야 한다.
-    monkeypatch.setenv("LLM_PROVIDER", "real")
-    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
-    # 결정 자체는 대역으로 통제하고, 보조 호출(쿼리 생성/요약)은 항상 폴백하도록
-    # 고정해 이 테스트가 실제 네트워크에 의존하지 않게 한다.
-    monkeypatch.setattr(agent, "_create_llm", lambda: None)
-    monkeypatch.setattr(
-        agent,
-        "_llm_tool_decision",
-        _sequenced_llm_decision([
-            {"thought": "x-ray 로드", "action": "X-ray Result Loader", "actionInput": {}},
-            {"thought": "상병 검증", "action": "Disease Validator", "actionInput": {}},
-            {"thought": "처방 검증", "action": "Prescription Validator", "actionInput": {}},
-            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
-        ]),
-    )
+def test_model_generated_query_marks_trace_llm_and_status_real(monkeypatch):
+    """모델이 질의를 만들었으면 그 스텝은 "llm" 이고 최상위는 "real" 이다.
+
+    이것이 루프 제거 후 `llmStatus="real"` 이 가질 수 있는 유일하게 정직한
+    의미다 — 옛 정의("모델이 도구 이름을 골랐다")와 달리, 여기서는 모델이
+    실제로 검색어 문장을 썼다.
+    """
+    _real_mode(monkeypatch)
+    monkeypatch.setattr(agent, "create_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
 
     response = run_validation_agent(_request())
 
     assert response.llmStatus == "real"
-    disease_entries = [e for e in response.reasoningTrace if e["action"] == "Disease Validator"]
-    assert disease_entries, "Disease Validator 스텝이 트레이스에 있어야 한다"
-    assert all(e["source"] == "llm" for e in disease_entries)
+    pubmed_entries = [e for e in response.reasoningTrace if e["action"] == "Pubmed Loader"]
+    assert pubmed_entries and pubmed_entries[0]["source"] == "llm"
+    assert pubmed_entries[0]["actionInput"]["query"] == _FakeLLM.QUERY
 
 
-def test_mixed_llm_and_fallback_decisions_produce_mixed_trace(monkeypatch):
-    # LLM 이 한 반복에서는 성공하고 이후에는 실패(None)하는 경우, 트레이스는
-    # 반복별로 실제 출처를 구분해서 보여줘야 한다.
-    monkeypatch.setenv("LLM_PROVIDER", "real")
-    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
-    monkeypatch.setattr(agent, "_create_llm", lambda: None)
+def test_trace_mixes_llm_and_rule_sources_in_one_run(monkeypatch):
+    """한 실행 안에서 스텝별 출처가 갈린다.
 
-    calls = {"n": 0}
+    최상위 `llmStatus` 하나로 뭉뚱그리면 "모델이 무엇을 했고 무엇을 안 했는지"
+    가 사라진다(spec §6.3 완료 조건 6). 도구 실행은 규칙, 검색어는 모델이다.
+    """
+    _real_mode(monkeypatch)
+    monkeypatch.setattr(agent, "create_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
 
-    def fake_llm_tool_decision(state, reasoning_trace, pubmed_queries, iteration):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return {"thought": "x-ray 로드", "action": "X-ray Result Loader", "actionInput": {}}
-        return None  # 이후 반복은 LLM 결정 실패 -> 휴리스틱 폴백으로 떨어져야 한다
+    sources = {e["source"] for e in run_validation_agent(_request()).reasoningTrace}
 
-    monkeypatch.setattr(agent, "_llm_tool_decision", fake_llm_tool_decision)
-
-    response = run_validation_agent(_request())
-
-    sources = {e["source"] for e in response.reasoningTrace}
-    assert "llm" in sources, "첫 반복의 llm 소스가 트레이스에 남아야 한다"
-    assert "fallback" in sources, "이후 반복의 폴백 소스도 트레이스에 남아야 한다"
+    assert "llm" in sources, "모델이 만든 질의를 쓴 스텝이 있어야 한다"
+    assert "rule" in sources, "결정론적으로 실행된 도구 스텝이 있어야 한다"
 
 
-def test_llm_decisions_with_failed_auxiliary_calls_do_not_mark_pubmed_as_llm(monkeypatch):
-    # 리뷰 finding 1 커버리지: 도구 선택은 전부 LLM 이 했지만(all decisions "llm"),
-    # 보조 호출(PubMed 쿼리 생성/요약)은 실패하는 시나리오. 이전에는
-    # Pubmed Loader 트레이스 항목이 "이 스텝을 촉발한 결정"의 출처를 그대로
-    # 물려받아 "llm" 로 찍혔다 — 실제로 쓰인 검색어는 하드코딩된 사전에서
-    # 나왔는데도. llmStatus 자체는 (브리프가 지정한, 이번 태스크에서 건드리지
-    # 않는) "결정 하나라도 llm 이면 real" 낙관 규칙 때문에 "real" 로 남을 수
-    # 있다 — 그래서 이 테스트는 최상위 llmStatus 가 아니라, 실제로 거짓을 말할
-    # 수 있었던 세부 신호(Pubmed Loader 트레이스의 source)를 검증한다.
-    monkeypatch.setenv("LLM_PROVIDER", "real")
-    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
-    monkeypatch.setattr(agent, "_create_llm", lambda: None)  # 보조 호출은 전부 실패/폴백
-    monkeypatch.setattr(
-        agent,
-        "_llm_tool_decision",
-        _sequenced_llm_decision([
-            {"thought": "x-ray 로드", "action": "X-ray Result Loader", "actionInput": {}},
-            {"thought": "상병 검증", "action": "Disease Validator", "actionInput": {}},
-            {"thought": "처방 검증", "action": "Prescription Validator", "actionInput": {}},
-            {"thought": "문헌 근거 확보", "action": "Pubmed Loader", "actionInput": {}},
-        ]),
-    )
+def test_failed_query_generation_never_marks_pubmed_step_llm(monkeypatch):
+    """질의 생성이 실패해 하드코딩 사전으로 대체됐다면 "llm" 이라 주장하면 안 된다."""
+    _real_mode(monkeypatch)
+    monkeypatch.setattr(agent, "create_llm", lambda: None)  # 모델 호출 불가
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
 
     response = run_validation_agent(_request())
 
     pubmed_entries = [e for e in response.reasoningTrace if e["action"] == "Pubmed Loader"]
     assert pubmed_entries, "Pubmed Loader 스텝이 트레이스에 있어야 한다"
-    assert all(e["source"] != "llm" for e in pubmed_entries), (
-        "쿼리 생성이 실패해 하드코딩된 사전으로 대체됐다면, "
-        "이 스텝을 촉발한 결정이 llm 이었더라도 llm 이라고 주장하면 안 된다"
-    )
+    assert all(e["source"] != "llm" for e in pubmed_entries)
+    assert response.llmStatus == "fallback"
 
 
-def test_successful_llm_run_has_no_fallback_trace_entries(monkeypatch):
-    # 리뷰 finding 3: agent.py:130, 150 의 "rule" 마킹을 "fallback" 으로 되돌려도
-    # (뮤테이션 M5) 기존 스위트는 그대로 통과했다 — `test_fallback_trace_entries_are_marked`
-    # 는 "fallback" 과 "rule" 을 한 집합으로 받아들여 둘을 구분하지 못하고, 흠 없는
-    # 요청이 fallback 을 전혀 만들지 않는다는 것을 단언하는 테스트가 없었기 때문이다.
-    # 이 테스트는 결정 루프가 매 반복 LLM 로 성공하고(=llm), 루프 밖 후처리
-    # (PASS 후 PubMed 보강, 후보 없을 때의 Prescription Finder)가 "rule" 로
-    # 찍히는 두 지점을 모두 거치도록 시나리오를 구성한다.
-    monkeypatch.setenv("LLM_PROVIDER", "real")
-    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
-    monkeypatch.setattr(agent, "_create_llm", lambda: _FakeLLM())
-    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
-    monkeypatch.setattr(
-        agent,
-        "_llm_tool_decision",
-        _sequenced_llm_decision([
-            {"thought": "x-ray 로드", "action": "X-ray Result Loader", "actionInput": {}},
-            {"thought": "상병 검증", "action": "Disease Validator", "actionInput": {}},
-            {"thought": "처방 검증", "action": "Prescription Validator", "actionInput": {}},
-            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
-        ]),
-    )
+def test_builder_query_step_is_not_marked_llm_when_model_query_returned_nothing(monkeypatch):
+    """스텝의 출처는 **이번에 실제로 쓰인 질의문** 기준이다.
+
+    모델 질의가 0건을 내고 사전 빌더 질의가 성공한 경우(라이브 로그로 관측된
+    실제 상황), 두 번째 스텝은 "llm" 이 아니다 — 그 검색어는 모델이 만들지
+    않았다. 배치 단위로 판정하면 이 스텝까지 "llm" 이 찍힌다.
+    """
+    _real_mode(monkeypatch)
+    loader = _EmptyForQueryPubmedLoader(empty_query=_FakeLLM.QUERY)
+    monkeypatch.setattr(agent, "create_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(agent, "pubmed_loader", loader)
 
     response = run_validation_agent(_passing_request())
 
-    assert response.overallStatus == "PASS", "이 테스트는 PASS 후처리(agent.py:130)를 거쳐야 의미가 있다"
-    assert not state_has_fallback(response), "흠 없는 LLM 실행에서는 fallback 소스가 하나도 없어야 한다"
-    assert any(e["source"] == "rule" for e in response.reasoningTrace), (
-        "루프 밖 후처리(PubMed 보강/Prescription Finder)가 rule 로 찍혀 있어야 "
-        "M5 뮤테이션(rule -> fallback)이 이 테스트로 잡힌다"
+    pubmed_entries = [e for e in response.reasoningTrace if e["action"] == "Pubmed Loader"]
+    assert len(pubmed_entries) == 2, "0건 뒤 다음 질의로 넘어간 두 스텝이 남아야 한다"
+    assert pubmed_entries[0]["source"] == "llm"
+    assert pubmed_entries[0]["actionInput"]["query"] == _FakeLLM.QUERY
+    assert pubmed_entries[1]["source"] == "rule", (
+        "사전 빌더가 만든 검색어를 쓴 스텝을 llm 이라 표기하면 안 된다"
     )
+    assert pubmed_entries[1]["actionInput"]["query"] == "cough treatment"
+    # 질의 생성 호출 자체는 성공했으므로 최상위는 여전히 "real" 이다 —
+    # 모델이 쓴 질의는 실제로 검색에 쓰였다(결과가 0건이었을 뿐).
+    assert response.llmStatus == "real"
 
 
-def state_has_fallback(response) -> bool:
-    return any(e["source"] == "fallback" for e in response.reasoningTrace)
+def test_successful_llm_run_has_no_fallback_trace_entries(monkeypatch):
+    """흠 없는 실행에서 "fallback" 은 하나도 나오면 안 된다.
+
+    "rule" 과 "fallback" 은 다른 말이다 — 앞은 "모델이 관여할 여지가 없는
+    단계", 뒤는 "모델을 시도했는데 실패했다" 다. 둘을 한 집합으로 받아들이면
+    실패 신호가 무의미해진다.
+    """
+    _real_mode(monkeypatch)
+    monkeypatch.setattr(agent, "create_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder("real"))
+
+    response = run_validation_agent(_passing_request())
+
+    assert response.overallStatus == "PASS"
+    assert not any(e["source"] == "fallback" for e in response.reasoningTrace)
+    assert any(e["source"] == "rule" for e in response.reasoningTrace)
+
+
+# ---------------------------------------------------------------------------
+# 요약 라벨 — 규칙 기반 조합을 모델이 쓴 것처럼 보이게 하지 않는다
+# ---------------------------------------------------------------------------
 
 
 def test_pubmed_summary_label_marks_rule_based_when_llm_unavailable(monkeypatch):
-    # 리뷰 finding 4: agent.py:162 를 무조건 "PubMed 근거 요약" 으로 되돌려도
-    # (뮤테이션 M7) 기존 스위트는 그대로 통과했다 — checks[] 의 PUBMED_EVIDENCE
-    # 메시지에 "(규칙 기반)" 라벨이 실제로 붙는지 검증하는 테스트가 없었기 때문이다.
-    monkeypatch.setenv("LLM_PROVIDER", "real")
-    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
-    monkeypatch.setattr(agent, "_create_llm", lambda: None)  # 요약은 반드시 폴백을 탄다
+    _real_mode(monkeypatch)
+    monkeypatch.setattr(agent, "create_llm", lambda: None)  # 요약은 반드시 폴백을 탄다
     monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
-    monkeypatch.setattr(
-        agent,
-        "_llm_tool_decision",
-        _sequenced_llm_decision([
-            {
-                "thought": "문헌 근거 확보",
-                "action": "Pubmed Loader",
-                "actionInput": {"query": "cough treatment guideline"},
-            },
-            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
-        ]),
-    )
 
     response = run_validation_agent(_passing_request())
 
@@ -276,26 +267,9 @@ def test_pubmed_summary_label_marks_rule_based_when_llm_unavailable(monkeypatch)
 
 
 def test_pubmed_summary_label_omits_rule_based_marker_when_llm_succeeds(monkeypatch):
-    # finding 4 의 반대 방향: 요약이 실제로 LLM 에서 나왔다면 "(규칙 기반)" 이
-    # 붙으면 안 된다. FakeLLM 으로 요약 호출이 실제로 "llm" 경로를 타게 한다
-    # (리뷰 finding 5 — 기존 테스트는 전부 _create_llm 을 None 으로 고정해
-    # 이 경로를 한 번도 실행하지 않았다).
-    monkeypatch.setenv("LLM_PROVIDER", "real")
-    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
-    monkeypatch.setattr(agent, "_create_llm", lambda: _FakeLLM())
+    _real_mode(monkeypatch)
+    monkeypatch.setattr(agent, "create_llm", lambda: _FakeLLM())
     monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
-    monkeypatch.setattr(
-        agent,
-        "_llm_tool_decision",
-        _sequenced_llm_decision([
-            {
-                "thought": "문헌 근거 확보",
-                "action": "Pubmed Loader",
-                "actionInput": {"query": "cough treatment guideline"},
-            },
-            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
-        ]),
-    )
 
     response = run_validation_agent(_passing_request())
 
@@ -304,65 +278,51 @@ def test_pubmed_summary_label_omits_rule_based_marker_when_llm_succeeds(monkeypa
     assert "(규칙 기반)" not in pubmed_checks[0]["message"]
 
 
-def test_second_pubmed_call_downgrades_to_fallback_when_llm_query_is_deduped(monkeypatch):
-    # 리뷰 finding 2: query_source 가 배치(호출) 단위였다. 첫 번째 질의 없는
-    # Pubmed Loader 호출에서 LLM 이 생성한 질의문이 검색에 쓰이면 트레이스는
-    # 정당하게 "llm" 이 된다. 하지만 같은 세션의 두 번째 질의 없는 호출에서는
-    # _build_pubmed_queries 가 매번 같은 LLM 질의문을 다시 생성하는데, 그
-    # 질의문은 이미 pubmed_queries 에 있어 건너뛰어지고 하드코딩된
-    # KOREAN_PUBMED_TERMS 사전 빌더 질의문("cough treatment")이 대신 쓰인다.
-    # 이 경우 트레이스는 "llm" 이 아니라 "fallback" 이어야 한다(per-query 다운그레이드).
-    monkeypatch.setenv("LLM_PROVIDER", "real")
-    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
-    monkeypatch.setattr(agent, "_create_llm", lambda: _FakeLLM())
+def _pubmed_evidence_check(response):
+    pubmed_checks = [c for c in response.checks if c.get("type") == "PUBMED_EVIDENCE"]
+    assert pubmed_checks, "PubMed 근거 요약 체크가 있어야 이 테스트가 의미가 있다"
+    return pubmed_checks[0]
+
+
+def test_pubmed_check_message_carries_rule_based_summary_body(monkeypatch):
+    """라벨만 남고 본문이 잘려나가는 회귀를 막는다.
+
+    의료진이 화면에서 실제로 읽는 것은 요약 본문(PMID 인용 포함)이다 —
+    라벨 유무만 보는 테스트로는 본문 삭제가 잡히지 않는다.
+    """
+    _real_mode(monkeypatch)
+    monkeypatch.setattr(agent, "create_llm", lambda: None)
     monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
-    monkeypatch.setattr(
-        agent,
-        "_llm_tool_decision",
-        _sequenced_llm_decision([
-            {"thought": "문헌 근거 확보1", "action": "Pubmed Loader", "actionInput": {}},
-            {"thought": "문헌 근거 확보2", "action": "Pubmed Loader", "actionInput": {}},
-            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
-        ]),
-    )
 
     response = run_validation_agent(_passing_request())
 
-    pubmed_entries = [e for e in response.reasoningTrace if e["action"] == "Pubmed Loader"]
-    assert len(pubmed_entries) == 2, "질의 없는 Pubmed Loader 결정 두 번이 각각 트레이스에 남아야 한다"
-    assert pubmed_entries[0]["source"] == "llm"
-    assert pubmed_entries[0]["actionInput"]["query"] == "cough treatment guideline"
-    assert pubmed_entries[1]["source"] == "fallback", (
-        "두 번째 호출은 LLM 질의문이 중복 제거로 빠지고 사전 빌더 질의문이 쓰였으므로 "
-        "이 스텝을 촉발한 결정이 llm 이었더라도 fallback 으로 다운그레이드돼야 한다"
-    )
-    assert pubmed_entries[1]["actionInput"]["query"] == "cough treatment"
+    message = _pubmed_evidence_check(response)["message"]
+    assert "Cough treatment guideline (PMID 111)" in message
+    assert "Cough treatment abstract." in message
+
+    summary = response.validation["pubmedEvidenceSummary"]
+    assert summary, "요약 본문이 비어 있으면 checks[] 메시지 검증이 무의미해진다"
+    assert summary in message, "checks[] 메시지에 요약 본문이 그대로 실려야 한다"
 
 
-def test_finalize_decision_leaves_trace_entry(monkeypatch):
-    # Finding A (GC-2): 모델이 1회차에 FINALIZE 를 결정하면 루프가
-    # `_execute_decided_tool` 을 부르기 전에 break 해서 트레이스에 아무 흔적도
-    # 남지 않았다. llmStatus 는 실제로 LLM 이 결정했으므로 정확히 "real" 이지만,
-    # 트레이스는 모델 관여를 전혀 보여주지 못해 두 값을 같이 보는 소비자가
-    # 앞뒤를 맞출 수 없었다(리뷰 H1 — "더 확인할 것 없음" 은 흔한 정상 종료다).
-    monkeypatch.setenv("LLM_PROVIDER", "real")
-    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
-    monkeypatch.setattr(agent, "_create_llm", lambda: None)
-    monkeypatch.setattr(
-        agent,
-        "_llm_tool_decision",
-        _sequenced_llm_decision([
-            {"thought": "더 확인할 것이 없다", "action": "FINALIZE", "actionInput": {}},
-        ]),
-    )
+def test_pubmed_check_message_carries_llm_summary_body(monkeypatch):
+    _real_mode(monkeypatch)
+    monkeypatch.setattr(agent, "create_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
 
-    response = run_validation_agent(_request())
+    response = run_validation_agent(_passing_request())
 
-    assert response.llmStatus == "real"
-    finalize_entries = [e for e in response.reasoningTrace if e["action"] == "FINALIZE"]
-    assert finalize_entries, "FINALIZE 결정도 트레이스에 남아야 한다(GC-2) — 아니면 llmStatus=real 이 근거 없는 주장이 된다"
-    assert finalize_entries[0]["source"] == "llm"
-    assert finalize_entries[0]["observation"] == {"status": "FINALIZED"}
+    message = _pubmed_evidence_check(response)["message"]
+    assert "PubMed 초록에 따르면 기침 관련 대증치료가 보고되었다 (PMID: 111)." in message
+
+    summary = response.validation["pubmedEvidenceSummary"]
+    assert summary, "요약 본문이 비어 있으면 checks[] 메시지 검증이 무의미해진다"
+    assert summary in message, "checks[] 메시지에 요약 본문이 그대로 실려야 한다"
+
+
+# ---------------------------------------------------------------------------
+# tools.prescription_finder 자체의 계약
+# ---------------------------------------------------------------------------
 
 
 class _FakeHttpResponse:
@@ -377,33 +337,33 @@ class _FakeHttpResponse:
 
 
 class _FakeHttpxClient:
-    """`httpx.Client` 컨텍스트 매니저 대역. `tools.prescription_finder` 가 실제
-    네트워크 호출 없이 정해진 JSON 응답을 받도록 한다."""
-
-    def __init__(self, json_body):
+    def __init__(self, json_body, captured):
         self._json_body = json_body
+        self._captured = captured
 
     def __enter__(self):
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *_args):
         return False
 
-    def post(self, *args, **kwargs):
+    def post(self, url, json=None):
+        self._captured["url"] = url
+        self._captured["payload"] = json
         return _FakeHttpResponse(self._json_body)
 
 
+def _install_fake_httpx(monkeypatch, json_body, captured):
+    def factory(timeout=None):
+        captured["timeout"] = timeout
+        return _FakeHttpxClient(json_body, captured)
+
+    monkeypatch.setattr(tools.httpx, "Client", factory)
+
+
 def test_tools_prescription_finder_forwards_upstream_llm_status(monkeypatch):
-    """`agent.py` 쪽 테스트는 `agent.prescription_finder` 전체를 대역으로
-    바꿔치기해서 검증하므로 `tools.py` 자신의 딕셔너리 구성 로직은 우회된다.
-    `prescription_api` 가 실제로 응답에 실은 `llmStatus` 가 `tools.py` 의
-    `recommendationLlmStatus` 로 정확히 전달되는지는 여기서 직접 확인해야 한다.
-    """
-    monkeypatch.setattr(
-        tools.httpx,
-        "Client",
-        lambda *args, **kwargs: _FakeHttpxClient({"prescriptions": [], "llmStatus": "stub"}),
-    )
+    captured: dict = {}
+    _install_fake_httpx(monkeypatch, {"prescriptions": [], "llmStatus": "stub"}, captured)
 
     result = tools.prescription_finder.invoke({
         "patient_id": "1",
@@ -415,48 +375,32 @@ def test_tools_prescription_finder_forwards_upstream_llm_status(monkeypatch):
 
 
 def test_tools_prescription_finder_uses_configurable_timeout_matching_prescription_budget(monkeypatch):
-    """최종 리뷰 IMPORTANT: 이 호출의 타임아웃이 하드코딩된 60s 대신
-    prescription-api 자신의 게이트웨이 총 예산(LLM_GATEWAY_TIMEOUT_SECONDS,
-    기본 180s) 과 맞는 기본값(180s) 을 쓰는지 확인한다. 60s 로 남아 있으면
-    prescription-api 가 게이트웨이 응답을 기다리는 도중 이 호출이 먼저
-    포기해버려, 실제로는 성공했을 요청이 fallback 으로 기록된다."""
-    captured_kwargs: dict = {}
-
-    def _client_factory(*args, **kwargs):
-        captured_kwargs.update(kwargs)
-        return _FakeHttpxClient({"prescriptions": [], "llmStatus": "real"})
-
-    monkeypatch.setattr(tools.httpx, "Client", _client_factory)
+    """호출자 타임아웃이 피호출자 총예산보다 짧으면, prescription-api 가 정상
+    응답을 만들고 있는데도 이쪽이 먼저 포기해 "처방 RAG 호출 실패" 가 남는다."""
+    captured: dict = {}
     monkeypatch.delenv("PRESCRIPTION_AGENT_TIMEOUT_SECONDS", raising=False)
+    _install_fake_httpx(monkeypatch, {"prescriptions": []}, captured)
 
     tools.prescription_finder.invoke({"patient_id": "1", "diseases": [], "symptoms": ""})
 
-    assert captured_kwargs.get("timeout") == 180.0
+    assert captured["timeout"] == 180.0
 
 
 def test_tools_prescription_finder_timeout_reads_env(monkeypatch):
-    captured_kwargs: dict = {}
-
-    def _client_factory(*args, **kwargs):
-        captured_kwargs.update(kwargs)
-        return _FakeHttpxClient({"prescriptions": [], "llmStatus": "real"})
-
-    monkeypatch.setattr(tools.httpx, "Client", _client_factory)
-    monkeypatch.setenv("PRESCRIPTION_AGENT_TIMEOUT_SECONDS", "33")
+    captured: dict = {}
+    monkeypatch.setenv("PRESCRIPTION_AGENT_TIMEOUT_SECONDS", "45")
+    _install_fake_httpx(monkeypatch, {"prescriptions": []}, captured)
 
     tools.prescription_finder.invoke({"patient_id": "1", "diseases": [], "symptoms": ""})
 
-    assert captured_kwargs.get("timeout") == 33.0
+    assert captured["timeout"] == 45.0
 
 
 def test_tools_prescription_finder_failure_reports_fallback_llm_status(monkeypatch):
-    """처방 RAG 호출 자체가 실패하면 모델은 이 스텝에 관여하지 않았다 —
-    상류가 뭐라고 했을지와 무관하게 fallback 이어야 한다."""
-
-    def _raise(*args, **kwargs):
+    def exploding(timeout=None):
         raise RuntimeError("연결 실패")
 
-    monkeypatch.setattr(tools.httpx, "Client", _raise)
+    monkeypatch.setattr(tools.httpx, "Client", exploding)
 
     result = tools.prescription_finder.invoke({
         "patient_id": "1",
@@ -467,13 +411,13 @@ def test_tools_prescription_finder_failure_reports_fallback_llm_status(monkeypat
     assert result["recommendationLlmStatus"] == "fallback"
 
 
-class _FakePrescriptionFinder:
-    """`agent.prescription_finder` 를 통째로 대체하는 대역.
+# ---------------------------------------------------------------------------
+# 오염 금지 — 상류 서비스의 출처가 이 서비스의 llmStatus 가 되면 안 된다
+# ---------------------------------------------------------------------------
 
-    `prescription_finder` 도 `_FakePubmedLoader` 와 마찬가지로 pydantic 기반
-    `StructuredTool` 이라 인스턴스의 `invoke` 속성을 직접 monkeypatch 할 수
-    없다. 대신 `agent` 모듈이 바라보는 이름 자체를 이 대역으로 바꿔치기한다.
-    """
+
+class _FakePrescriptionFinder:
+    """`agent.prescription_finder` 를 통째로 대체하는 대역."""
 
     def __init__(self, llm_status):
         self.llm_status = llm_status
@@ -484,261 +428,106 @@ class _FakePrescriptionFinder:
             "evidence": ["기존 처방 RAG에서 참고 처방 후보를 조회했습니다."],
             "candidatePrescriptions": [
                 {
-                    "id": 1,
-                    "rank": 1,
-                    "prescription_code": "C1",
-                    "prescription_name": "약1",
-                    "reason": "",
-                    "confidence_score": 0.9,
+                    "id": 1, "rank": 1, "prescription_code": "C1",
+                    "prescription_name": "약1", "reason": "", "confidence_score": 0.9,
                 }
             ],
             # 처방 RAG 자신이 모델을 썼는지 — Prescription Finder 트레이스 항목의
-            # source 판정에만 쓰인다(task 11 §Step 21-22).
+            # source 판정에만 쓰인다. 최상위 llmStatus 에 섞으면 Task 6 회귀다.
             "recommendationLlmStatus": self.llm_status,
         }
 
 
-def _install_prescription_finder(monkeypatch, llm_status):
-    monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder(llm_status))
-
-
-def _install_llm_decisions(monkeypatch):
-    """결정 루프의 모든 반복이 LLM 결정이고, Prescription Finder 를 반드시
-    거치도록 시퀀스를 구성하는 대역. 처방 RAG 자신의 출처(stub/fallback)가
-    최상위 llmStatus 를 오염시키지 않는지 확인하려면, 결정 자체는 전부 LLM 이
-    내렸다는 전제가 필요하다(그래야 llmStatus="real" 이 다른 이유로 나온 게
-    아니라는 것이 분명해진다).
-    """
-    monkeypatch.setenv("LLM_PROVIDER", "real")
-    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
-    monkeypatch.setattr(agent, "_create_llm", lambda: None)
-    monkeypatch.setattr(
-        agent,
-        "_llm_tool_decision",
-        _sequenced_llm_decision([
-            {"thought": "x-ray 로드", "action": "X-ray Result Loader", "actionInput": {}},
-            {"thought": "상병 검증", "action": "Disease Validator", "actionInput": {}},
-            {"thought": "처방 검증", "action": "Prescription Validator", "actionInput": {}},
-            {"thought": "처방 후보 조회", "action": "Prescription Finder", "actionInput": {}},
-            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
-        ]),
-    )
-
-
 def test_prescription_finder_trace_marks_stub_recommendation(monkeypatch):
-    """처방 RAG 가 스텁 응답을 돌려주면 그 스텝의 source 는 llm 이 될 수 없다.
+    """처방 RAG 가 스텁 응답을 돌려주면 그 스텝은 "규칙 기반" 이 아니라 "스텁" 이다.
 
-    결정 자체는 LLM 이 했더라도, 이 스텝의 페이로드는 스텁에서 나왔다.
-    source 의 선언된 의미가 "이 스텝의 페이로드가 어디서 왔나"이므로 여기가 맞다.
+    이 스텝을 실행한 것은 규칙이지만, 화면에 실려 가는 **데이터** 는 스텁에서
+    왔다. 라이브에서 실제로 관측된 상태다(F-H3) — 그 사실이 트레이스에서
+    사라지면 스텁 처방이 깨끗한 화면으로 의사에게 간다.
     """
-    _install_llm_decisions(monkeypatch)
-    _install_prescription_finder(monkeypatch, llm_status="stub")
+    _real_mode(monkeypatch)
+    monkeypatch.setattr(agent, "create_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder("stub"))
 
     response = run_validation_agent(_request())
 
     finder = [e for e in response.reasoningTrace if e["action"] == "Prescription Finder"]
     assert finder, "Prescription Finder 스텝이 트레이스에 있어야 한다"
-    assert all(e["source"] != "llm" for e in finder)
+    assert finder[0]["source"] == "stub"
 
 
 def test_prescription_finder_stub_does_not_flip_top_level_status(monkeypatch):
     """스텝 출처가 최상위 llmStatus 를 오염시키면 안 된다(Task 6 회귀 방지).
 
-    보조 호출의 결과를 결정 소스에 섞었다가, 결정이 전부 스텁인데 llmStatus 가
-    "real" 로 나오는 결함을 만든 적이 있다. 방향을 반대로도 확인한다 —
-    처방 RAG 가 스텁이라고 해서 LLM 이 내린 결정이 지워지지도 않아야 한다.
+    방향을 반대로도 확인한다 — 처방 RAG 가 스텁이라고 해서 이 서비스가 실제로
+    성사시킨 모델 호출이 지워지지도 않아야 한다.
     """
-    _install_llm_decisions(monkeypatch)
-    _install_prescription_finder(monkeypatch, llm_status="stub")
+    _real_mode(monkeypatch)
+    monkeypatch.setattr(agent, "create_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder("stub"))
 
-    response = run_validation_agent(_request())
-
-    assert response.llmStatus == "real"
+    assert run_validation_agent(_request()).llmStatus == "real"
 
 
-def test_prescription_finder_real_payload_does_not_promote_stub_decisions(monkeypatch):
-    """Task 6 결함을 정확한 형태로 재현한다: 결정이 전부 스텁인데 처방 RAG
-    보조 호출 하나가 "real" 을 보고했다는 이유로 최상위 llmStatus 가 real 로
-    뒤바뀌면 안 된다.
+def test_prescription_finder_real_payload_does_not_promote_failed_model_calls(monkeypatch):
+    """Task 6 결함의 정확한 형태: 이 서비스의 모델 호출이 전부 실패했는데
+    처방 RAG 보조 호출 하나가 "real" 을 보고했다는 이유로 최상위 llmStatus 가
+    real 로 뒤바뀌면 안 된다."""
+    _real_mode(monkeypatch)
+    monkeypatch.setattr(agent, "create_llm", lambda: None)
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder("real"))
 
-    바로 위 테스트(llm 결정 + stub 페이로드)는 `_resolve_llm_status` 가 "llm 이
-    하나라도 있으면 real" 을 최우선으로 보기 때문에, 이미 llm 결정이 있는
-    상태에서는 무엇을 더 섞어 넣어도 결과가 바뀌지 않는다 — decision_sources
-    오염이 실제로 결과를 뒤집을 수 있는 유일한 방향은 이쪽(전부 스텁인 상태에
-    real/llm 값이 섞여 들어오는 경우)이다. LLM_PROVIDER=stub 이면 결정 시퀀스가
-    Prescription Finder 를 직접 고르지 않으므로, 이 호출은 루프 밖 후처리
-    경로(§Step 22 의 "결정 루프 밖에서 항상 실행되는 후처리")를 통해서만 실행된다.
-    """
-    monkeypatch.setenv("LLM_PROVIDER", "stub")
-    _install_prescription_finder(monkeypatch, llm_status="real")
-
-    response = run_validation_agent(_request())
-
-    assert response.llmStatus == "stub"
+    assert run_validation_agent(_request()).llmStatus == "fallback"
 
 
 def test_prescription_finder_real_payload_never_marks_trace_llm(monkeypatch):
-    """Task 11 리뷰 IMPORTANT 2: "승격 금지"는 트레이스 자체로도 확인돼야 한다.
+    """"승격 금지" 는 트레이스 자체로도 확인돼야 한다.
 
-    바로 위 테스트는 최상위 llmStatus 만 본다. `_downgrade_by_payload_source`
-    맨 위에 승격 분기(`if payload_status == "real": return "llm"`)를 끼워 넣으면
-    그 테스트는 여전히 통과한다 — 여기서 트레이스 source 는 애초에 "llm" 이
-    아니라 "rule" 에서 시작하기 때문이다(LLM_PROVIDER=stub 이면 결정 시퀀스가
-    Prescription Finder 를 직접 고르지 않아 루프 밖 후처리 경로로만 실행됨).
-    그 승격 분기는 source 가 무엇이었든 payload_status=="real" 이면 "llm" 을
-    돌려주므로, 트레이스 자체를 검증해야 잡힌다.
+    `_downgrade_by_payload_source` 맨 위에 승격 분기
+    (`if payload_status == "real": return "llm"`)를 끼워 넣어도 최상위
+    llmStatus 만 보는 테스트는 통과한다. 이 스텝에는 이 서비스의 모델이
+    아무것도 쓰지 않았으므로 "llm" 이 될 수 없다.
     """
-    monkeypatch.setenv("LLM_PROVIDER", "stub")
-    _install_prescription_finder(monkeypatch, llm_status="real")
+    _real_mode(monkeypatch)
+    monkeypatch.setattr(agent, "create_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder("real"))
 
     response = run_validation_agent(_request())
 
     finder_entries = [e for e in response.reasoningTrace if e["action"] == "Prescription Finder"]
     assert finder_entries, "Prescription Finder 스텝이 트레이스에 있어야 한다"
     assert all(e["source"] != "llm" for e in finder_entries)
+    assert finder_entries[0]["source"] == "rule"
 
 
 class _RaisingPrescriptionFinder:
-    """`agent.prescription_finder` 를 통째로 대체해 호출 자체가 예외를 던지는
-    상황을 재현하는 대역."""
-
     def invoke(self, payload=None):
         raise RuntimeError("처방 RAG 연결 실패")
 
 
-def test_prescription_finder_exception_fails_closed_not_llm(monkeypatch):
-    """Task 11 리뷰 IMPORTANT 3: 처방 RAG 호출 자체가 예외를 던지면
-    `_invoke_prescription_finder` 의 except 블록(agent.py:286-287)이 만드는
-    observation 에는 `recommendationLlmStatus` 키가 아예 없다 — 이 죽은 경로가
-    아니라, 실제 예외 경로가 항상 거치는 지점이다. `observation.get(...)` 이
-    돌려주는 `None` 을 `(... or "real")` 로 되돌리면 실패한 호출이 "real" 로
-    읽혀 "llm" 출처로 둔갑한다.
+def test_prescription_finder_exception_fails_closed_not_rule(monkeypatch):
+    """호출 자체가 예외를 던지면 observation 에 `recommendationLlmStatus` 키가
+    아예 없다. `observation.get(...)` 이 돌려주는 `None` 을 관대하게 다루면
+    실패한 호출이 정상 실행처럼 읽힌다.
 
-    `_install_llm_decisions` 로 결정 루프가 Prescription Finder 를 직접 고르게
-    해서(source="llm" 로 시작) 이 강등이 실제로 발동해야 하는 경로를 탄다.
+    강등 목적지까지 고정한다 — "rule"(정상 실행) 로 남으면 실패가 화면에서
+    사라진다.
     """
-    _install_llm_decisions(monkeypatch)
+    _real_mode(monkeypatch)
+    monkeypatch.setattr(agent, "create_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
     monkeypatch.setattr(agent, "prescription_finder", _RaisingPrescriptionFinder())
 
     response = run_validation_agent(_request())
 
     finder_entries = [e for e in response.reasoningTrace if e["action"] == "Prescription Finder"]
     assert finder_entries, "Prescription Finder 스텝이 트레이스에 있어야 한다"
-    # 강등 목적지까지 고정한다. != "llm" 만 보면 "stub" 으로 바뀌어도 통과하는데,
-    # llmStatusNotice 기준으로 "stub" 은 neutral, "fallback" 은 warning 이라
-    # 트레이스를 화면에 렌더하기 시작하면 의미가 갈린다.
-    #
-    # 결정 루프 밖에서 항상 실행되는 후처리 항목은 "rule" 이고 강등 대상이 아니다
-    # (Task 6). 강등된 항목이 하나는 있어야 한다는 쪽으로 단언한다.
-    assert all(e["source"] != "llm" for e in finder_entries)
-    assert any(e["source"] == "fallback" for e in finder_entries)
-
-
-def test_hallucinated_action_produces_trace_entry(monkeypatch):
-    # Finding B (GC-2): `_execute_decided_tool` 은 인식되는 액션마다
-    # `if action == ...: return` 체인이고 terminal else 가 없어서, 모델이
-    # 존재하지 않는 도구 이름을 결정하면 모든 분기를 통과해 아무것도 하지 않고
-    # 리턴했다 — 트레이스도, observation 도, 로그도 없이 다음 반복으로 조용히
-    # 넘어갔다(리뷰 H2).
-    monkeypatch.setenv("LLM_PROVIDER", "real")
-    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
-    monkeypatch.setattr(agent, "_create_llm", lambda: None)
-    monkeypatch.setattr(
-        agent,
-        "_llm_tool_decision",
-        _sequenced_llm_decision([
-            {"thought": "환각 도구 호출", "action": "Nonexistent Tool", "actionInput": {"foo": "bar"}},
-            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
-        ]),
-    )
-
-    response = run_validation_agent(_request())
-
-    unknown_entries = [e for e in response.reasoningTrace if e["action"] == "Nonexistent Tool"]
-    assert unknown_entries, "인식되지 않는 액션도 트레이스에 남아야 한다(GC-2) — 조용히 드롭하면 안 된다"
-    assert unknown_entries[0]["source"] == "llm"
-    assert unknown_entries[0]["observation"] == {
-        "status": "UNKNOWN_ACTION",
-        "evidence": ["Nonexistent Tool"],
-    }
-
-
-def _pubmed_evidence_check(response):
-    """응답의 checks[] 에서 PUBMED_EVIDENCE 체크 하나를 꺼낸다."""
-    pubmed_checks = [c for c in response.checks if c.get("type") == "PUBMED_EVIDENCE"]
-    assert pubmed_checks, "PubMed 근거 요약 체크가 있어야 이 테스트가 의미가 있다"
-    return pubmed_checks[0]
-
-
-def test_pubmed_check_message_carries_rule_based_summary_body(monkeypatch):
-    # agent.py:191 의 메시지 조합에서 ": {pubmed_evidence_summary}" 를 통째로
-    # 날려도(뮤테이션 M8: f"{summary_label}") 기존 스위트는 그대로 통과했다 —
-    # 라벨 유무만 보는 테스트(test_pubmed_summary_label_*)뿐이었고, 의료진이
-    # 화면에서 실제로 읽는 요약 본문(PMID 인용 포함)이 남아 있는지 단언하는
-    # 테스트가 없었기 때문이다. 이 테스트는 규칙 기반 경로에서 그 본문을 본다.
-    monkeypatch.setenv("LLM_PROVIDER", "real")
-    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
-    monkeypatch.setattr(agent, "_create_llm", lambda: None)  # 요약은 반드시 폴백을 탄다
-    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
-    monkeypatch.setattr(
-        agent,
-        "_llm_tool_decision",
-        _sequenced_llm_decision([
-            {
-                "thought": "문헌 근거 확보",
-                "action": "Pubmed Loader",
-                "actionInput": {"query": "cough treatment guideline"},
-            },
-            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
-        ]),
-    )
-
-    response = run_validation_agent(_passing_request())
-
-    message = _pubmed_evidence_check(response)["message"]
-    # 대역 논문(_fake_pubmed_articles)에서 나온, 규칙 기반 요약에만 있는 문자열.
-    # PMID 인용은 의료진이 원문을 찾아가는 진입점이라 특히 사라지면 안 된다.
-    assert "Cough treatment guideline (PMID 111)" in message
-    assert "Cough treatment abstract." in message
-
-    # 라벨만 남고 본문이 잘려나가는 회귀를 직접 막는다. 빈 문자열은 어떤
-    # 문자열에도 "in" 으로 걸리므로 비어 있지 않다는 것을 먼저 단언한다.
-    summary = response.validation["pubmedEvidenceSummary"]
-    assert summary, "요약 본문이 비어 있으면 checks[] 메시지 검증이 무의미해진다"
-    assert summary in message, "checks[] 메시지에 요약 본문이 그대로 실려야 한다"
-
-
-def test_pubmed_check_message_carries_llm_summary_body(monkeypatch):
-    # 위 테스트의 LLM 경로 쌍. 요약이 모델에서 나온 경우에도 본문이 checks[]
-    # 메시지에 그대로 실려야 한다(_FakeLLM 이 요약 호출을 실제 "llm" 경로로
-    # 태운다).
-    monkeypatch.setenv("LLM_PROVIDER", "real")
-    monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
-    monkeypatch.setattr(agent, "_create_llm", lambda: _FakeLLM())
-    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
-    monkeypatch.setattr(
-        agent,
-        "_llm_tool_decision",
-        _sequenced_llm_decision([
-            {
-                "thought": "문헌 근거 확보",
-                "action": "Pubmed Loader",
-                "actionInput": {"query": "cough treatment guideline"},
-            },
-            {"thought": "종료", "action": "FINALIZE", "actionInput": {}},
-        ]),
-    )
-
-    response = run_validation_agent(_passing_request())
-
-    message = _pubmed_evidence_check(response)["message"]
-    # _FakeLLM 기본 요약문 그대로. 규칙 기반 조합에서는 절대 나올 수 없는 문장이라
-    # "요약 본문이 LLM 경로에서도 살아 있다" 는 신호가 된다.
-    assert "PubMed 초록에 따르면 기침 관련 대증치료가 보고되었다 (PMID: 111)." in message
-
-    summary = response.validation["pubmedEvidenceSummary"]
-    assert summary, "요약 본문이 비어 있으면 checks[] 메시지 검증이 무의미해진다"
-    assert summary in message, "checks[] 메시지에 요약 본문이 그대로 실려야 한다"
+    assert finder_entries[0]["source"] == "fallback"
+    assert finder_entries[0]["observation"]["status"] == "FAILED"
 
 
 # ---------------------------------------------------------------------------
@@ -747,16 +536,18 @@ def test_pubmed_check_message_carries_llm_summary_body(monkeypatch):
 # 처방 표의 모델 출처 배지는 이 값을 읽어야 한다. validation-agent 자신의
 # `llmStatus` 를 읽으면 prescription-api 가 스텁인데도 배지가 억제된다
 # (F-H3 라이브 재현). `prescriptionVerification` 이 이미 쓰는 것과 같은
-# 경로로, 같은 분리 원칙(tools.py:205-211)을 지키며 얹는다.
+# 경로로, 같은 분리 원칙을 지키며 얹는다.
 # ---------------------------------------------------------------------------
 
 
 def test_prescription_llm_status_reaches_response_top_level(monkeypatch):
-    """처방 RAG 가 보고한 llmStatus 가 응답 최상위 `prescriptionLlmStatus` 로
+    """처방 RAG 가 보고한 llmStatus 가 최상위 `prescriptionLlmStatus` 로
     도달해야 한다. 도달하지 못하면 웹은 대신 읽을 값이 없어 다른 서비스의
     `llmStatus` 를 읽게 되고, 그것이 정확히 F-H3 이다."""
-    _install_llm_decisions(monkeypatch)
-    _install_prescription_finder(monkeypatch, llm_status="stub")
+    _real_mode(monkeypatch)
+    monkeypatch.setattr(agent, "create_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder("stub"))
 
     response = run_validation_agent(_request())
 
@@ -764,10 +555,12 @@ def test_prescription_llm_status_reaches_response_top_level(monkeypatch):
 
 
 def test_prescription_llm_status_does_not_contaminate_top_level_llm_status(monkeypatch):
-    """새 필드를 얹는 방식이 Task 6 회귀를 되살리면 안 된다. 두 축은 계속
-    분리돼 있어야 한다 — 결정은 전부 LLM 이었고 처방 RAG 페이로드만 스텁이다."""
-    _install_llm_decisions(monkeypatch)
-    _install_prescription_finder(monkeypatch, llm_status="stub")
+    """두 축은 계속 분리돼 있어야 한다 — 이 서비스의 모델 호출은 성사됐고
+    처방 RAG 페이로드만 스텁이다."""
+    _real_mode(monkeypatch)
+    monkeypatch.setattr(agent, "create_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder("stub"))
 
     response = run_validation_agent(_request())
 
@@ -775,11 +568,12 @@ def test_prescription_llm_status_does_not_contaminate_top_level_llm_status(monke
     assert response.prescriptionLlmStatus == "stub"
 
 
-def test_prescription_llm_status_real_does_not_promote_stub_decisions(monkeypatch):
-    """반대 방향도 막는다. 처방 RAG 가 "real" 이어도 결정이 전부 스텁이면
+def test_prescription_llm_status_real_does_not_promote_stub_mode(monkeypatch):
+    """반대 방향도 막는다. 처방 RAG 가 "real" 이어도 이 서비스가 스텁 모드면
     최상위 llmStatus 는 "stub" 이다."""
     monkeypatch.setenv("LLM_PROVIDER", "stub")
-    _install_prescription_finder(monkeypatch, llm_status="real")
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
+    monkeypatch.setattr(agent, "prescription_finder", _FakePrescriptionFinder("real"))
 
     response = run_validation_agent(_request())
 
@@ -788,10 +582,12 @@ def test_prescription_llm_status_real_does_not_promote_stub_decisions(monkeypatc
 
 
 def test_prescription_llm_status_is_none_when_finder_raises(monkeypatch):
-    """호출이 예외로 죽으면 관측값에 그 키가 아예 없다. 그때 "real" 로
-    기울면 스텁/실패가 깨끗한 화면으로 지나간다 — None 그대로 두어 웹이
-    "미확인" 으로 렌더하게 한다(GC-3)."""
-    _install_llm_decisions(monkeypatch)
+    """호출이 예외로 죽으면 관측값에 그 키가 없다. 그때 "real" 로 기울면
+    스텁·실패가 깨끗한 화면으로 지나간다 — None 그대로 두어 웹이 "미확인"
+    으로 렌더하게 한다(GC-3)."""
+    _real_mode(monkeypatch)
+    monkeypatch.setattr(agent, "create_llm", lambda: _FakeLLM())
+    monkeypatch.setattr(agent, "pubmed_loader", _FakePubmedLoader())
     monkeypatch.setattr(agent, "prescription_finder", _RaisingPrescriptionFinder())
 
     response = run_validation_agent(_request())

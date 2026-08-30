@@ -32,10 +32,18 @@ class ValidationAgentResponse(BaseModel):
     validation: Dict[str, Any] = Field(default_factory=dict)
     # 각 항목은 최소 `thought`/`action`/`actionInput`/`observation`/`source` 를 갖는다.
     # `source` 값 공간: "llm" | "stub" | "rule" | "fallback" (spec §6.3).
-    # - llm: 실제 LLM 결정/생성에서 나왔다.
-    # - stub: LLM_PROVIDER=stub 결정론적 순서에서 나왔다.
-    # - rule: 결정 루프 밖에서 항상 실행되는 규칙 기반 후처리다(LLM이 애초에 관여할 여지가 없음).
-    # - fallback: LLM 을 시도했으나(또는 시도할 수 없어) 휴리스틱으로 대체됐다.
+    #
+    # ReAct 도구 선택 루프를 제거한 뒤(아키텍처 리뷰 §5) `source` 는 "이 스텝을
+    # 누가 골랐나" 가 아니라 **"이 스텝이 실제로 쓴 내용이 어디서 왔나"** 를
+    # 뜻한다. 실행 순서는 이제 고정 파이프라인이라 "골랐다" 는 말 자체가 성립
+    # 하지 않는다.
+    # - llm: 이 스텝이 쓴 내용을 모델이 만들었다. 지금 이 값을 가질 수 있는
+    #        스텝은 PubMed 질의가 모델 번역에서 나온 `Pubmed Loader` 하나뿐이다.
+    # - stub: LLM_PROVIDER=stub 경로이거나, 이 스텝이 실어온 상류 데이터가
+    #        스텁에서 왔다(Prescription Finder 의 recommendationLlmStatus).
+    # - rule: 고정 파이프라인이 실행했고 내용도 결정론적이다. 모델이 관여할
+    #        여지가 애초에 없는 스텝이다.
+    # - fallback: 모델을 시도했으나(또는 시도할 수 없어) 결정론적 대체물을 썼다.
     reasoningTrace: List[Dict[str, Any]] = Field(default_factory=list)
     checks: List[Dict[str, Any]] = Field(default_factory=list)
     suspectedIssues: List[Dict[str, Any]] = Field(default_factory=list)

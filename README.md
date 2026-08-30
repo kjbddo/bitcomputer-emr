@@ -28,7 +28,7 @@ docker compose --env-file .env.docker up -d frontend
 | LLM 게이트웨이 | `bit-llm-gateway` | 8003 | 모든 서비스의 단일 LLM 진입점 (OpenAI API) |
 | 진단서 의사소견 | `bit-certificate-api` | 5001 | LLM 게이트웨이 경유 진단서 문장 생성 |
 | 처방 추천 | `bit-prescription-api` | 8001 | ArangoDB + LLM 게이트웨이 경유 처방 추천 |
-| 진료 데이터 검증 | `bit-validation-agent` | 8002 | LangGraph 기반 처방 추천/검증 ReAct worker |
+| 진료 데이터 검증 | `bit-validation-agent` | 8002 | 처방 추천/검증 파이프라인 worker |
 | XrayGraphRAG | `bit-xraygraph` | 8000 | X-ray 유사 사례 검색 / 상병 추론 |
 | MySQL | `bit-mysql` | 3307 | Spring 업무 DB |
 | Redis | `bit-redis` | 6379 | 캐시 |
@@ -257,7 +257,7 @@ curl http://localhost:5001/health
 
 ## 7. 처방 추천 / 진료 데이터 검증 에이전트
 
-검증 에이전트는 프론트의 `AI 처방 추천` 버튼을 트리거로 동작한다. Spring Boot가 `validation_job`을 만들고 RabbitMQ request queue에 메시지를 발행하면, `validation-agent`가 메시지를 소비해 LangGraph/ReAct 기반 추천·검증 루프를 수행한 뒤 result queue로 결과를 반환한다.
+검증 에이전트는 프론트의 `AI 처방 추천` 버튼을 트리거로 동작한다. Spring Boot가 `validation_job`을 만들고 RabbitMQ request queue에 메시지를 발행하면, `validation-agent`가 메시지를 소비해 고정 순서 추천·검증 파이프라인을 수행한 뒤 result queue로 결과를 반환한다.
 
 동작 흐름:
 
@@ -265,7 +265,7 @@ curl http://localhost:5001/health
 2. Spring이 `validation_job`을 `PENDING`으로 생성
 3. Spring이 RabbitMQ `validation.prescription.request` queue에 job 메시지 발행
 4. `validation-agent`가 메시지를 소비하고 `RUNNING` 상태 이벤트 발행
-5. ValidationAgent가 `Prescription Finder`, `X-ray Result Loader`, `Disease Validator`, `Prescription Validator`, `Pubmed Loader`를 사용해 ReAct 루프 수행
+5. ValidationAgent가 `X-ray Result Loader` → `Disease Validator` → `Prescription Validator` → `Pubmed Loader` → `Prescription Finder` 순서로 고정 파이프라인 수행 (모델은 PubMed 질의 생성과 근거 요약에만 쓴다)
 6. `PASS` 또는 최대 반복 횟수 도달 시 structured JSON result 생성
 7. ValidationAgent가 RabbitMQ `validation.prescription.result` queue에 결과 발행
 8. Spring consumer가 `validation_result`에 결과 JSON을 저장하고 `validation_job`을 `DONE` 또는 `FAILED`로 갱신
