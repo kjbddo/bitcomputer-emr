@@ -346,7 +346,9 @@ def test_caller_supplied_top_rx_leaves_confidence_none_not_zero(monkeypatch):
     monkeypatch.setattr(
         prescription_api, "fetch_confidence_scores_by_diagnosis_codes", lambda *a, **k: []
     )
-    _fixed_llm(monkeypatch, _three_items(["C1", "C2", "C3"], ["약1", "약2", "약3"]))
+    # 모델은 후보 순서를 뒤집어 낸다 — confidence 가 없다고 해서 순서를 모델에게
+    # 되돌려주면 여기서 응답이 C3·C2·C1 이 된다.
+    _fixed_llm(monkeypatch, _three_items(["C3", "C2", "C1"], ["약3", "약2", "약1"]))
 
     resp = prescription_api.recommend(
         _request(top_rx=[_row("C1", "약1"), _row("C2", "약2"), _row("C3", "약3")]),
@@ -355,6 +357,7 @@ def test_caller_supplied_top_rx_leaves_confidence_none_not_zero(monkeypatch):
 
     assert [p.confidence_score for p in resp.prescriptions] == [None, None, None]
     assert [p.prescription_code for p in resp.prescriptions] == ["C1", "C2", "C3"]
+    assert [p.name for p in resp.prescriptions] == ["약1", "약2", "약3"]
     # 근거가 없으면 통과가 아니다(GC-2). 구조 검사 confidence_in_range 는 skipped.
     conf_checks = [
         c for c in resp.verification["checks"] if c["id"] == "confidence_in_range"
@@ -468,7 +471,15 @@ def test_prompt_has_no_sparse_override_section():
     assert "임상적으로 타당한 병용·대안 처방" not in prompt
 
 
-def test_prompt_states_the_ranking_is_fixed_by_retrieval():
+def test_prompt_carries_the_rendered_slate_rows():
+    """slate 가 프롬프트에 실제로 실려야 모델의 reason 이 확정 순위에 붙는다.
+
+    순위·코드·이름은 서비스가 덮어쓰므로 slate 가 빠져도 응답 순서는 맞다.
+    빠졌을 때 조용히 망가지는 것은 **설명**이다 — 모델이 자기가 고른 다른 약에
+    대해 쓴 문장이 조회가 고른 약의 근거로 화면에 붙는다. top_rx 블록에도 같은
+    이름·코드가 들어 있으므로, 이름 존재 여부가 아니라 렌더된 slate 행 자체를
+    본다(그렇게 하지 않으면 이 테스트가 slate 제거를 놓친다).
+    """
     prompt = prescription_agent.build_prescription_agent_prompt(
         patient_id="p1",
         symptoms="발열",
@@ -482,8 +493,22 @@ def test_prompt_states_the_ranking_is_fixed_by_retrieval():
     )
 
     assert "확정된 추천 순위" in prompt
-    assert "약1" in prompt and "C1" in prompt
-    assert "약2" in prompt and "C2" in prompt
+    assert "1. name='약1'  prescription_code='C1'  — confidence 0.4000" in prompt
+    assert "2. name='약2'  prescription_code='C2'  — confidence 없음" in prompt
+
+
+def test_prompt_for_zero_candidates_tells_the_model_not_to_fill_the_slate():
+    prompt = prescription_agent.build_prescription_agent_prompt(
+        patient_id="p1",
+        symptoms="건강검진에서 콜레스테롤 높다고 들었다",
+        history="",
+        top_rx=[{"note": "데이터 부족: top_rx 비어 있음"}],
+        similar_outcomes="",
+        ranked_slate=[],
+    )
+
+    assert "조회된 처방 후보가 0건입니다" in prompt
+    assert "순위를 채울 약품을 제안하지 말고" in prompt
 
 
 def test_prompt_requires_ranked_slate_argument():
