@@ -30,14 +30,16 @@ confidence_in_range 는 구조 검사다(STRUCTURAL_CHECK_IDS). 0..1 범위만
 보고 조회된 어떤 데이터와도 대조하지 않으므로, 이 검사의 ok 하나로
 passed 가 나가면 안 된다(GC-2).
 
-한계(M-4): prescription_api.py:719 는
-`it.confidence_score = confidence_by_code.get(code, 0.0)` 로 주입한다.
-모델이 고른 코드가 co-occurrence 조회 결과에 없을 때도 정확히 0.0 이
-주입되므로, 이 검사는 "실제로 조회돼 0.0 이 나온 값"과 "조회 결과에
-없어서 폴백된 0.0"을 구분하지 못하고 둘 다 ok 로 판정한다. 값 자체를
-바꾸는 수정이 아니라 이 한계를 기록만 해 둔다 — 이 검사의 ok 가
-"co-occurrence 결과 안에 실제로 있었다"는 뜻까지는 보증하지 않는다는
-점을 후속 독자가 과대 해석하지 않도록.
+M-4 로 기록됐던 한계(조회에 없는 코드에도 0.0 이 폴백 주입되어, "실제로
+조회돼 0.0 이 나온 값"과 "조회 결과에 없어서 0.0 이 된 값"을 이 검사가
+구분하지 못함)는 2026-08-30 재설계 §3.1 에서 해소됐다. 순위가 이 값에
+걸리는 순간 그것은 한계가 아니라 결함이 되기 때문이다 — 근거 없는 항목이
+근거 있는 0.0 처럼 보이면 그 항목이 순위를 얻는다. prescription_api 는
+이제 co-occurrence 조회 결과에 코드가 **실제로 있을 때만** 숫자를 싣고,
+없으면 confidence_score 를 None 으로 남긴다. 따라서 이 검사의 skipped 는
+"조회 근거 없음", ok 는 "조회된 값이 0..1 범위 안"이라는 뜻으로 갈린다.
+(그래도 구조 검사다 — 값의 범위만 보고 어떤 조회 데이터와도 대조하지
+않으므로 이 ok 하나로 passed 가 나가서는 안 된다.)
 
 code_in_candidates·name_matches_code 는 모델이 "미기재" 류 플레이스홀더로
 근거 없음을 정직하게 신고한 경우를 flagged 가 아니라 skipped 로 다룬다.
@@ -51,6 +53,29 @@ I1). 애초에 이 면제가 빠져 있어서, 모델이 세 추천 중 둘 이�
 정직하게 쓴 경우(코드가 없다는 뜻)가 "코드중복"으로 flag 됐다 — §11.5 의
 60% 수치에 이 오탐이 섞여 있었다(§11.4/§11.5 재측정 참조). rank 집합
 조건은 이 면제와 무관하며 그대로 둔다.
+
+**코드중복 조건을 남겨 두는 이유**(2026-08-30 재설계 §3.1 이후). 순위가
+조회로 옮겨간 뒤 `prescription_api.recommend()` 를 통과하는 응답에서는 이
+조건이 발화할 수 없다 — `ranking.build_ranked_slate` 가 후보를 처방코드로
+접어서 확정 순위를 만들고, 응답 항목의 코드는 전부 그 slate 에서 나오므로
+서로 다른 두 순위가 같은 실제 코드를 가질 수 없다. 그렇다고 제거하지
+않는다. 이 저장소는 이미 죽은 검사를 두 번 건드렸고(dosage_verbatim 은
+상류 데이터 자체가 없어 제거가 옳았고, confidence_in_range 는 제거 사유가
+사실이 아니어서 되돌아왔다) 그 차이가 판단 기준이다:
+
+- dosage_verbatim 은 **어떤 입력으로도** 발화할 수 없었다. 대조할 데이터가
+  상류 세 곳 전부에 없었다.
+- 코드중복은 그렇지 않다. `verify_prescriptions` 는 순수 공개 함수이고 이
+  조건을 죽이는 테스트가 셋 있다(test_duplicate_prescription_codes_is_flagged,
+  test_duplicate_real_code_still_flagged_when_mixed_with_placeholder,
+  test_duplicate_placeholder_codes_not_flagged_as_duplicate). 발화 불가가
+  된 것은 검사 자체가 아니라 **다른 모듈의 새 불변식** 덕분이다.
+- 그 불변식이 깨지는 회귀(slate 의 코드 dedup 이 빠지는 것)를 잡는 것이
+  정확히 이 조건이다. 지금 지우면 §11.5 가 기록한 결함이 소리 없이
+  되돌아올 수 있다.
+
+이 조건은 구조 검사라 ok 하나로 passed 가 나가지 않으므로(STRUCTURAL_CHECK_IDS)
+남겨 두는 비용도 GC-2 관점에서 0 이다.
 
 code_is_medication 은 추천된 처방코드가 이 데이터셋의 약제 코드 형태인지만
 본다(medication_codes.py 가 규칙을 소유한다). 조회 데이터와 대조하지 않으므로
@@ -67,14 +92,15 @@ from typing import Any, Dict, List, Optional, Sequence
 from medication_codes import is_medication_code
 from verification_contract import CheckResult, VerificationResult, aggregate_status
 
-# 모델이 근거 없음을 정직하게 신고할 때 쓰는 고정 문자열들.
-# prescription_agent.py 의 프롬프트 본문(임의 목록이 아니라 실제 지시문에서
-# 뽑은 값)이 출처다:
-#   - "미기재": prescription_code 필드 폴백(44행), dosage 필드 폴백(45행),
-#     sparse override 섹션의 prescription_code 폴백(133행)
-#   - "데이터 부족": top_rx 가 비었을 때 name 필드 안내문의 어근
-#     (46행, "데이터 부족: top_rx 비어 있음" 등)
-#   - "데이터에 용량 없음": dosage 필드 폴백(45, 134행)
+# 근거 없음을 정직하게 신고할 때 쓰는 고정 문자열들.
+# prescription_agent.py 의 프롬프트 본문과 ranking.py 의 상수(임의 목록이
+# 아니라 실제 지시문·코드에서 뽑은 값)가 출처다:
+#   - "미기재": 프롬프트 dosage 필드 폴백, ranking.NO_CANDIDATE_CODE
+#     (조회 후보가 없는 순위에 조회층이 직접 넣는 코드)
+#   - "데이터 부족": name 필드 안내문의 어근
+#     (ranking.NO_CANDIDATE_NAME = "데이터 부족: 조회된 처방 후보 없음",
+#      llm_provider.stub_prescription_response 의 "데이터 부족: top_rx 비어 있음")
+#   - "데이터에 용량 없음": 프롬프트 dosage 필드 폴백
 #   - "": 필드 자체가 채워지지 않은 경우
 # 이 값들은 지어낸 코드·이름이 아니라 "낼 근거가 없다"는 모델의 정직한
 # 신고다 — flagged(근거 불일치)가 아니라 skipped(미검증)로 다룬다.
