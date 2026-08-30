@@ -45,6 +45,7 @@ except ImportError:
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 
+from feedback_adjustment import apply_feedback_adjustment, compute_feedback_adjustment
 from medication_codes import (
     MEDICATION_CODE_AQL_PREDICATE,
     MEDICATION_CODE_BIND_KEY,
@@ -589,24 +590,29 @@ def fetch_confidence_scores_by_diagnosis_codes(
             s_sim = sim_by_code.get(code_s, 0.0)
             base_score = (w_freq * s_freq) + (w_sim * s_sim)
 
+            # fb 는 이 후보 코드로 매칭됐을 때만 값을 갖는다. history_recommended_prescription
+            # 의 prescription_code 가 이 후보 목록(order_lines 파생)에 없는 코드면 여기서
+            # 절대 매칭되지 않고 조용히 빠진다 — feedback_adjustment.py 모듈 docstring
+            # "지금 쌓인 데이터는 이 조정에 효과가 없다" 참고.
             fb = feedback_by_code.get(code_s)
-            feedback_adjustment = 0.0
-            feedback_total = 0.0
-            if fb:
-                feedback_total = float(fb.get("total") or 0.0)
-                if feedback_total > 0:
-                    accepted_rate = float(fb.get("accepted") or 0.0) / feedback_total
-                    rejected_rate = float(fb.get("rejected") or 0.0) / feedback_total
-                    missed_rate = float(fb.get("missed") or 0.0) / feedback_total
-                    raw_adj = (
-                        (accepted_boost * accepted_rate)
-                        - (rejected_penalty * rejected_rate)
-                        + (missed_boost * missed_rate)
-                    )
-                    shrink = feedback_total / (feedback_total + max(feedback_smoothing, 1e-9))
-                    feedback_adjustment = raw_adj * shrink
+            feedback_total = float(fb.get("total") or 0.0) if fb else 0.0
+            feedback_accepted = float(fb.get("accepted") or 0.0) if fb else 0.0
+            feedback_rejected = float(fb.get("rejected") or 0.0) if fb else 0.0
+            feedback_missed = float(fb.get("missed") or 0.0) if fb else 0.0
+            feedback_adjustment = compute_feedback_adjustment(
+                total=feedback_total,
+                accepted=feedback_accepted,
+                rejected=feedback_rejected,
+                missed=feedback_missed,
+                accepted_boost=accepted_boost,
+                rejected_penalty=rejected_penalty,
+                missed_boost=missed_boost,
+                feedback_smoothing=feedback_smoothing,
+            )
 
-            score_total = min(1.0, max(0.0, base_score + feedback_adjustment))
+            score_total = apply_feedback_adjustment(
+                base_score=base_score, feedback_adjustment=feedback_adjustment
+            )
             out.append(
                 {
                     "prescription_code": code_s,
