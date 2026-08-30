@@ -93,7 +93,11 @@ class Settings:
     ARANGO_GRAPH_NAME: str = os.environ.get("ARANGO_GRAPH_NAME", "xray_graph")
 
     # Vector index. ArangoDB 3.12+에서 vector type 인덱스 지원.
-    EMBEDDING_DIM: int = _int(os.environ.get("EMBEDDING_DIM"), 768)
+    # 기본값 1024는 app.ml.torch_embedding_model 의 DenseNet121(ImageNet 사전학습)
+    # backbone이 만드는 pooled feature의 네이티브 차원과 맞춘 것이다(투영 없이
+    # 그대로 저장). xray_cases 컬렉션이 비어 있는 동안 이 기본값을 바꿨다 -
+    # 데이터가 쌓인 뒤 바꾸면 기존 벡터 인덱스와 차원이 어긋난다.
+    EMBEDDING_DIM: int = _int(os.environ.get("EMBEDDING_DIM"), 1024)
     VECTOR_METRIC: str = os.environ.get("VECTOR_METRIC", "cosine")
     VECTOR_NLISTS: int = _int(os.environ.get("VECTOR_NLISTS"), 100)
     VECTOR_NPROBE: int = _int(os.environ.get("VECTOR_NPROBE"), 20)
