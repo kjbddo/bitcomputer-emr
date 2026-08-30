@@ -26,6 +26,7 @@ import java.time.LocalTime;
 import java.time.Period;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -41,6 +42,20 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
     private final MedicalCertificateRepository medicalCertificateRepository;
     private final JwtTokenProvider jwtTokenProvider;
     private final CertificateAgentClient certificateAgentClient;
+
+    /**
+     * historyId → 그 historyId 로 가장 최근에 실행된 generateCertificate/
+     * generateTestCertificate 가 실제로 채택한 llmStatus.
+     *
+     * <p>saveCertificate 가 저장할 llmStatus 의 출처는 이 캐시이지, 저장 요청의
+     * 파라미터가 아니다 — 저장 요청은 브라우저가 보내는 값이라 위조될 수 있고,
+     * "이 소견이 모델에서 나왔는가"를 브라우저 자기 신고로 결정하면 이 필드가
+     * 존재할 이유가 사라진다(§4.1 과 같은 원칙: 요청이 아니라 실행 결과에서 판정).
+     * 텍스트를 실제로 채택하지 않은 라운드(agentTextUsed=false)는 항목을 지워
+     * 이전 라운드의 값이 새 라운드로 새지 않게 한다. saveCertificate 는 소비 후
+     * 항목을 제거해 같은 값이 여러 저장에 재사용되지 않게 한다.
+     */
+    private final Map<Integer, String> lastAgentLlmStatusByHistoryId = new ConcurrentHashMap<>();
 
     @Value("${medical.certificate.storage-path:certificates}")
     private String certificateStoragePath;
@@ -322,6 +337,7 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
         Map<String, Object> verification = agentTextUsed
                 ? agentResponse.map(CertificateAgentResponse::getVerification).orElse(null)
                 : null;
+        rememberLlmStatusForSave(historyId, agentTextUsed, llmStatus);
 
         return buildGenerateResponse(username, medicalCertificate, llmStatus, verification);
     }
@@ -383,8 +399,23 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
         Map<String, Object> verification = agentTextUsed
                 ? agentResponse.map(CertificateAgentResponse::getVerification).orElse(null)
                 : null;
+        rememberLlmStatusForSave(agentRequest.getHistoryId(), agentTextUsed, llmStatus);
 
         return buildGenerateResponse(username, medicalCertificate, llmStatus, verification);
+    }
+
+    /**
+     * generateCertificate/generateTestCertificate 가 채택한 llmStatus 를 이후의
+     * saveCertificate 호출이 소비할 수 있도록 historyId 로 남긴다. 실제로 에이전트
+     * 문장을 채택하지 않은 라운드는 이전 값이 새 저장으로 새지 않도록 항목을 지운다.
+     */
+    private void rememberLlmStatusForSave(Integer historyId, boolean agentTextUsed, String llmStatus) {
+        if (historyId == null) return;
+        if (agentTextUsed) {
+            lastAgentLlmStatusByHistoryId.put(historyId, llmStatus);
+        } else {
+            lastAgentLlmStatusByHistoryId.remove(historyId);
+        }
     }
 
     @Override
@@ -402,10 +433,18 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
             pdfFilePath = savePdfFile(historyId, pdfFile);
         }
 
+        // llmStatus 는 저장 요청 파라미터가 아니라 같은 historyId 로 직전에 실행된
+        // generate 호출이 백엔드에 남긴 값에서 가져온다(agentUsed 는 브라우저가 보내는
+        // 값이라 위조될 수 있다). agentUsed=false 이거나 캐시에 대응하는 값이 없으면
+        // (예: 서버 재기동, generate 를 거치지 않은 저장 시도) null 이다 — "검증 안 됨"
+        // 을 "real" 로 기본값 처리하지 않는다.
+        String llmStatus = agentUsed ? lastAgentLlmStatusByHistoryId.remove(historyId) : null;
+
         MedicalCertificateRecord record = new MedicalCertificateRecord();
         record.setHistoryId(historyId);
         record.setPdfFilePath(pdfFilePath);
         record.setAgentUsed(agentUsed);
+        record.setLlmStatus(llmStatus);
         record.setOriginalMedicalCertificate(originalMedicalCertificate != null ? originalMedicalCertificate : "");
         record.setSavedMedicalCertificate(savedMedicalCertificate != null ? savedMedicalCertificate : "");
         record.setFeedbackType(feedbackType != null ? feedbackType : "NONE");

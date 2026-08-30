@@ -4,8 +4,10 @@ import com.example.bitcomputer.Repository.EmployeeRepository;
 import com.example.bitcomputer.Repository.HistoryDiagnoseRepository;
 import com.example.bitcomputer.Repository.HistoryDiseaseRepository;
 import com.example.bitcomputer.Repository.HistoryRepository;
+import com.example.bitcomputer.Repository.MedicalCertificateRepository;
 import com.example.bitcomputer.Repository.PatientRepository;
 import com.example.bitcomputer.entity.History;
+import com.example.bitcomputer.entity.MedicalCertificateRecord;
 import com.example.bitcomputer.entity.Patient;
 import com.example.bitcomputer.jwt.JwtTokenProvider;
 import com.example.bitcomputer.model.CertificateAgentResponse;
@@ -13,6 +15,7 @@ import com.example.bitcomputer.model.GenerateCertificateResponseDTO;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -23,6 +26,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -82,6 +86,22 @@ class AgentDocumentServiceImplCertificateTest {
         return new AgentDocumentServiceImpl(
                 historyRepository, patientRepository, employeeRepository, null,
                 historyDiseaseRepository, historyDiagnoseRepository, null,
+                jwtTokenProvider, certificateAgentClient);
+    }
+
+    private MedicalCertificateRepository medicalCertificateRepository;
+
+    /**
+     * generateCertificate 로 llmStatus 를 캐시에 남긴 뒤 saveCertificate 로 그
+     * 캐시를 소비하는 왕복 흐름을 검증하기 위한 조립. {@link #newServiceForGenerateCertificate()}
+     * 와 같은 mock 세팅에 {@link MedicalCertificateRepository} 만 추가한다.
+     */
+    private AgentDocumentServiceImpl newServiceForSaveCertificate() {
+        AgentDocumentServiceImpl service = newServiceForGenerateCertificate();
+        medicalCertificateRepository = mock(MedicalCertificateRepository.class);
+        return new AgentDocumentServiceImpl(
+                historyRepository, patientRepository, employeeRepository, null,
+                historyDiseaseRepository, historyDiagnoseRepository, medicalCertificateRepository,
                 jwtTokenProvider, certificateAgentClient);
     }
 
@@ -349,6 +369,66 @@ class AgentDocumentServiceImplCertificateTest {
 
             assertThat(result.getLlmStatus()).isEqualTo("fallback");
             assertThat(result.getVerification()).isNull();
+        }
+    }
+
+    /**
+     * saveCertificate 가 {@code MedicalCertificateRecord.llmStatus} 를 채우는 방식을 검증한다.
+     *
+     * <p>이 필드는 진단서 소견이 실제로 모델에서 나왔는지를 저장 시점에 남기는 값이다.
+     * {@code agentUsed} 요청 파라미터는 브라우저가 그대로 보내는 값이라 위조될 수 있으므로,
+     * {@code llmStatus} 는 브라우저가 보낸 값이 아니라 같은 historyId 로 직전에 실행된
+     * generateCertificate/generateTestCertificate 가 백엔드에 남긴 값에서 가져와야 한다
+     * (스펙 "브라우저가 보낸 값보다 백엔드가 이미 받은 값을 우선한다").
+     */
+    @Nested
+    @DisplayName("saveCertificate")
+    class SaveCertificate {
+
+        @Test
+        @DisplayName("generate 로 받은 llmStatus 가 stub 이면 save 된 레코드도 stub (real 하드코딩 방지)")
+        void generateThenSave_persistsLlmStatusFromGenerate_notHardcodedReal() {
+            AgentDocumentServiceImpl service = newServiceForSaveCertificate();
+            when(certificateAgentClient.generate(any())).thenReturn(Optional.of(
+                    CertificateAgentResponse.builder()
+                            .medicalCertificate("환자는 통원 치료가 필요합니다.")
+                            .llmStatus("stub")
+                            .build()));
+
+            service.generateCertificate(HISTORY_ID, "GENERAL", "FINAL", "제출용", "doctor1");
+            service.saveCertificate(HISTORY_ID, null, true, "환자는 통원 치료가 필요합니다.", "저장된 소견", "APPROVE");
+
+            ArgumentCaptor<MedicalCertificateRecord> captor =
+                    ArgumentCaptor.forClass(MedicalCertificateRecord.class);
+            verify(medicalCertificateRepository).save(captor.capture());
+            assertThat(captor.getValue().getLlmStatus()).isEqualTo("stub");
+        }
+
+        @Test
+        @DisplayName("AI 를 쓰지 않고 저장하면(agentUsed=false) llmStatus 는 null 로 저장된다 (real 로 새지 않는다)")
+        void agentNotUsed_llmStatusIsNull() {
+            AgentDocumentServiceImpl service = newServiceForSaveCertificate();
+
+            service.saveCertificate(HISTORY_ID, null, false, "", "직접 작성한 소견", "NONE");
+
+            ArgumentCaptor<MedicalCertificateRecord> captor =
+                    ArgumentCaptor.forClass(MedicalCertificateRecord.class);
+            verify(medicalCertificateRepository).save(captor.capture());
+            assertThat(captor.getValue().getLlmStatus()).isNull();
+        }
+
+        @Test
+        @DisplayName("직전에 generate 호출이 없는 historyId 로 agentUsed=true 를 보내도(위조 시도) llmStatus 는 real 이 아니라 null")
+        void agentUsedTrueWithoutPriorGenerate_llmStatusIsNullNotReal() {
+            AgentDocumentServiceImpl service = newServiceForSaveCertificate();
+
+            service.saveCertificate(HISTORY_ID, null, true, "", "", "NONE");
+
+            ArgumentCaptor<MedicalCertificateRecord> captor =
+                    ArgumentCaptor.forClass(MedicalCertificateRecord.class);
+            verify(medicalCertificateRepository).save(captor.capture());
+            assertThat(captor.getValue().getLlmStatus()).isNull();
+            assertThat(captor.getValue().getLlmStatus()).isNotEqualTo("real");
         }
     }
 }
