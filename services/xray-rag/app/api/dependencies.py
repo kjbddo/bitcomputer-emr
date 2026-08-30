@@ -29,6 +29,7 @@ class ServiceContainer:
         self.embedder = EmbeddingService(build_result.embedder)
         # 실제로 구성된 모델(build_result)을 근거로 판정. 토글 값을 직접 읽지 않는다.
         self.engine_status: str = build_result.engine_status
+        self.embedding_version: str = build_result.embedding_version
 
         self.similarity = SimilarityService(self.repo)
         self.reasoning = ReasoningService(self.repo, self.settings)
@@ -51,6 +52,7 @@ class ServiceContainer:
             storage_recon=self.s_recon,
             storage_heatmap=self.s_heatmap,
             engine_status=self.engine_status,
+            embedding_version=self.embedding_version,
         )
 
 
