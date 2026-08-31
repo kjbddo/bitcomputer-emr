@@ -45,7 +45,11 @@ except ImportError:
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 
-from feedback_adjustment import apply_feedback_adjustment, compute_feedback_adjustment
+from feedback_adjustment import (
+    DEFAULT_FEEDBACK_SMOOTHING,
+    apply_feedback_adjustment,
+    compute_feedback_adjustment,
+)
 from medication_codes import (
     MEDICATION_CODE_AQL_PREDICATE,
     MEDICATION_CODE_BIND_KEY,
@@ -352,7 +356,7 @@ def fetch_confidence_scores_by_diagnosis_codes(
     accepted_boost: float = 0.15,
     rejected_penalty: float = 0.2,
     missed_boost: float = 0.05,
-    feedback_smoothing: float = 5.0,
+    feedback_smoothing: float = DEFAULT_FEEDBACK_SMOOTHING,
 ) -> list[dict[str, Any]]:
     """
     confidence_score = w_freq * S_freq + w_sim * S_similarity + feedback_adjustment

@@ -132,6 +132,32 @@ def test_drug_outside_the_table_does_not_match():
     assert rg.match_renal_cleared_drug(DRUG_NOT_IN_TABLE) is None
 
 
+def test_memotin_matches_memantine_via_reimbursement_criteria_token():
+    """`메모틴정10mg` — 예전에는 "알면서 비운 자리"였다. 더 이상 아니다.
+
+    2026-08-31 실측으로 세 증거를 확인했다(전부 라이브 그래프,
+    `prescription_masters.693901500.canonical_name` 도 동일):
+
+    1. 처방명이 급여기준을 그대로 담고 있다: `메모틴정10mg(MMSE20점이하,
+       GDS 4-7점)`. 한국 급여기준에서 MMSE 20 이하 + GDS 4-7 은 메만틴
+       기준이다(도네페질은 MMSE 10-26).
+    2. 같은 그래프에 같은 10mg 용량의, 성분이 명시된 메만틴 제제가 있다:
+       `디멘틴정_(메만틴염산염/ 10mg/1정)`(693901500 과 다른 코드
+       661900170). `메만시아정10mg(메만틴염산염)`·`영일메만틴정(메만틴염산염)`
+       ·`만티니정(메만틴염산염)` 도 전부 10mg 짜리 형제 제품이다.
+    3. 이 데이터셋의 도네페질 제제는 전부 성분을 괄호로 명시한다
+       (`알로페질정5mg(도네페질염산염)`, `환인도네페질정23밀리그램
+       (도네페질염산염수화물)`) — 메모틴이 무표기 도네페질일 가능성은 낮다.
+
+    이 셋은 약물 데이터베이스의 직접 진술이 아니라 급여기준 + 동일 용량
+    형제 제품에서의 추론이다. 그 강도 그대로 `renal_gate.py` 표 주석에도
+    적어 둔다.
+    """
+    drug = rg.match_renal_cleared_drug("메모틴정10mg(MMSE20점이하, GDS 4-7점)")
+    assert drug is not None
+    assert drug.ingredient == "memantine"
+
+
 def test_table_is_not_empty_and_covers_observed_products():
     """표가 비면 관문은 영원히 clear 만 낸다 — 죽은 검사가 된다.
 
