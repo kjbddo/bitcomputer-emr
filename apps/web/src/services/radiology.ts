@@ -22,6 +22,11 @@ export interface RadiologyReportResponse {
   // 이건 "돈 결과를 얼마나 믿을 수 있나"다. 둘 다 Java DTO 가 선언하지 않아
   // 화면에 도달하지 못하고 있었다(F-H4).
   uncertainty?: XrayUncertainty | null;
+  // 어느 ROI 분할기가 실제로 구성됐는지: "pspnet" | "cv" | "mock".
+  // engineStatus 와 또 다른 축이다 — 검색의 기본 경로는 ROI 마스크를 쓰지
+  // 않으므로 ROI 가 mock 으로 떨어져도 엔진은 real 일 수 있다. 그 조합을
+  // 한 값으로 합치면 어느 쪽이 내려간 것인지 화면에서 말할 수 없다.
+  roiStatus?: string;
 }
 
 export interface XrayUncertainty {

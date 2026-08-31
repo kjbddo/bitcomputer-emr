@@ -78,6 +78,7 @@ class PythonProvenanceFieldsSurviveJavaDtoTest {
     private static final List<String> PROVENANCE_TOKENS = List.of(
             "llmstatus",
             "enginestatus",
+            "roistatus",
             "verification",
             "uncertainty",
             "embeddingversion");

@@ -72,7 +72,8 @@ class XrayGraphRagClientProvenanceTest {
                 + "\"explanation\":{\"summary\":\"...\"},"
                 + "\"heatmapPath\":\"/storage/h.png\","
                 + "\"warning\":\"진단이 아닙니다\","
-                + "\"engineStatus\":\"mock\""
+                + "\"engineStatus\":\"mock\","
+                + "\"roiStatus\":\"cv\""
                 + "}";
 
         server.expect(requestTo("http://xray.test:8000/infer"))
@@ -82,6 +83,7 @@ class XrayGraphRagClientProvenanceTest {
 
         server.verify();
         assertThat(out.getEngineStatus()).isEqualTo("mock");
+        assertThat(out.getRoiStatus()).isEqualTo("cv");
         assertThat(out.getUncertainty()).isNotNull();
         assertThat(out.getUncertainty().getLevel()).isEqualTo("high");
         assertThat(out.getUncertainty().getReasons())
@@ -105,6 +107,31 @@ class XrayGraphRagClientProvenanceTest {
 
         server.verify();
         assertThat(out.getEngineStatus()).isNull();
+        assertThat(out.getRoiStatus()).isNull();
         assertThat(out.getUncertainty()).isNull();
+    }
+
+    /**
+     * roiStatus 는 engineStatus 와 다른 축이므로 서로를 대신하지 않는다.
+     *
+     * <p>검색의 기본 경로(globalErrorEmbedding)는 ROI 마스크를 쓰지 않는다.
+     * 그래서 분할기가 고정 타원(mock)까지 떨어져도 SQUID·DenseNet 이 둘 다
+     * 올라왔으면 추론 엔진은 real 이다. 이 조합이 경계를 그대로 통과해야
+     * 화면에서 "엔진은 진짜인데 ROI 는 가짜"를 구분해 말할 수 있다. 한쪽을
+     * 다른 쪽에서 유도하면 그 구분이 사라진다.
+     */
+    @Test
+    void roiStatusCrossesTheBoundaryIndependentlyOfEngineStatus() throws Exception {
+        String body = "{\"predictedDiseases\":[],\"heatmapPath\":null,\"warning\":\"w\","
+                + "\"engineStatus\":\"real\",\"roiStatus\":\"mock\"}";
+
+        server.expect(requestTo("http://xray.test:8000/infer"))
+                .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+
+        RadiologyAnalysisResponseDTO out = client.infer(anImage(), "PA");
+
+        server.verify();
+        assertThat(out.getEngineStatus()).isEqualTo("real");
+        assertThat(out.getRoiStatus()).isEqualTo("mock");
     }
 }

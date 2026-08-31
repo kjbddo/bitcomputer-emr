@@ -78,6 +78,7 @@ public class XrayGraphRagClient {
         // 병명과 점수만 남는다. 상류가 안 주면 null 그대로 둔다 — 기본값을 만들면
         // "모른다"가 "괜찮다"로 바뀐다(GC-3).
         out.setEngineStatus(xray.getEngineStatus());
+        out.setRoiStatus(xray.getRoiStatus());
         out.setUncertainty(toUncertainty(xray.getUncertainty()));
         return out;
     }
@@ -149,6 +150,10 @@ public class XrayGraphRagClient {
         // 계산해 보내는데 Spring 이 병명과 점수만 넘겼다.
         private String engineStatus;
         private XrayUncertainty uncertainty;
+        // 어느 ROI 분할기가 실제로 구성됐는지(pspnet/cv/mock). engineStatus 와
+        // 별개 축이라 따로 온다 — ROI 가 mock 으로 내려가도 SQUID·DenseNet 이
+        // 올라왔으면 engineStatus 는 real 이다.
+        private String roiStatus;
     }
 
     @Data

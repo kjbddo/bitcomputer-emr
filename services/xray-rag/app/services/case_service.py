@@ -59,6 +59,10 @@ class CaseService:
         # 마스크가 실제로 무엇이 만든 것인가"라는 출처다. 둘을 하나로 합치면
         # 분할기를 바꿔 재시드한 뒤 예전 벡터와 섞였는지 사후에 알 수 없다.
         roi_mask_version: str = "unknown",
+        # 실제로 구성된 ROI 분할기(factory.BuildResult.roi_status): pspnet/cv/mock.
+        # roi_mask_version 이 "무엇이 만들었나"라면 이쪽은 "어느 등급으로
+        # 내려갔나"다. 기본값은 engine_status 와 같은 이유로 "mock" 이다.
+        roi_status: str = "mock",
     ) -> None:
         self.settings = settings
         self.repo = repo
@@ -76,6 +80,7 @@ class CaseService:
         self.engine_status = engine_status
         self.embedding_version = embedding_version
         self.roi_mask_version = roi_mask_version
+        self.roi_status = roi_status
 
     # ---------- 등록 ----------
     def register_case(
@@ -219,6 +224,11 @@ class CaseService:
                 "view": view or "PA",
                 "modelVersion": model_version or self.settings.MODEL_VERSION,
                 "maskVersion": mask_version or self.settings.MASK_VERSION,
+                # maskVersion 은 환경변수로 고정된 비교 키이고, 이쪽은 이 질의의
+                # 마스크를 실제로 만든 분할기다. 저장된 케이스 문서
+                # (doc["roiMaskVersion"])와 같은 값이어야 질의와 코퍼스가 같은
+                # 해부 기준 위에서 비교된다 - 다르면 재시드가 필요하다는 뜻이다.
+                "roiMaskVersion": self.roi_mask_version,
             },
             predictedDiseases=reasoning_out["predictedDiseases"],
             notableFindings=reasoning_out["notableFindings"],
@@ -228,6 +238,7 @@ class CaseService:
             heatmapPath=heatmap_url,
             warning=self.settings.SAFETY_NOTICE,
             engineStatus=self.engine_status,
+            roiStatus=self.roi_status,
         )
 
     def _storage_url(self, path: Path) -> str:

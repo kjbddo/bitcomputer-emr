@@ -30,7 +30,14 @@ const baseProps = {
 
 function makeResponse(
   engineStatus?: string,
-  uncertainty?: RadiologyReportResponse["uncertainty"]
+  uncertainty?: RadiologyReportResponse["uncertainty"],
+  // 기본값을 "cv" 로 둔다. 다른 축을 보는 테스트에서 ROI 경고까지 같이 뜨면
+  // 무엇이 무엇을 띄운 것인지 구별할 수 없다. ROI 축은 아래 전용 describe 가
+  // 값을 직접 지정해 검증한다.
+  //
+  // "상류가 안 준 경우"는 null 로 표현한다 — undefined 를 넘기면 기본 매개변수
+  // 규칙에 걸려 "cv" 로 되돌아가므로 누락을 표현할 수 없다.
+  roiStatus: string | null = "cv"
 ): RadiologyReportResponse {
   return {
     heatmapUrl: null,
@@ -39,6 +46,7 @@ function makeResponse(
     warning: "테스트 경고",
     engineStatus,
     uncertainty,
+    roiStatus: roiStatus ?? undefined,
   };
 }
 
@@ -84,6 +92,62 @@ describe("AIReport engineStatus 배지", () => {
 
     await waitFor(() => expect(screen.getByText("테스트 경고")).toBeInTheDocument());
     expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
+// roiStatus 는 engineStatus 와 다른 축이다. 검색의 기본 경로는 ROI 마스크를
+// 쓰지 않으므로 분할기가 고정 타원(mock)까지 떨어져도 엔진은 real 일 수 있다.
+// 그 조합을 화면이 구분해 말하지 못하면, 부위별 소견이 이 영상의 해부 구조에서
+// 나온 것인지 아닌지를 의사가 알 방법이 없다.
+describe("AIReport roiStatus 배지", () => {
+  beforeEach(() => {
+    mockedUpload.mockReset();
+  });
+
+  it("mock 분할이면 엔진이 real 이어도 경고를 표시한다", async () => {
+    mockedUpload.mockResolvedValue(makeResponse("real", undefined, "mock"));
+    render(<AIReport {...baseProps} />);
+
+    await uploadAndClickAnalyze();
+
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent("mock");
+    // 고정 영역이라는 사실 자체가 경고의 내용이다. 등급 이름만 남기고 이
+    // 문장을 지우면 "mock" 이 무엇을 뜻하는지 화면에서 사라진다.
+    expect(status).toHaveTextContent("입력 영상에 반응하지 않는 고정 영역");
+  });
+
+  it("값이 없으면 fail-closed 로 미확인 경고를 표시한다", async () => {
+    mockedUpload.mockResolvedValue(makeResponse("real", undefined, null));
+    render(<AIReport {...baseProps} />);
+
+    await uploadAndClickAnalyze();
+
+    expect(await screen.findByRole("status")).toHaveTextContent("미확인");
+  });
+
+  it("cv 분할이면 경고하지 않고 어느 분할기인지 남긴다", async () => {
+    mockedUpload.mockResolvedValue(makeResponse("real", undefined, "cv"));
+    render(<AIReport {...baseProps} />);
+
+    await uploadAndClickAnalyze();
+
+    await waitFor(() => expect(screen.getByText("테스트 경고")).toBeInTheDocument());
+    // 현재 기본값이 cv 다. 여기서 경고를 띄우면 모든 추론마다 발화해 아무도
+    // 읽지 않게 되고, 정작 mock 으로 떨어진 순간을 구별할 수 없다.
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByText(/cv 분할이 잡은 영역/)).toBeInTheDocument();
+  });
+
+  it("pspnet 분할이면 경고하지 않고 어느 분할기인지 남긴다", async () => {
+    mockedUpload.mockResolvedValue(makeResponse("real", undefined, "pspnet"));
+    render(<AIReport {...baseProps} />);
+
+    await uploadAndClickAnalyze();
+
+    await waitFor(() => expect(screen.getByText("테스트 경고")).toBeInTheDocument());
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByText(/pspnet 분할이 잡은 영역/)).toBeInTheDocument();
   });
 });
 
