@@ -72,7 +72,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [xray-rag, prescription, validation-agent, radiology-legacy]
+        service: [xray-rag, prescription, validation-agent, radiology-legacy, llm-gateway]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
