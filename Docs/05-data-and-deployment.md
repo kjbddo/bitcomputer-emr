@@ -122,16 +122,17 @@ flowchart LR
 | `LLM_PROVIDER` | Certificate API, Prescription API, ValidationAgent | `real` \| `stub`. 호출 서비스가 게이트웨이를 쓸지 결정론적 내부 stub 을 쓸지. 상류 제공자와는 다른 축이다 |
 | `LLM_API_KEY` | LLM Gateway | 상류 API 키. 이 서비스에만 존재한다 |
 | `LLM_UPSTREAM_BASE_URL` | LLM Gateway | 상류 base URL, 기본 `https://api.openai.com/v1` |
-| `LLM_UPSTREAM_PROVIDER` | LLM Gateway | `openai`(기본) \| `bedrock`. 게이트웨이가 어느 회사 API 를 치는가. `bedrock` 을 고르면 `LLM_BEDROCK_*` 가 함께 필요하다. **주의: 현재 `infra/docker-compose.yml` 의 `llm-gateway` 블록이 이 변수와 `LLM_BEDROCK_*` 를 컨테이너에 실어주지 않는다** — `.env` 에만 넣으면 컨테이너에서는 여전히 openai 로 뜬다 |
+| `LLM_UPSTREAM_PROVIDER` | LLM Gateway | `openai`(기본) \| `bedrock`. 게이트웨이가 어느 회사 API 를 치는가. `bedrock` 을 고르면 `LLM_BEDROCK_*` 가 함께 필요하다. PR #27 에서 이 변수와 `LLM_BEDROCK_*` 가 컨테이너에 실리도록 배선됐다 — 그 전에는 `.env` 에만 넣으면 컨테이너에서 여전히 openai 로 떴다 |
 | `LLM_TIMEOUT_SECONDS` | LLM Gateway | 상류 호출 1회 시도당 타임아웃(초), 기본 45 |
 | `LLM_GATEWAY_TIMEOUT_SECONDS` | Certificate API, Prescription API | 게이트웨이 응답을 기다리는 총 시간(초), 기본 180. `LLM_TIMEOUT_SECONDS`(게이트웨이 1회 시도당)와 이름이 다르다 |
 | `VALIDATION_LLM_TIMEOUT_SECONDS` | ValidationAgent | 게이트웨이 호출 타임아웃(초), 기본 180. RabbitMQ 컨슈머 스레드가 무기한 멈추지 않도록 명시한다 |
 | `VALIDATION_JOB_BUDGET_SECONDS` | ValidationAgent | 검증 작업 하나의 전역 예산(초), 기본 110. RabbitMQ 하트비트 주기의 두 배(=브로커가 연결을 닫는 120초)보다 작아야 한다. 초과하면 남은 단계를 건너뛰고 규칙 기반 판정으로 마감하며, 건너뛴 단계를 `reasoningTrace` 에 남긴다 |
-| `VALIDATION_PUBMED_MAX_QUERY_ATTEMPTS` | ValidationAgent | PubMed 검색 재시도 상한, 기본 4 |
 | `PRESCRIPTION_AGENT_TIMEOUT_SECONDS` | ValidationAgent | Prescription API 호출(처방 RAG 조회) 타임아웃(초), 기본 180 |
 | `GEMINI_API_KEY` | Spring | 진단서 NLI 평가(`CertificateEvaluationServiceImpl`, `/api/agent/document/evaluate`)에 쓰던 자격증명. **이 경로는 현재 죽어 있다** — 키가 폐기됐고, 이 엔드포인트를 쓰는 `/evaluation` 화면은 어디에서도 링크되지 않는다. 게이트웨이를 거치지 않는 유일한 LLM 경로이기도 하다 |
 | `NEXT_PUBLIC_API_BASE_URL` | Front-End | Spring API base URL |
 | `XRAY_API_DEFAULT_VIEW` | Spring | 기본 X-ray 촬영 방향 |
+| `USE_TORCH_ANOMALY`·`USE_TORCH_EMBEDDING` | XrayGraphRAG | 실제 모델을 **시도하라**는 뜻이지 "실제 모델이다"가 아니다. 가중치를 못 올리면 mock 으로 내려가고 그 사실이 `engineStatus` 에 남는다 |
+| `USE_PSPNET_ROI` | XrayGraphRAG | ChestX-Det PSPNet 해부학 ROI 분할. **기본값 `false`** — CPU 에서 분할 한 번에 18~32초라 추론 전체가 90초가 되는데 `EVALUATION.md` 11.3 의 사전 기준을 넘지 못했다. 끄면 고전 CV 분할로 내려간다. 실제로 어느 쪽이 떴는지는 응답의 `roiStatus`(`pspnet`/`cv`/`mock`)가 답한다. **이 값을 바꾸면 마스크가 달라지므로 X-ray 코퍼스를 전량 재적재해야 한다** |
 
 ## 6. 실행과 종료
 

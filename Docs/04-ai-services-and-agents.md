@@ -11,7 +11,7 @@ BitComputer의 AI 기능은 하나의 모델에 몰려 있지 않고, 기능별 
 | `llm-gateway`(`services/llm-gateway`) | FastAPI, httpx | 단일 LLM 진입점. 상류 제공자 선택·재시도·비용 계측 | 상류 자체 (기본 OpenAI) |
 | `certificate-api`(`services/prescription`) | FastAPI, LangChain | 진단서 의사소견 생성 | llm-gateway 경유 |
 | `prescription-api`(`services/prescription`) | FastAPI, ArangoDB, LangChain | 그래프 조회가 순위를 정하고 모델이 사유·용법을 쓴다 | llm-gateway 경유 |
-| `validation-agent`(`services/validation-agent`) | FastAPI, RabbitMQ, 고정 파이프라인 + 모델 호출 2회 | 상병/처방/X-ray/PubMed 검증 및 추천 후보 조합 | llm-gateway 경유 |
+| `validation-agent`(`services/validation-agent`) | FastAPI, RabbitMQ, 고정 파이프라인 | 상병/처방/X-ray 검증 및 추천 후보 조합 | 모델 호출 없음 |
 
 ## 2. XrayGraphRAG
 
@@ -241,11 +241,15 @@ ValidationAgent는 처방 추천 버튼을 계기로 실행되는 검증 에이�
 
 ### 6.1 전체 파이프라인
 
-도구 선택은 모델이 하지 않는다. 실행 순서는 도메인이 정한 고정 순서이며, 모델은
-**두 자리에서만** 쓴다: PubMed 질의 생성과 근거 요약. 이전에는 매 단계 게이트웨이에
-"다음에 어떤 도구를 부를까" 를 물었으나, 측정 결과 그 결정은 하드코딩 순서를
-재생산했을 뿐이고 관측값이 다음 행동을 바꾼 사례가 없었다(`.superpowers/sdd/agent-architecture-review.md` §5,
+도구 선택은 모델이 하지 않는다. 실행 순서는 도메인이 정한 고정 순서다. 이전에는
+매 단계 게이트웨이에 "다음에 어떤 도구를 부를까" 를 물었으나, 측정 결과 그 결정은
+하드코딩 순서를 재생산했을 뿐이고 관측값이 다음 행동을 바꾼 사례가 없었다
+(`.superpowers/sdd/agent-architecture-review.md` §5,
 `.superpowers/sdd/react-loop-removal-report.md`). 결정 호출 4회가 0회가 됐다.
+
+**이 파이프라인은 현재 모델을 한 번도 부르지 않는다.** 남아 있던 두 자리(PubMed
+질의 생성과 근거 요약)가 PubMed 제거와 함께 사라졌기 때문이다. 판정은 전부
+결정론적 규칙(`finalize.rule_based_finalize`)이 만든다.
 
 ```mermaid
 flowchart TD
@@ -253,12 +257,9 @@ flowchart TD
   B --> C[1. X-ray Result Loader]
   C --> D[2. Disease Validator]
   D --> E[3. Prescription Validator]
-  E --> F[4. PubMed 질의 생성 - 모델 호출 1/2]
-  F --> G[Pubmed Loader - 첫 성공까지 재시도]
-  G --> H[5. Prescription Finder]
-  H --> I[6. 규칙 기반 최종 판정]
-  I --> J[PubMed 근거 요약 - 모델 호출 2/2]
-  J --> K[verification 대조]
+  E --> H[4. Prescription Finder]
+  H --> I[5. 규칙 기반 최종 판정]
+  I --> K[verification 대조]
   K --> L[ValidationAgentResponse]
 ```
 
@@ -274,31 +275,35 @@ flowchart TD
 | `Disease Validator` | 저장 상병과 X-ray 추론/증상 일관성 확인 | 저장 상병, 증상, X-ray 결과 | `MATCH`, `MISMATCH`, `PARTIAL_MATCH` 등 |
 | `Prescription Validator` | 저장 처방 또는 후보 처방이 상병/증상과 검토 가능한지 확인 | 상병, 증상, 처방 | `APPROPRIATE`, `QUESTIONABLE`, `INSUFFICIENT_DATA` 등 |
 | `Prescription Finder` | 기존 처방 RAG에서 후보 처방 조회 | 환자 ID, 상병, 증상/검증 사유 | 후보 처방 배열 |
-| `Pubmed Loader` | PubMed 논문 검색과 초록 조회 | 검색어, max_results | 논문 제목, PMID, 초록 |
 
-### 6.3 모델 호출 두 자리
+### 6.3 모델 호출과 `llmStatus`
 
-```mermaid
-flowchart LR
-  State[검증 컨텍스트] --> Q[PubMed 질의 생성 프롬프트]
-  Q --> Gateway[llm-gateway 경유 LLM_MODEL]
-  Gateway --> Queries["{ queries: [영어 검색어] }"]
-  Queries --> Loader[Pubmed Loader]
-  Loader --> Articles[초록]
-  Articles --> Sum[근거 요약 프롬프트]
-  Sum --> Gateway
-  Gateway --> Summary[한국어 요약문]
-```
+이 파이프라인은 모델을 부르지 않는다. 그래서 `llmStatus` 는 정상 실행에서 언제나
+`rule` 이다.
 
-이 둘만 모델을 필요로 한다. 질의 생성은 한국어 임상 맥락을 영어 검색어로 번역하는
-일이고, 15항목짜리 하드코딩 사전(`app/pubmed.py` 의 `KOREAN_PUBMED_TERMS`)으로는
-할 수 없다. 두 호출 모두 실패하면 결정론적 대체물로 강등되고 그 사실이
-`llmStatus` 와 트레이스 `source` 에 남는다.
+`rule` 과 `fallback` 은 다른 사실이다.
 
-`LLM_MODEL` 기본값은 `openai.gpt-5.6-luna`다. 비용과 속도를 우선하면서도 PubMed
-query 생성과 초록 요약 같은 경량 생성에 적합하도록 설정했다. 자격증명은
-`services/llm-gateway` 가 갖고 있으며, ValidationAgent 는 게이트웨이 base
-URL(`LLM_GATEWAY_BASE_URL`)만 안다.
+| 값 | 뜻 |
+|---|---|
+| `real` | 모델 호출이 성사됐다 |
+| `stub` | 스텁 응답을 받았다 |
+| `fallback` | **불렀는데 실패**해 결정론적 대체물로 내려갔다 |
+| `rule` | **애초에 부르지 않았다.** 판정이 규칙에서 나왔다 |
+
+둘을 합쳐 두면 화면이 설계대로 도는 결정론적 판정을 매번 장애로 표시하게 되고,
+매번 뜨는 경고는 곧 아무도 읽지 않아 `prescription-api` 의 진짜 `fallback` 을
+가린다. 그래서 웹은 `rule` 을 경고가 아닌 사실 표시로 그린다 — 다만 표시 자체는
+지운 적이 없다. "모델이 만든 것이 아니다" 는 여전히 화면에 남아야 한다(GC-3).
+
+응답 필드의 기본값은 `fallback` 그대로다. 필드가 누락된 응답은 "부르지 않았음이
+확인됐다" 가 아니라 "모른다" 이고, 그때는 더 보수적인 쪽으로 틀려야 한다.
+
+`LLM_MODEL` 기본값은 `openai.gpt-5.6-luna`다. ValidationAgent 가 지금 이 값을 쓰지
+않더라도 게이트웨이 배선은 그대로 둔다 — `prescription-api` 와 `certificate-api` 가
+같은 게이트웨이를 쓰고, `resolve_llm_status` 는 "이번 실행에서 모델이 돌았는가" 를
+답하는 유일한 경로라 아무도 부르지 않는 지금 `rule` 을 내는 것 자체가 지켜야 할
+동작이다. 자격증명은 `services/llm-gateway` 가 갖고 있으며, 호출 서비스는 게이트웨이
+base URL(`LLM_GATEWAY_BASE_URL`)만 안다.
 
 ### 6.4 결과 구조
 
@@ -311,9 +316,7 @@ URL(`LLM_GATEWAY_BASE_URL`)만 안다.
 - `checks`: 검증 항목별 결과
 - `suspectedIssues`: 의심 문제 목록
 - `reasoningTrace`: 파이프라인 단계별 기록. 각 항목은 `thought`/`action`/`actionInput`/`observation`/`source` 를 갖는다. `source` 는 그 단계가 실제로 쓴 내용의 출처다 — `rule`(결정론적), `llm`(모델이 생성), `stub`, `fallback`
-- `llmStatus`: 이 실행에서 실제로 성사된 모델 호출에서만 도출한다. 게이트웨이가 설정돼 있다는 사실은 근거가 되지 않는다
-- `validation.pubmedEvidence`: PubMed 논문 근거
-- `validation.pubmedEvidenceSummary`: 초록 요약
+- `llmStatus`: 이 실행에서 실제로 성사된 모델 호출에서만 도출한다. 게이트웨이가 설정돼 있다는 사실은 근거가 되지 않는다. 이 파이프라인은 모델을 부르지 않으므로 정상값은 `rule` 이다 (§6.3)
 - `validation.graphLookup`: ArangoDB 처방 그래프 조회 결과. 후보 조회 단계를 돌지 않았으면 `null` 이고, 그 "확인 못 함"은 "0건"과 다른 상태다 (§4.4)
 - `prescriptionRenalGate`: prescription_api 의 신기능 금기 관문. 최상위 별도 필드다 — `verification`(이 에이전트 자신의 판정)과 병합하지 않는다 (§4.5)
 
@@ -327,7 +330,6 @@ flowchart LR
   Spring --> RMQ[RabbitMQ]
   RMQ --> Val[ValidationAgent]
   Val -- 추천 조회 --> Rx
-  Val --> PubMed[PubMed]
   Val --> GW[llm-gateway]
   Rx --> GW
   Cert --> GW
@@ -345,4 +347,4 @@ flowchart LR
 - 처방 추천은 자동 저장/자동 확정되지 않는다.
 - 검증 에이전트는 DB를 직접 수정하지 않는다.
 - X-ray 추론 결과와 실제 판독은 의료진이 함께 확인해야 한다.
-- PubMed 근거는 참고 문헌 후보이며, 환자 개별 처방의 정당성을 자동 보장하지 않는다.
+- 추천 근거는 **이 병원 그래프에서 관측된 처방 빈도**다. 빈도가 곧 임상적 적합성은 아니며, 환자 개별 처방의 정당성을 자동 보장하지 않는다.

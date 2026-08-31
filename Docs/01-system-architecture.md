@@ -17,7 +17,7 @@ BitComputer는 병원 진료 업무 UI, Spring Boot 업무 API, 여러 Python AI
 | Certificate API | `bit-certificate-api` | 5001 | LLM 게이트웨이 경유 진단서 소견 문장 생성 |
 | Prescription API | `bit-prescription-api` | 8001 | ArangoDB 조회로 순위를 정하고, LLM 게이트웨이 경유 모델이 사유·용법을 쓴다 |
 | LLM Gateway | `bit-llm-gateway` | 8003 | 모든 서비스의 단일 LLM 진입점. 상류 자격증명은 여기에만 있다 |
-| ValidationAgent | `bit-validation-agent` | 8002 | 고정 파이프라인 기반 상병/처방/X-ray/PubMed 검증 (모델 호출은 PubMed 질의 생성·요약 2회) |
+| ValidationAgent | `bit-validation-agent` | 8002 | 고정 파이프라인 기반 상병/처방/X-ray 검증 (모델 호출 없음 — 판정은 결정론적 규칙이 만든다) |
 
 ## 2. 컨텍스트 다이어그램
 
@@ -54,7 +54,6 @@ flowchart TB
   subgraph External["External APIs"]
     OpenAI["OpenAI<br/>(기본 상류)"]
     Bedrock["Amazon Bedrock<br/>(LLM_UPSTREAM_PROVIDER=bedrock 일 때)"]
-    PubMed["NCBI PubMed"]
   end
 
   FE --> Spring
@@ -70,7 +69,6 @@ flowchart TB
 
   Rabbit <--> Val
   Val --> Rx
-  Val --> PubMed
 
   Xray --> Arango
   Xray --> Images
@@ -140,7 +138,7 @@ flowchart TD
   API --> Async["RabbitMQ<br/>장기 검증 작업 분리"]
   API --> AI["Python AI Services<br/>추론/추천/소견/검증"]
   AI --> Graph["ArangoDB<br/>처방 그래프, X-ray 그래프/벡터"]
-  AI --> LLM["llm-gateway -> 상류 LLM(기본 OpenAI)<br/>및 PubMed"]
+  AI --> LLM["llm-gateway -> 상류 LLM(기본 OpenAI)"]
 ```
 
 - Front-End는 화면 상태와 사용자 이벤트를 관리한다.
@@ -152,6 +150,6 @@ flowchart TD
 
 - **AI 서비스 분리**: X-ray, 처방 추천, 진단서 생성, 검증 에이전트를 독립 서비스로 분리해 장애와 의존성을 격리한다.
 - **Spring 중심 데이터 소유**: 환자/진료/상병/처방/진단서/검증 결과는 MySQL에 저장하고 Spring이 소유한다.
-- **장기 작업 비동기화**: 처방 추천과 검증은 PubMed/LLM/그래프 조회가 포함되므로 RabbitMQ job으로 분리한다.
+- **장기 작업 비동기화**: 처방 추천과 검증은 LLM/그래프 조회가 포함되므로 RabbitMQ job으로 분리한다.
 - **그래프 DB 역할 분리**: ArangoDB는 처방 그래프와 XrayGraphRAG 그래프/벡터 저장에 사용한다.
 - **의료 안전성**: AI 결과는 자동 확정이 아니라 의료진 검토용 보조 결과로 취급한다.

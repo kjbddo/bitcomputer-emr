@@ -80,7 +80,6 @@ flowchart LR
 
   Rabbit <--> Val[ValidationAgent<br/>:8002]
   Val --> Rx
-  Val --> PubMed[PubMed API]
 
   Xray --> Arango[(ArangoDB)]
   Rx --> Arango

@@ -150,13 +150,57 @@ curl -s -X POST "http://localhost:8529/_db/bitcomputer_graph/_api/cursor" -u "ro
   | python -c "import sys,json; print(json.load(sys.stdin)['result'])"
 ```
 
-현재 원본 기준으로 아홉 개다:
+엑셀 원본만 적재한 상태라면 아홉 개다:
 
 ```
 A15  C34  D50  E03  E11  E78  I10  J18  J90
 ```
 
-화면에서 AI 추천을 시험할 때는 이 중 하나를 고른다. `E11`(2형 당뇨병)이 후보가 가장 많이 나와 확인하기 좋다.
+아래 4.4 의 합성 케이스까지 적재하면 열 개가 더해져 열아홉 개가 된다:
+
+```
+H10  I20  J00  J20  J45  K21  K29  L20  M54  N39
+```
+
+화면에서 AI 추천을 시험할 때는 이 중 하나를 고른다. `E11`(2형 당뇨병)과
+`I10`(고혈압)이 원본 방문이 가장 많고, 합성 쪽은 `J00`(감기)·`K29`(위염)이
+1차 약제가 또렷하게 1순위로 올라와 확인하기 좋다.
+
+### 4.4 흔한 상병의 합성 케이스 (선택이지만 권장)
+
+엑셀 원본에는 상병이 아홉 개뿐이다. 코호트 조회는 상병 코드로 같은 상병 방문의
+처방을 모으므로, 그 밖의 상병은 후보가 언제나 0건이다. 감기·위염처럼 일상적인
+상병조차 답이 없으면 기능이 도는지 확인할 방법이 없다.
+
+```bash
+cd packages/graph-etl
+python make_synthetic_cases.py --check      # 약제 코드가 실재하는지만 확인
+python make_synthetic_cases.py              # output_synthetic/ 에 CSV 생성
+
+export ARANGO_HOST=localhost ARANGO_PORT=8529 ARANGO_USER=root ARANGO_DATABASE=bitcomputer_graph
+export ARANGO_PASSWORD="$(grep '^ARANGO_PASSWORD=' ../../infra/.env | cut -d= -f2-)"
+python import_to_arango.py --output-dir output_synthetic --append
+```
+
+**`--append` 를 반드시 붙인다.** 빼면 원본 그래프를 비우고 합성만 남긴다.
+
+**약제 코드는 지어내지 않는다.** 전부 원본 엑셀에서 나온
+`output/03_prescription_master_nodes.csv` 에 실재하는 9자리 EDI 코드이고,
+생성 전에 전수 대조해 하나라도 없으면 **중단한다**. 상병-약 조합만 합성이다.
+
+**합성임이 문서에 남는다.** 방문 `_key` 는 `VISIT_SYN...`, 처방 라인은
+`OL_SYN...`, 방문 문서에 `source="synthetic"` 이 붙는다. 원본과 한 그래프에
+섞이지만 언제든 가려낼 수 있어야 한다 — 가려낼 수 없으면 나중에 "우리 데이터가
+이렇게 말한다" 는 문장이 무엇을 근거로 한 것인지 아무도 답할 수 없다.
+
+합성만 세는 법:
+
+```bash
+curl -s -X POST "http://localhost:8529/_db/bitcomputer_graph/_api/cursor" -u "root:$PW"   -d '{"query":"RETURN LENGTH(FOR v IN visits FILTER v.source == \"synthetic\" RETURN 1)"}'   | python -c "import sys,json; print(json.load(sys.stdin)['result'][0])"
+```
+
+기대: `120` (상병 10개 x 방문 12건). 다시 돌려도 `_key` 가 같아 덮어써지므로
+숫자가 늘지 않는다.
 
 ---
 
@@ -234,16 +278,23 @@ python scripts/init_db.py    # 이번에는 status=created 로 나와야 한다
 
 **실제 모델로 적재한다.** `--use-real-model` 은 SQUID 이상탐지만 켠다 — 임베딩까지 실제 모델로 하려면 `USE_TORCH_EMBEDDING=true` 를 함께 준다.
 
-**`seed_chexpert.py` 는 덮어쓰지 않고 "추가"한다.** 이미 등록된 상태에서 다시 돌리면
-같은 202건이 새 `_key` 로 한 벌 더 들어가고, 모델을 바꿨다면 두 세대의 벡터가 한
-컬렉션에 섞인다. 재시드라면 먼저 비운다:
+**재실행은 이제 덮어쓰기다.** 케이스 `_key` 를 CheXpert 원본 경로에서 유도하므로
+같은 영상은 같은 케이스가 되고, 같은 명령을 두 번 돌려도 건수가 늘지 않는다.
+중간에 죽은 실행도 그대로 이어서 돌리면 된다.
+
+`--reset` 은 그와 별개다. 대상 범위를 좁히거나(`--limit`, `--max-per-disease`)
+정책을 바꿔 적재할 때, 이전 실행이 남긴 **범위 밖 케이스**는 덮어쓰기로 사라지지
+않는다. 코퍼스를 이번 실행 결과와 정확히 일치시키려면 붙인다:
 
 ```bash
-PW=$(grep '^ARANGO_PASSWORD=' infra/.env | cut -d= -f2-)
-for c in xray_cases case_has_disease case_has_finding case_has_roi_anomaly; do
-  curl -s -X PUT "http://localhost:8529/_db/xray_graph_db/_api/collection/$c/truncate" -u "root:$PW" -o /dev/null
-done
+python scripts/seed_chexpert.py ... --reset
 ```
+
+`--reset` 은 케이스와 그 간선만 비우고 분류 체계(`diseases`/`findings`/`rois`)는
+건드리지 않는다.
+
+**분할기를 바꿨다면(`USE_PSPNET_ROI` 등) 반드시 전량 재적재한다.** 마스크가
+달라지면 저장된 ROI 임베딩과 질의가 서로 다른 해부 기준을 비교하게 된다.
 
 ```bash
 cd services/xray-rag
@@ -266,6 +317,17 @@ curl -s -X POST "http://localhost:8529/_db/xray_graph_db/_api/cursor" -u "root:$
 기대: `{'v': 'densenet121_imagenet_1024', 'dim': 1024}`
 
 `v` 가 `mock_pca_v1` 이면 임베딩이 mock 으로 돌았다는 뜻이다 — `USE_TORCH_EMBEDDING` 을 안 줬거나 가중치 로드에 실패했다. 건수만 확인하고 넘어가면 이걸 놓친다.
+
+시더 자신도 끝에 코퍼스 상태를 출력한다. **이것부터 본다:**
+
+```
+corpus total  : 202건
+  roiMask=cv_lung_heart_v1  embedding=densenet121_imagenet_1024  202건
+```
+
+출처가 두 종류 이상이면 시더가 경고한다. 서로 다른 기준으로 만든 벡터가 한
+코퍼스에 섞였다는 뜻이고, 그 상태에서는 유사도 검색이 다른 해부 기준끼리를
+비교하므로 `--reset` 으로 전량 재적재하기 전까지 결과를 믿을 수 없다.
 
 ### 5.5 컨테이너도 같은 모델을 올려야 한다
 
@@ -362,14 +424,19 @@ python scripts/fetch_pspnet_weights.py
 
 이미 받았는지만 보려면 `--verify-only` 를 준다.
 
-**컨테이너 쪽 — `infra/docker-compose.yml` 의 `xraygraph` 블록에 넣어야 할 변경.**
-이 파일은 infra 소유라 여기서 바꾸지 않았다. 아래를 적용해야 컨테이너의
-`roi_status` 가 `pspnet` 이 된다.
+**컨테이너 쪽 — `infra/docker-compose.yml` 의 `xraygraph` 블록.** 아래 배선은
+이미 들어가 있다(PR #27). 다만 **기본값이 `false` 라 그대로 두면 `roi_status`
+는 `cv` 다.** PSPNet 을 쓰려면 `.env` 에서 `USE_PSPNET_ROI=true` 로 켠다.
+
+기본값을 `false` 로 둔 이유는 성능이다. CPU 에서 분할 한 번에 18~32초가 걸려
+추론 전체가 90초가 되는데, 그 대가로 얻는 것이 없다 — `EVALUATION.md` 11.3 에서
+다수 라벨 기준선을 넘지 못했다(top-1 은 표준오차 안, top-3 는 기준선 아래).
+GPU(T4 급)가 붙으면 2~4초가 되므로 그때 켠다.
 
 ```yaml
     environment:
       # ...기존 유지...
-      USE_PSPNET_ROI: ${USE_PSPNET_ROI:-true}
+      USE_PSPNET_ROI: ${USE_PSPNET_ROI:-false}
       # 아래 마운트 경로와 반드시 같아야 한다. 비워두면 어댑터가
       # ~/.torchxrayvision/models_data 를 보는데 컨테이너의 그 경로는 비어 있다.
       PSPNET_CACHE_DIR: /root/.torchxrayvision/models_data

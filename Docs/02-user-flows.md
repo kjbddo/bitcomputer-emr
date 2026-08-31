@@ -100,7 +100,7 @@ sequenceDiagram
 
 ## 5. AI 처방 추천 및 검증 흐름
 
-처방 추천 버튼은 단순 추천 API 호출이 아니라 검증 job을 시작한다. 추천 후보, 저장 상병/처방, X-ray 추론, PubMed 근거를 함께 검토한다.
+처방 추천 버튼은 단순 추천 API 호출이 아니라 검증 job을 시작한다. 추천 후보, 저장 상병/처방, X-ray 추론을 함께 검토한다.
 
 ```mermaid
 sequenceDiagram
@@ -111,7 +111,6 @@ sequenceDiagram
   participant RMQ as RabbitMQ
   participant Val as ValidationAgent
   participant Rx as Prescription API
-  participant PubMed as PubMed
 
   Doctor->>FE: AI 처방 추천 클릭
   FE->>Spring: POST /api/agent/prescription/recommend
@@ -128,11 +127,10 @@ sequenceDiagram
   RMQ-->>Val: request consume
   Val->>RMQ: RUNNING 결과 발행
   Val->>Rx: Prescription Finder 호출
-  Val->>PubMed: Pubmed Loader 검색
   Val->>RMQ: DONE/FAILED 결과 발행
   RMQ-->>Spring: result consume
   Spring->>DB: validation_result 저장, validation_job DONE
-  FE-->>Doctor: 검증 요약, 이유, PubMed 근거, 추천 처방 표시
+  FE-->>Doctor: 검증 요약, 이유, 그래프 근거, 추천 처방 표시
 ```
 
 상태:
