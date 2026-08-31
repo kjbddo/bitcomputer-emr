@@ -98,14 +98,15 @@ cd infra && docker compose build frontend spring-boot validation-agent certifica
 | `services/xray-rag` | `xraygraph` |
 | `services/radiology-legacy` | `flask-radiology` |
 
-### 어떤 이미지가 뒤졌는지 판별한다
+### 어떤 이미지가 낡았는지 판별한다
 
-위 표는 "무엇을 고쳤을 때 무엇을 빌드하나" 를 답하지만, **지금 무엇이 뒤져
-있는지** 는 답하지 않는다. 며칠 작업한 뒤에는 그걸 기억으로 판단할 수 없다.
+위 표는 "무엇을 고쳤을 때 무엇을 빌드하나" 를 답하지만, **지금 어느 이미지가
+코드보다 낡았는지** 는 답하지 않는다. 며칠 작업한 뒤에는 그걸 기억으로 판단할
+수 없다.
 
-실제로 이 저장소에서 `certificate-api` 이미지가 커밋 11개 뒤진 채로 돌고 있던
-적이 있다. 컨테이너는 healthy 였고 화면도 떴다 — 낡은 코드가 정상 동작했을
-뿐이다. 이런 것은 증상으로 드러나지 않는다.
+실제로 이 저장소에서 `certificate-api` 이미지가 커밋 11개만큼 낡은 채로 돌고
+있던 적이 있다. 컨테이너는 healthy 였고 화면도 떴다 — 낡은 코드가 정상
+동작했을 뿐이다. 이런 것은 증상으로 드러나지 않는다.
 
 이미지 빌드 시각 이후에 그 서비스의 코드가 바뀌었는지 본다:
 
@@ -114,7 +115,7 @@ check() {
   img="$1"; path="$2"
   t=$(docker images --format '{{.Repository}}	{{.CreatedAt}}'       | awk -F'	' -v i="$img" '$1==i{print substr($2,1,19)}')
   n=$(git log --oneline --since="$t" -- $path | wc -l)
-  if [ "$n" -gt 0 ]; then echo "  재빌드  $img  (이미지 $t / 이후 커밋 $n)"
+  if [ "$n" -gt 0 ]; then echo "  재빌드?  $img  (이미지 $t / 이후 커밋 $n)"
   else echo "  최신    $img"; fi
 }
 check infra-frontend          apps/web
@@ -127,12 +128,33 @@ check infra-xraygraph         services/xray-rag
 check infra-flask-radiology   services/radiology-legacy
 ```
 
-주의할 점 둘.
+주의할 점 셋.
 
 - **빌드 컨텍스트 기준이지 서비스 이름 기준이 아니다.** `certificate-api` 와
   `prescription-api` 는 같은 `services/prescription` 을 쓰므로 둘 다 대상이 된다
 - **`infra/docker-compose.yml` 변경은 여기 안 잡힌다.** 그건 빌드가 아니라
   기동에 쓰이므로 재빌드가 아니라 `docker compose up -d` 로 반영한다(§4)
+- **"재빌드?" 가 곧 "낡았다" 는 아니다.** 아래를 읽는다
+
+#### 이 판별은 커밋 시각을 보지, 내용을 보지 않는다
+
+빌드는 **워크트리** 를 굽고 비교는 **커밋 시각** 으로 한다. 그래서 코드를 고친
+뒤 커밋하기 전에 빌드하면, 그 내용이 이미 이미지에 들어 있는데도 나중에 찍힌
+커밋 시각이 이미지 시각보다 늦어 "재빌드?" 로 잡힌다.
+
+실제로 그런 적이 있다. `llm-gateway` 와 `xraygraph` 이미지를 19:36 에 구웠고 그
+변경이 21:11 에 병합됐는데, 위 스크립트는 둘을 재빌드 대상으로 표시했다. 내용은
+이미 들어 있었다.
+
+**틀리는 방향은 안전하다** — 필요 없는 재빌드를 부를 뿐, 낡은 이미지를 최신이라고
+말하지는 않는다. 재빌드가 아까우면 내용을 직접 확인한다:
+
+```bash
+# 그 변경으로 생긴 심볼이 이미지 안에 실제로 있는지 본다
+docker compose exec -T llm-gateway python -c   "import inspect; from app.metering import build_record;    print('failure_detail' in inspect.signature(build_record).parameters)"
+```
+
+확실하지 않으면 그냥 다시 빌드한다. 캐시가 따뜻하면 대부분 몇십 초다.
 
 ### 빌드하면서 띄우기
 
