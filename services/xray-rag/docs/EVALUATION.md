@@ -601,3 +601,85 @@ for s in 0 1 2 3 5 7; do
 done
 # 6개 metrics.json 의 "metrics" 블록이 전부 같아야 한다.
 ```
+
+---
+
+## 11. PSPNet ROI 재측정 (2026-08-31)
+
+§9 에서 고전 CV 분할로 ROI 가설을 시험해 기각했다. 그때 남긴 한계가 "분할 품질이 타원보다 낫다 수준"이었으므로, 학습된 해부학 분할로 바꿔 다시 잰다.
+
+`app/ml/pspnet_roi_model.py` — [TorchXRayVision](https://github.com/mlmed/torchxrayvision) 의 ChestX-Det PSPNet. 14개 해부 구조 중 Left Lung / Right Lung / Heart 를 쓴다. 라이브러리와 ChestX-Det 둘 다 Apache-2.0 으로 확인했다.
+
+202건 전량 재시드 후 측정(`roiMaskVersion=pspnet_chestxdet_v1`).
+
+### 11.1 지표 — 기준선을 옆에 둔다
+
+기준선: top-1 **0.8014** / top-3 **0.9795**
+
+| metric | 타원(§8) | CV(§9) | **PSPNet** | 기준선 |
+|---|---:|---:|---:|---:|
+| Top-1 any-match | 0.8151 | 0.8151 | **0.8219** | 0.8014 |
+| Top-3 any-match | 0.9658 | 0.9726 | **0.9726** | 0.9795 |
+| Hit@1 | 0.6986 | 0.6644 | 0.6507 | - |
+| MRR | 0.8196 | 0.7866 | 0.7851 | - |
+| mAP | 0.7331 | 0.7033 | 0.7103 | - |
+
+**global-only 는 움직이지 않았다** — top-1 0.8014, top-3 0.9658, MRR 0.8472, mAP 0.7248, Hit@1 0.7534. §8·§9 와 소수점 넷째 자리까지 동일하다. ROI 를 쓰지 않는 경로이므로 이것이 정상이고, 움직였다면 무언가 잘못된 것이다.
+
+§10 이후 이 숫자들은 `PYTHONHASHSEED` 에 의존하지 않는다.
+
+### 11.2 처음으로 소수 라벨이 0.000 에서 벗어났다
+
+| disease | n | r@1 (§9 CV) | r@1 (PSPNet) | r@3 (PSPNet) |
+|---|---:|---:|---:|---:|
+| lung_opacity | 117 | 0.667 | 0.632 | 1.000 |
+| enlarged_cardiomediastinum | 105 | 0.371 | **0.419** | 0.952 |
+| atelectasis | 75 | 0.000 | **0.013** | 0.400 |
+| cardiomegaly | 66 | 0.000 | **0.015** | 0.227 |
+| pleural_effusion | 64 | 0.000 | 0.000 | 0.406 |
+| edema | 42 | 0.000 | 0.000 | 0.048 |
+| consolidation 이하 | ≤32 | 0.000 | 0.000 | 0.000 |
+
+**`atelectasis` 와 `cardiomegaly` 가 recall@1 에서 0 이 아닌 값을 처음 냈다.** §8·§9 를 통틀어 다수 라벨 둘을 뺀 아홉 라벨은 전부 0.000 이었다. 각각 1건씩이지만 방향은 처음 생겼다.
+
+`cardiomegaly` 가 움직인 것이 특히 그럴듯하다 — PSPNet 이 심장을 실제로 분할하는데, 타원과 CV 는 심장 위치를 추정했다.
+
+### 11.3 판정 — 사전 기준 미달
+
+설계 §5 의 사전 기준은 "다수 라벨 기준선을 넘거나, 아니면 서사에서 뺀다"였다. 숫자를 보고 무르지 않는다.
+
+- **top-1 은 기준선을 넘는다** — 0.8219 vs 0.8014, 146건 중 **3건** 차이다. 그런데 이 표본에서 이항 비율의 표준오차가 대략 `sqrt(0.8×0.2/146) ≈ 0.033` 이다. **+0.0205 는 1 표준오차 안이다.** 우연과 구분되지 않는다
+- **top-3 는 여전히 기준선 아래다** — 0.9726 vs 0.9795
+- Hit@1·MRR 은 global-only 보다 낮다. ROI 가중합이 상위 검색을 오히려 해친다
+
+**기준 미달이다. X-ray 검색 성능은 서사에서 뺀다.**
+
+### 11.4 그런데 §9 의 결론은 좁혀야 한다
+
+§9 는 "ROI 정합성은 병목이 아니다"라고 적고 후보를 둘로 좁혔다. 그 문장은 **너무 강했다.**
+
+분할 품질을 올리자 아홉 라벨 중 둘이 0 에서 움직였다. ROI 는 병목의 **전부가 아니지만 일부이기는 하다.** §9 가 그렇게 결론 낸 것은 CV 분할이 충분히 좋지 않아서였을 가능성이 있다.
+
+정확한 진술은 이것이다 — **ROI 품질을 타원 → 고전 CV → 학습된 분할로 두 단계 올리는 동안 지표는 기준선 근처에 머물렀다.** 세 후보 중 ROI 하나만으로는 설명되지 않는다는 것이 확인됐고, 나머지 둘(ImageNet 도메인 불일치 / reconstruction error 자체의 변별력)이 여전히 열려 있다.
+
+### 11.5 다음에 시험한다면
+
+가장 싼 것부터: **임베딩 backbone 을 흉부 X-ray 도메인 사전학습으로 바꾼다.** TorchXRayVision 이 분류기 backbone 도 제공하므로 DenseNet121-ImageNet 을 같은 라이브러리의 CXR 사전학습 가중치로 교체하는 것은 §8 의 교체와 같은 규모다.
+
+그것도 기준선을 못 넘으면 남는 설명은 하나다 — **reconstruction error 자체가 질환을 변별하지 못한다.** 그렇다면 이 접근의 전제가 틀린 것이고, 임베딩·ROI 를 무엇으로 바꿔도 한계가 같다.
+
+### 11.6 재현
+
+```bash
+cd services/xray-rag
+export ARANGO_HOST=localhost ARANGO_PORT=8529 ARANGO_USER=root
+export XRAY_ARANGO_DATABASE=xray_graph_db PYTHONIOENCODING=utf-8
+export ARANGO_PASSWORD="$(grep '^ARANGO_PASSWORD=' ../../infra/.env | cut -d= -f2-)"
+
+python scripts/eval_retrieval.py            # global-only
+python scripts/eval_retrieval.py --use-roi  # ROI 가중합
+```
+
+기준선 계산은 §8.5 의 명령을 쓴다. **지표를 기록할 때는 항상 기준선을 옆에 둔다.**
+
+PSPNet 가중치를 컨테이너에서 쓰려면 호스트 캐시 마운트가 필요하다 — `Docs/07-runbook-data-loading.md` §5.7 참조.
