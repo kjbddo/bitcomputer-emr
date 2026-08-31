@@ -79,7 +79,6 @@ flowchart TB
   Val --> Rx
   Val --> DDB
   Val --> GW
-  Val --> PubMed[PubMed API]
 
   Xray --> Arango
   Xray --> S3Data
@@ -138,7 +137,6 @@ sequenceDiagram
   participant MQ as Amazon MQ RabbitMQ
   participant Val as ValidationAgent Workers
   participant Rx as Prescription API
-  participant PubMed as PubMed API
   participant DDB as DynamoDB
 
   FE->>WAS: AI 처방 추천 클릭
@@ -148,7 +146,6 @@ sequenceDiagram
 
   MQ-->>Val: job consume
   Val->>Rx: 처방 후보 조회
-  Val->>PubMed: 근거 검색
   Val->>MQ: validation.prescription.result publish
   Val->>DDB: optional trace/audit 저장
 
@@ -205,7 +202,7 @@ AI 서비스는 부하 특성이 서로 다르므로 하나의 큰 인스턴스�
 | `xraygraph` | X-ray RAG/벡터/파일 산출물 | ECS EC2 또는 Fargate, 무거운 모델이면 GPU node | CPU/GPU, p95 latency |
 | `certificate-api` | LLM 외부 API 호출 중심 | Fargate 1~2 vCPU | RPS, 외부 API latency |
 | `prescription-api` | ArangoDB 조회 + LLM 호출 | Fargate 1~2 vCPU | RPS, Arango query latency |
-| `validation-agent` | RabbitMQ consumer, LLM/PubMed I/O 중심 | Fargate worker service | RabbitMQ queue depth |
+| `validation-agent` | RabbitMQ consumer, 결정론적 규칙 판정(모델 호출 없음) | Fargate worker service | RabbitMQ queue depth |
 | `llm-gateway` | 상류 LLM 프록시. I/O 대기 중심, 상태 없음 | Fargate 0.5~1 vCPU, 최소 2 tasks | 동시 인플라이트 요청, 상류 p95 latency |
 
 ValidationAgent scaling 예시:
@@ -351,7 +348,7 @@ flowchart TB
 |---|---|---|---|
 | Spring Boot WAS | CPU > 60%, p95 latency > 800ms, RequestCountPerTarget 증가 | CPU < 30%, latency 안정 | RDS connection 수 |
 | Web EC2 | CPU > 50~60%, RequestCountPerTarget 증가, p95 latency 증가 | CPU < 25~30%, latency 안정 | SSR 사용 여부, static cache hit |
-| ValidationAgent | request queue depth/task > 5~10, oldest message age 증가 | queue depth 0 지속 | 상류 LLM / PubMed rate limit |
+| ValidationAgent | request queue depth/task > 5~10, oldest message age 증가 | queue depth 0 지속 | 처방 RAG(prescription-api) 응답 지연 |
 | Prescription API | RPS, p95 latency, CPU | latency 안정 | ArangoDB query capacity, 상류 LLM quota |
 | Certificate API | RPS, p95 latency | latency 안정 | 상류 LLM quota |
 | LLM Gateway | 인플라이트 요청 수, 상류 p95 latency | 사용률 안정 | 상류 rate limit — 여기가 전체 LLM 트래픽의 병목 지점이다 |

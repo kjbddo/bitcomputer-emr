@@ -132,9 +132,19 @@ class Settings:
     # 사전학습 해부학 분할(ChestX-Det PSPNet, app.ml.pspnet_roi_model). ROI 어댑터
     # 우선순위는 pspnet > cv > mock 이고, 이 토글은 그 첫 번째를 "시도하라"는
     # 뜻일 뿐이다 - 실제로 올라왔는지는 factory.BuildResult.roi_status 가 답한다.
-    # 기본값이 true 인 이유: 이것이 이 서비스의 ROI 분할기이고, 실패해도 mock 이
-    # 아니라 cv 로 내려가며 그 사실이 WARNING 과 roi_status 에 남는다.
-    USE_PSPNET_ROI: bool = _bool(os.environ.get("USE_PSPNET_ROI"), True)
+    #
+    # **기본값은 False 다. docker-compose.yml / .env.example 과 같아야 한다.**
+    #
+    # 예전에는 여기만 True 였다. 그 결과: 컨테이너는 compose 기본값(false)으로
+    # cv 마스크로 질의하는데, **호스트에서 도는 적재 스크립트는 이 기본값을 읽어
+    # pspnet 으로 코퍼스를 만들었다.** 저장과 질의가 서로 다른 해부 기준 위에
+    # 놓이는데 양쪽 다 정상으로 보인다 - 런북대로 따라가기만 해도 그 상태가
+    # 만들어졌다.
+    #
+    # 기본값을 끄는 이유는 성능이다. CPU 에서 분할 한 번에 18~32초라 적재가
+    # 세 배 가까이 길어지는데(202건 기준 6분 -> 15분), EVALUATION.md 11.3 에서
+    # 다수 라벨 기준선을 넘지 못했다. GPU 가 붙으면 그때 켠다.
+    USE_PSPNET_ROI: bool = _bool(os.environ.get("USE_PSPNET_ROI"), False)
     # 가중치(273MB) 캐시 디렉터리. 비우면 torchxrayvision 기본값
     # (~/.torchxrayvision/models_data/)을 쓴다. 컨테이너는 호스트 캐시를
     # 마운트한 경로를 여기로 준다.
