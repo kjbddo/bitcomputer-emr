@@ -38,6 +38,7 @@ export default function AIReport({
   const [predictedDiseases, setPredictedDiseases] = useState<PredictedDisease[]>([]);
   const [warning, setWarning] = useState<string | null>(null);
   const [engineStatus, setEngineStatus] = useState<string | null>(null);
+  const [roiStatus, setRoiStatus] = useState<string | null>(null);
   const [uncertainty, setUncertainty] = useState<XrayUncertainty | null>(null);
   const [view, setView] = useState<XrayView>("PA");
   const [isLoading, setIsLoading] = useState(false);
@@ -117,6 +118,7 @@ export default function AIReport({
       setPredictedDiseases(getVisiblePredictedDiseases(response.predictedDiseases));
       setWarning(response.warning || null);
       setEngineStatus(response.engineStatus || null);
+      setRoiStatus(response.roiStatus || null);
       setUncertainty(response.uncertainty || null);
     } catch (err: unknown) {
       console.error("AI 분석 오류:", err);
@@ -229,6 +231,41 @@ export default function AIReport({
                     </>
                   )}
                 </span>
+              </div>
+            )}
+            {/*
+              ROI 분할 출처. engineStatus 와 또 다른 축이다.
+
+              경고는 두 경우만이다. "mock" 은 입력과 무관한 고정 타원이라 ROI별
+              통계와 임베딩이 영상에 대해 아무 말도 하지 않는다. 값이 없으면
+              어느 쪽인지 모르므로 fail-closed 로 같이 경고한다(GC-3).
+
+              "cv" 와 "pspnet" 은 경고하지 않고 이름만 남긴다. 둘 다 영상에 실제로
+              반응하는 분할이고, 현재 기본값이 cv 라 여기서 경고를 띄우면 모든
+              추론마다 발화해 아무도 읽지 않는 경고가 된다 — 그러면 정작 mock 으로
+              떨어진 순간을 구별할 수 없게 된다.
+            */}
+            {roiStatus !== "cv" && roiStatus !== "pspnet" ? (
+              <div role="status" className={styles.engineWarning}>
+                <Badge tone="warning">{roiStatus || "미확인"}</Badge>
+                <span>
+                  {roiStatus ? (
+                    <>
+                      병변 위치 분할이 <strong>{roiStatus}</strong> 입니다. 입력 영상에 반응하지
+                      않는 고정 영역이므로, 부위별 소견은 이 영상의 해부 구조와 무관합니다.
+                    </>
+                  ) : (
+                    <>
+                      병변 위치 분할기가 <strong>미확인</strong>입니다. 부위별 소견이 이 영상의
+                      해부 구조에서 나온 것인지 확인되지 않았습니다.
+                    </>
+                  )}
+                </span>
+              </div>
+            ) : (
+              <div className={styles.engineWarning}>
+                <Badge tone="neutral">{roiStatus}</Badge>
+                <span>부위별 소견은 {roiStatus} 분할이 잡은 영역을 기준으로 계산되었습니다.</span>
               </div>
             )}
             {/*

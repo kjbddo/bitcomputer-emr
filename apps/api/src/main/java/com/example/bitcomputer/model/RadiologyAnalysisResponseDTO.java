@@ -36,6 +36,20 @@ public class RadiologyAnalysisResponseDTO {
      */
     private Uncertainty uncertainty;
 
+    /**
+     * 어느 ROI 분할기가 실제로 구성됐는지: {@code pspnet} / {@code cv} /
+     * {@code mock} (services/xray-rag 의 {@code InferenceResponse.roiStatus}).
+     *
+     * <p>{@code engineStatus} 와 일부러 분리된 축이다. 검색의 기본 경로는 ROI
+     * 마스크를 쓰지 않으므로, ROI 가 mock 으로 내려가도 추론 엔진 자체는 real 일
+     * 수 있다. 둘을 한 값에 섞으면 어느 쪽이 내려간 것인지 알 수 없어진다.
+     *
+     * <p>여기서도 기본값을 두지 않는다. 상류가 안 주면 null 이고, 웹은 null 을
+     * "모른다"로 읽는다 — {@code "cv"} 같은 기본값을 넣으면 분할기가 고정
+     * 타원(mock)까지 떨어진 경우를 정상으로 보고하게 된다(GC-3 fail-closed).
+     */
+    private String roiStatus;
+
     @Data
     @NoArgsConstructor
     @AllArgsConstructor

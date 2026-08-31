@@ -33,6 +33,8 @@
 }
 
 .aiPreviewTextarea {
+  /* width 가 없으면 textarea 의 기본 cols 폭(약 180px)에 머문다. */
+  width: 100%;
   min-height: 220px;
 }
 

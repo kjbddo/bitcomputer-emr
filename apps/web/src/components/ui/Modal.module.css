@@ -1,4 +1,7 @@
+/* reset.css 의 `*{margin:0}` 이 <dialog> 의 UA 기본값 `margin:auto` 를 덮어
+   showModal() 로 열어도 화면 좌상단에 붙는다. UA 값을 되살려 중앙에 둔다. */
 .dialog {
+  margin: auto;
   padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);

@@ -1,6 +1,13 @@
 .container {
-  height: 540px;
-  flex: 0 0 520px;
+  /* .middleColumn(page.module.css)은 grid-template-rows: var(--panel-track,
+     1fr) auto 인 그리드다. 이 SECTION 이 그 그리드의 첫째(패널) 트랙을
+     차지하는 그리드 항목이라, 트랙 크기(기본 1fr = 열 높이를 그대로
+     채운다, resizePanel 로 줄이면 그 px 값)가 이 항목의 높이가 된다.
+     여기서 100%를 받아야 이 패널이 그 트랙 높이를 채운다 — 540px 로
+     못박으면 트랙이 그보다 높을 때 안에서 스크롤이 생긴다(사용자 보고,
+     브라우저 실측: 그리드 760px / 이 패널 540px / 내부 스크롤 483 vs 502).
+     단일 패널 열 높이 조절 도입 후에도 브라우저 실측으로 재확인함. */
+  height: 100%;
   margin-bottom: var(--space-4);
 }
 

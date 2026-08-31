@@ -56,6 +56,7 @@ class ServiceContainer:
             storage_heatmap=self.s_heatmap,
             engine_status=self.engine_status,
             embedding_version=self.embedding_version,
+            roi_status=self.roi_status,
             roi_mask_version=self.roi_mask_version,
         )
 

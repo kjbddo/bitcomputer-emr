@@ -87,3 +87,18 @@ table {
   --border-strong: var(--slate-400);
   color-scheme: light;
 }
+
+/*
+ * 대시보드 열/행 리사이즈 드래그 중 텍스트 선택을 막는다.
+ *
+ * ResizeHandle.tsx 는 document.body.classList 에 문자열 "isResizing" 을
+ * 직접 붙였다 뗀다(로컬 클래스가 아니다). 원래 ResizeHandle.module.css 에
+ * `:global(body.isResizing)` 로 있었는데, Next.js css-loader 가 로컬
+ * 토큰이 하나도 없는 규칙을 CSS module 안에서 "not pure" 로 막아 빌드가
+ * 깨졌다(스타일 자체는 유효한 CSS라 vitest/jsdom 테스트는 이 문제를 잡지
+ * 못했다). print-surface 와 같은 이유로 전역 스타일시트로 옮긴다.
+ */
+body.isResizing {
+  user-select: none;
+  cursor: grabbing;
+}
