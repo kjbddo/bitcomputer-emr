@@ -212,7 +212,6 @@ flowchart LR
   RxStart["/api/agent/prescription/recommend"] --> RMQ["RabbitMQ request queue"]
   RMQ --> Val["ValidationAgent"]
   Val --> RxApi["Prescription API"]
-  Val --> PubMed["PubMed API"]
   Val --> GW["llm-gateway"]
 
   DocGen["/api/agent/document/generate"] --> Cert["Certificate API"]
