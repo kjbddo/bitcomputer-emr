@@ -21,7 +21,8 @@ type Props = {
  * 드래그 전용 UI 는 접근성 관점에서 막힌 길이라 화살표 키도 받는다(spec §5.4).
  */
 export function ResizeHandle({ orientation, label, onDelta, keyStepPx = DEFAULT_KEY_STEP_PX }: Props) {
-  const lastRef = useRef<number | null>(null);
+  // 드래그를 시작한 포인터만 추적한다 — 다른 포인터의 move/up/cancel 은 무시해야 한다.
+  const activeRef = useRef<{ pointerId: number; last: number } | null>(null);
 
   // 드래그 도중 언마운트되면 body 클래스가 남는다.
   useEffect(() => () => document.body.classList.remove("isResizing"), []);
@@ -33,7 +34,7 @@ export function ResizeHandle({ orientation, label, onDelta, keyStepPx = DEFAULT_
 
   const handlePointerDown = useCallback(
     (e: PointerEvent<HTMLDivElement>) => {
-      lastRef.current = axisValue(e);
+      activeRef.current = { pointerId: e.pointerId, last: axisValue(e) };
       e.currentTarget.setPointerCapture?.(e.pointerId);
       document.body.classList.add("isResizing");
     },
@@ -42,18 +43,19 @@ export function ResizeHandle({ orientation, label, onDelta, keyStepPx = DEFAULT_
 
   const handlePointerMove = useCallback(
     (e: PointerEvent<HTMLDivElement>) => {
-      if (lastRef.current === null) return;
+      if (activeRef.current === null || activeRef.current.pointerId !== e.pointerId) return;
       const current = axisValue(e);
-      const delta = current - lastRef.current;
+      const delta = current - activeRef.current.last;
       if (delta === 0) return;
-      lastRef.current = current;
+      activeRef.current.last = current;
       onDelta(delta);
     },
     [axisValue, onDelta]
   );
 
   const endDrag = useCallback((e: PointerEvent<HTMLDivElement>) => {
-    lastRef.current = null;
+    if (activeRef.current === null || activeRef.current.pointerId !== e.pointerId) return;
+    activeRef.current = null;
     e.currentTarget.releasePointerCapture?.(e.pointerId);
     document.body.classList.remove("isResizing");
   }, []);

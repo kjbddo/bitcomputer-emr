@@ -28,7 +28,7 @@ describe("드래그", () => {
     expect(onDelta).toHaveBeenCalledWith(40);
   });
 
-  it("세로 핸들은 세로 이동량을 쓴다", () => {
+  it("가로 핸들은 세로 이동량을 쓴다", () => {
     const { handle, onDelta } = setup("horizontal");
     fireEvent.pointerDown(handle, { pointerId: 1, clientX: 0, clientY: 200 });
     fireEvent.pointerMove(handle, { pointerId: 1, clientX: 0, clientY: 170 });
@@ -49,6 +49,23 @@ describe("드래그", () => {
     fireEvent.pointerMove(handle, { pointerId: 1, clientX: 200 });
     expect(onDelta).not.toHaveBeenCalled();
   });
+
+  it("다른 포인터가 누르지 않고 움직이면 무시한다", () => {
+    const { handle, onDelta } = setup();
+    fireEvent.pointerDown(handle, { pointerId: 1, clientX: 100 });
+    onDelta.mockClear();
+    fireEvent.pointerMove(handle, { pointerId: 2, clientX: 140 });
+    expect(onDelta).not.toHaveBeenCalled();
+  });
+
+  it("다른 포인터가 떼어도 드래그 중인 포인터는 계속 반응한다", () => {
+    const { handle, onDelta } = setup();
+    fireEvent.pointerDown(handle, { pointerId: 1, clientX: 100 });
+    fireEvent.pointerUp(handle, { pointerId: 2, clientX: 100 });
+    onDelta.mockClear();
+    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 140 });
+    expect(onDelta).toHaveBeenCalledWith(40);
+  });
 });
 
 describe("키보드", () => {
@@ -60,7 +77,7 @@ describe("키보드", () => {
     expect(onDelta).toHaveBeenCalledWith(-10);
   });
 
-  it("세로 핸들은 위아래 화살표를 쓴다", () => {
+  it("가로 핸들은 위아래 화살표를 쓴다", () => {
     const { handle, onDelta } = setup("horizontal");
     fireEvent.keyDown(handle, { key: "ArrowDown" });
     expect(onDelta).toHaveBeenCalledWith(10);
