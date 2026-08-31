@@ -25,9 +25,15 @@
   overflow: auto;
 }
 
+/* 폴백값은 핸들이 렌더되지 않은 상태(패널 N개, 핸들 트랙 0개)의 모양이어야
+   한다. page.tsx 는 layout.enabled 일 때만 ResizeHandle 을 그리드 자식으로
+   렌더한다 — 비활성(뷰포트 1025px 미만, 하이드레이션 전, matchMedia 부재)이면
+   그리드 자식은 N 개인데 폴백 트랙이 2N-1 개(핸들 포함)면 자동 배치가 남는
+   패널을 핸들 몫 6px 트랙에 욱여넣는다. --col-tracks 변수는 활성 상태에서만
+   useResizableLayout 이 2N-1 트랙으로 채워 붙인다. */
 .contentGrid {
   display: grid;
-  grid-template-columns: var(--col-tracks, 300px 6px 1fr 6px 1fr);
+  grid-template-columns: var(--col-tracks, 300px 1fr 1fr);
   gap: var(--space-4);
   height: var(--grid-height, 100%);
   min-height: 600px;
@@ -35,7 +41,7 @@
 
 .contentGridClinic {
   display: grid;
-  grid-template-columns: var(--col-tracks, 300px 6px 1fr 6px 350px);
+  grid-template-columns: var(--col-tracks, 300px 1fr 350px);
   gap: var(--space-4);
   height: var(--grid-height, 100%);
   min-height: 600px;
@@ -100,7 +106,7 @@
 
 .contentGridCertificate {
   display: grid;
-  grid-template-columns: var(--col-tracks, 280px 6px 1fr 6px 1fr);
+  grid-template-columns: var(--col-tracks, 280px 1fr 1fr);
   gap: var(--space-4);
   height: var(--grid-height, 100%);
   min-height: 600px;
@@ -108,7 +114,7 @@
 
 .certificateCenterColumn {
   display: grid;
-  grid-template-rows: var(--row-tracks, 1fr 6px 1fr);
+  grid-template-rows: var(--row-tracks, 1fr 1fr);
   gap: var(--space-4);
   min-height: 0;
   height: 100%;
@@ -124,21 +130,21 @@
 
 .clinicMiddleColumn {
   display: grid;
-  grid-template-rows: var(--row-tracks, 1fr 6px 1fr 6px 1fr);
+  grid-template-rows: var(--row-tracks, 1fr 1fr 1fr);
   gap: var(--space-4);
   min-height: 0;
 }
 
 .clinicRightColumn {
   display: grid;
-  grid-template-rows: var(--row-tracks, 1fr 6px 1fr);
+  grid-template-rows: var(--row-tracks, 1fr 1fr);
   gap: var(--space-4);
   min-height: 0;
 }
 
 .leftColumn {
   display: grid;
-  grid-template-rows: var(--row-tracks, 1fr 6px 1fr);
+  grid-template-rows: var(--row-tracks, 1fr 1fr);
   gap: var(--space-4);
   min-height: 0;
 }
@@ -159,7 +165,7 @@
 
 .rightColumn {
   display: grid;
-  grid-template-rows: var(--row-tracks, 1fr 6px 1fr);
+  grid-template-rows: var(--row-tracks, 1fr 1fr);
   gap: var(--space-4);
   min-height: 0;
 }
