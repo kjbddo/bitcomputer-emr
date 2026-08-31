@@ -1,6 +1,10 @@
 .container {
-  height: 540px;
-  flex: 0 0 520px;
+  /* .middleColumn(page.module.css)은 내용 없는 빈 규칙이라 그리드 항목
+     기본값 stretch 를 그대로 물려받아 열 높이를 채운다. 여기서 100%를
+     받아야 이 패널도 그 높이를 채운다 — 540px 로 못박으면 열이 그보다
+     높을 때 안에서 스크롤이 생긴다(사용자 보고, 브라우저 실측: 그리드
+     760px / 이 패널 540px / 내부 스크롤 483 vs 502). */
+  height: 100%;
   margin-bottom: var(--space-4);
 }
 
