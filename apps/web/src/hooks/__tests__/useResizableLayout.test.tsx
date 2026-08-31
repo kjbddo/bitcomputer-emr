@@ -89,21 +89,22 @@ describe("조절", () => {
 
   // Task 1 리뷰에서 넘어온 결함: applyDelta 의 상한이 핸들 트랙이 먹는
   // 픽셀을 빼지 않는다. 진료실 columns = [300, null(middle), 350(right)] 는
-  // 핸들이 2개(HANDLE_TRACK_PX=6 씩, 총 12px)다. index=1 경계를 오른쪽
-  // 끝까지 밀면(delta 를 아주 크게 음수로 주면) right 트랙이 핸들 몫을
-  // 빼지 않은 상한(300px)까지 자라 버려, middle(1fr) 의 실제 남는 폭이
-  // 800 - 300(left) - 300(right) - 12(handle) = 188px 로 MIN_COLUMN_PX(200)
-  // 아래로 내려간다. 훅이 containerPx 에서 핸들 몫을 미리 빼고 넘겨야
-  // right 트랙 상한이 288px 로 줄어, middle 이 정확히 200px 로 클램프된다.
-  it("컨테이너 폭에서 핸들 트랙 몫을 미리 빼 1fr 열이 최소폭 밑으로 내려가지 않는다", () => {
+  // 핸들이 2개(HANDLE_TRACK_PX=6 씩, 총 12px)고, 그리드 항목 5개 사이에
+  // gap(16px)이 4개(64px) 낀다(C3 리뷰). index=1 경계를 오른쪽 끝까지
+  // 밀면(delta 를 아주 크게 음수로 주면) right 트랙이 핸들·gap 몫을 빼지
+  // 않은 상한까지 자라 버려 middle(1fr) 의 실제 남는 폭이 MIN_COLUMN_PX(200)
+  // 아래로 내려간다. 훅이 containerPx 에서 핸들 몫(12px)과 gap 몫(64px)을
+  // 미리 빼고 넘겨야 right 트랙 상한이 224px 로 줄어, middle 이 정확히
+  // 200px(그 이상은 못 내려감)로 클램프된다.
+  it("컨테이너 폭에서 핸들·gap 트랙 몫을 미리 빼 1fr 열이 최소폭 밑으로 내려가지 않는다", () => {
     const { result } = renderHook(() => useResizableLayout("진료실"));
     act(() => result.current.resizeColumn(1, -1000, 800));
     const columns = loadLayout("진료실").columns;
     const right = columns[2];
-    expect(right).toBe(288);
+    expect(right).toBe(224);
     const left = columns[0] as number;
-    const remainingForOneFr = 800 - left - (right as number) - 2 * 6; // 핸들 2개
-    expect(remainingForOneFr).toBeGreaterThanOrEqual(200);
+    const remainingForOneFr = 800 - left - (right as number) - 2 * 6 - 4 * 16; // 핸들 2개 + gap 4개
+    expect(remainingForOneFr).toBe(200);
   });
 });
 

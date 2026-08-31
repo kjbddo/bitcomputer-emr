@@ -33,9 +33,19 @@ export const RESIZE_MIN_VIEWPORT = 1025;
  * 항목이라 그만큼을 더 먹는다. 트랙 개수가 n 개면 핸들은 n-1 개이므로,
  * `applyDelta` 를 부르기 전에 그 몫을 미리 빼서 넘긴다 — `applyDelta`
  * 자체(Task 1, 18개 테스트로 이미 굳어짐)는 건드리지 않는다.
+ *
+ * 핸들 몫과 별개로 `gap` 몫도 빠져야 한다(C3 리뷰). 그리드는
+ * `gap: var(--space-4)` 인데 이 값은 16px 이다 — `GAP_PX` 는 그 값을
+ * 하드코딩한 것이므로 `--space-4` 가 바뀌면 이 상수도 같이 바꿔야 계산이
+ * 맞는다. 활성 상태의 그리드 항목 수는 패널 N 개 + 핸들 N-1 개 = 2N-1
+ * 개이므로 gap 은 그 사이 (2N-1)-1 = 2N-2 개다.
  */
+const GAP_PX = 16;
+
 function usablePx(containerPx: number, trackCount: number): number {
-  return containerPx - HANDLE_TRACK_PX * Math.max(0, trackCount - 1);
+  const handleCount = Math.max(0, trackCount - 1);
+  const gapCount = Math.max(0, 2 * trackCount - 2);
+  return containerPx - HANDLE_TRACK_PX * handleCount - GAP_PX * gapCount;
 }
 
 export function useResizableLayout(tab: TabId) {
@@ -66,14 +76,6 @@ export function useResizableLayout(tab: TabId) {
     return () => mq.removeEventListener("change", sync);
   }, []);
 
-  const commit = useCallback(
-    (next: LayoutState) => {
-      setState(next);
-      saveLayout(tab, next);
-    },
-    [tab]
-  );
-
   // resizeColumn/resizeRow 는 setState 를 함수형 업데이터로 부른다 — 드래그
   // 중 pointermove 가 렌더 사이사이에 연속으로 들어올 수 있어(ResizeHandle),
   // 클로저에 갇힌 state 를 참조하면 일부 델타가 씹힌다.
@@ -100,7 +102,7 @@ export function useResizableLayout(tab: TabId) {
         ),
       }));
     },
-    [tab]
+    []
   );
 
   const resizeRow = useCallback(
@@ -127,7 +129,7 @@ export function useResizableLayout(tab: TabId) {
         };
       });
     },
-    [tab]
+    []
   );
 
   const resizeHeight = useCallback(
@@ -138,7 +140,7 @@ export function useResizableLayout(tab: TabId) {
         height: applyHeightDelta(prev.height, deltaPx, viewportPx),
       }));
     },
-    [tab]
+    []
   );
 
   useEffect(() => {
@@ -179,6 +181,5 @@ export function useResizableLayout(tab: TabId) {
     resizeRow,
     resizeHeight,
     reset,
-    commit,
   };
 }
