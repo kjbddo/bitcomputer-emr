@@ -12,8 +12,12 @@ const HTTP_CLIENT_DEFAULT_TIMEOUT_MS = 15000;
 // 관계가 깨지면 이 테스트가 즉시 실패하게 한다.
 const JAVA_REST_TEMPLATE_READ_TIMEOUT_MS = 180000;
 
-// 컨테이너 안에서 실측한 추론 시간(2026-08-31, CPU 14코어):
-//   SQUID 이상탐지 ~4초 + DenseNet 임베딩 ~8초 + 나머지 ~0.3초 = 10~15초
+// 컨테이너 안에서 실측한 추론 시간의 상한(2026-08-31, CPU 14코어).
+//
+// CPU 전용 torch 로 바꾼 뒤 3~4초다. 그런데 이 상수는 15000 을 유지한다 -
+// 타임아웃을 실측에 바싹 붙이면 CPU 부하나 모델 로드가 겹치는 순간 다시
+// 경계에 걸린다. 첫 요청은 모델 로드까지 포함해 26초가 걸린 적도 있다.
+// 이 값은 "최소한 이만큼은 견뎌야 한다" 는 하한이지 현재 성능의 기록이 아니다.
 const MEASURED_INFERENCE_MS = 15000;
 
 describe("RADIOLOGY_ANALYZE_TIMEOUT_MS", () => {

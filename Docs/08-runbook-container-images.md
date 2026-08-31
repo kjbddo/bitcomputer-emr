@@ -46,14 +46,18 @@ done
 | `prescription-api` | `services/prescription` | `python:3.11-slim` | 8001 | 565MB |
 | `certificate-api` | `services/prescription` | `python:3.11-slim` | 5001 | 565MB |
 | `validation-agent` | `services/validation-agent` | `python:3.11-slim` | 8002 | 366MB |
-| `xraygraph` | `services/xray-rag` | `python:3.11-slim` | 8000 | 8.13GB |
-| `flask-radiology` | `services/radiology-legacy` | `python:3.11-slim` | 5000 | 9.69GB |
+| `xraygraph` | `services/xray-rag` | `python:3.11-slim` | 8000 | 2.30GB |
+| `flask-radiology` | `services/radiology-legacy` | `python:3.11-slim` | 5000 | 3.18GB |
 
 두 가지가 눈에 띈다.
 
 **`certificate-api` 와 `prescription-api` 는 같은 Dockerfile·같은 컨텍스트에서 나온다.** 구분은 compose 의 `command:` 뿐이다 — 하나는 `certificate_api:app` 을 5001 에, 다른 하나는 `prescription_api:app` 을 8001 에 띄운다. 즉 **565MB 짜리 같은 내용의 이미지가 두 개** 존재한다. `services/prescription` 의 코드를 고치면 **둘 다** 다시 빌드해야 한다. 한쪽만 빌드하는 실수가 잦다.
 
-**`xraygraph` 와 `flask-radiology` 가 전체의 대부분이다.** 둘이 17.8GB 로, 빌드 이미지 총량의 83% 다. 원인은 `torch` + `torchvision` 이다. 이 둘을 건드리지 않았다면 빌드 대상에서 빼는 것만으로 빌드 시간과 디스크가 크게 줄어든다.
+**`xraygraph` 와 `flask-radiology` 가 여전히 가장 크다.** 둘이 5.5GB 로, 원인은 `torch` + `torchvision` 이다. 이 둘을 건드리지 않았다면 빌드 대상에서 빼는 것만으로 빌드 시간과 디스크가 줄어든다.
+
+전에는 둘이 **17.8GB** 였다. PyPI 기본 `torch` 가 CUDA 빌드라 nvidia 런타임 묶음(2.7GB)을 함께 끌고 왔기 때문이다 — 이 스택은 GPU 를 쓰지 않는데도 그랬다. 두 `requirements.txt` 를 PyTorch CPU 인덱스로 고정해 13GB 를 줄였다.
+
+부수 효과로 **X-ray 추론이 10~15초에서 3~4초가 됐다.** CUDA 빌드는 CPU 로 돌 때도 CUDA 초기화를 거치고 커널 선택 경로가 다르다. GPU 로 옮기는 날에는 두 파일 상단의 인덱스 두 줄을 지우면 되고, 그때 다시 이 용량을 치른다.
 
 ### 받아오는 것
 
@@ -276,7 +280,7 @@ docker push "$REGISTRY/bitcomputer/prescription-api:$TAG"
 주의할 것:
 
 - **`certificate-api` 와 `prescription-api` 는 내용이 같은 별개 이미지다.** 하나의 리포지터리에 올리고 ECS 태스크 정의에서 `command` 로 나누면 저장 비용과 push 시간이 절반이 된다. compose 가 둘로 나눠 빌드한다고 해서 레지스트리에서도 나눠야 하는 것은 아니다.
-- **`xraygraph`·`flask-radiology` 는 각각 8~10GB 다.** push 시간과 ECR 저장 비용이 다른 이미지들과 자릿수가 다르다. torch 를 CPU 전용 휠로 바꾸거나 멀티스테이지로 빌드 의존을 걷어내면 크게 줄어든다.
+- **`xraygraph`·`flask-radiology` 는 각각 2~3GB 다.** 여전히 다른 이미지보다 크지만 CPU 전용 휠로 바꾼 뒤로는 자릿수가 같아졌다. 더 줄이려면 멀티스테이지로 빌드 의존(`radiology-legacy` 의 PyG 컴파일러 217MB)을 걷어내는 방법이 남아 있다.
 - **이미지에 비밀값을 굽지 않는다.** 자격증명은 전부 런타임 환경변수로 들어간다(§4). ECS 에서는 Secrets Manager 또는 SSM Parameter Store 를 태스크 정의에 연결한다.
 
 ---
@@ -286,9 +290,9 @@ docker push "$REGISTRY/bitcomputer/prescription-api:$TAG"
 이 스택은 디스크를 많이 쓴다. 현재 측정값:
 
 ```
-Images          26.73GB
-Build Cache     25.44GB  (회수 가능 21.3GB)
-Local Volumes    3.58GB
+Images          14.39GB
+Build Cache     12.87GB
+Local Volumes    3.57GB
 ```
 
 **빌드 캐시가 이미지 총량과 맞먹는다.** 안전하게 회수하는 순서:

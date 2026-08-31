@@ -1,3 +1,17 @@
+# PyTorch 는 CPU 전용 휠로 받는다.
+#
+# PyPI 기본 `torch` 는 CUDA 빌드라 nvidia 런타임 묶음을 함께 끌고 온다. 이
+# 스택은 GPU 를 쓰지 않는데(추론은 전부 CPU) 이미지 안에서 nvidia/ 만 2.7GB,
+# torch 1.2GB 를 차지했다 - pip 레이어 하나가 5.64GB 였다.
+#
+# 아래 두 줄이 하는 일: torch 계열은 PyTorch CPU 인덱스에서, 나머지는 PyPI
+# 에서 받는다. `--extra-index-url` 한 줄만 쓰면 두 인덱스의 같은 버전 중
+# 어느 쪽이 뽑힐지 결정론적이지 않아, CPU 를 의도했는데 CUDA 가 들어올 수 있다.
+#
+# GPU 로 옮기는 날에는 이 두 줄을 지우면 된다(그리고 그때 다시 5GB 를 치른다).
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
+
 # 핵심 런타임
 fastapi>=0.110,<1.0
 uvicorn[standard]>=0.27,<1.0
