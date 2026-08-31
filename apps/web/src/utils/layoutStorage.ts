@@ -159,6 +159,20 @@ export function toTrackList(tracks: Track[], min: number): string {
  * 이웃은 1fr" 경로가 그대로 처리해, a 를 키우면 b 가 줄어드는 기대대로
  * 동작한다.
  */
+/**
+ * 고정 트랙 하나의 상한을 구할 때, 그 트랙을 제외한 나머지 `1fr`(null) 이웃들이
+ * 각자 최소 `min` 픽셀을 요구한다는 사실을 반영한다.
+ *
+ * `excludeIndex` 는 지금 값을 정하고 있는 트랙 자신의 자리다. 그 트랙은 이 시점에
+ * 아직 `null` 로 남아 있을 수 있으므로(물질화 직후 등) 셀 때 제외해야 한다 — 자기 자신을
+ * 위한 공간은 상한 계산의 다른 항(`min` 하한)이 이미 보장하므로 여기서 또 빼면 이중으로
+ * 빼게 된다.
+ */
+function reservedForOtherNullTracks(tracks: Track[], excludeIndex: number, min: number): number {
+  const otherNullCount = tracks.filter((t, i) => i !== excludeIndex && t === null).length;
+  return otherNullCount * min;
+}
+
 export function applyDelta(
   tracks: Track[],
   index: number,
@@ -199,7 +213,8 @@ export function applyDelta(
       (sum, t, i) => (i === index || t === null ? sum : sum + t),
       0
     );
-    const upper = Math.max(min, containerPx - others - min);
+    const reserved = reservedForOtherNullTracks(next, index, min);
+    const upper = Math.max(min, containerPx - others - reserved);
     next[index] = Math.max(min, Math.min(upper, a + deltaPx));
     return next;
   }
@@ -209,7 +224,8 @@ export function applyDelta(
     (sum, t, i) => (i === index + 1 || t === null ? sum : sum + t),
     0
   );
-  const upper = Math.max(min, containerPx - others - min);
+  const reserved = reservedForOtherNullTracks(next, index + 1, min);
+  const upper = Math.max(min, containerPx - others - reserved);
   next[index + 1] = Math.max(min, Math.min(upper, (b as number) - deltaPx));
   return next;
 }

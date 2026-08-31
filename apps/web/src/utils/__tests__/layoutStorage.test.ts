@@ -177,4 +177,37 @@ describe("applyDelta", () => {
       expect(result).toEqual([MIN_COLUMN_PX, null]);
     });
   });
+
+  describe("null 이웃이 둘 이상이면 상한이 그만큼 낮아진다", () => {
+    // 컨테이너(usable) 784, min 200. [300, null, null] 에서 index 0 을 밀면
+    // 이웃(null)이 두 개(인덱스 1, 2) 이므로 상한은 784 - 0(고정 트랙 합) - 400
+    // (null 이웃 2개 * min) = 384 여야 한다. 옛 코드는 이웃이 하나라고 가정하고
+    // "- min" 만 빼서 584 까지 올라갔다 — 렌더된 값(384)과 저장값(최대 584)이
+    // 어긋나 되돌릴 때 먹통 구간이 생겼다.
+    it("이웃이 1fr 이면 그 트랙만 바뀐다 분기: 재현 사례 — 상한이 384 를 넘지 않는다", () => {
+      const result = applyDelta([300, null, null], 0, 1000, MIN_COLUMN_PX, 784);
+      expect(result).toEqual([384, null, null]);
+    });
+
+    it("null 이웃이 하나뿐이면 기존과 같다 — 상한 584", () => {
+      const result = applyDelta([300, null], 0, 1000, MIN_COLUMN_PX, 784);
+      expect(result).toEqual([584, null]);
+    });
+
+    it("null 이웃이 0개(나머지가 전부 고정)면 상한 계산에 개입할 필요가 없다 — 옆 트랙 자신의 min 클램프가 이미 막는다", () => {
+      // [null, 200, 200] 에서 index 0 을 크게 밀면(양의 delta) index 1 이 자기
+      // min(200) 아래로는 못 내려가므로, 그 자리에서 이미 멈춘다. 이때 null 인
+      // 첫 트랙의 실제 렌더 폭은 784 - 200 - 200 = 384(= containerPx - 400) 를
+      // 넘지 않는다.
+      const result = applyDelta([null, 200, 200], 0, 1000, MIN_COLUMN_PX, 784);
+      expect(result).toEqual([null, 200, 200]);
+    });
+
+    it("마지막 분기(a 가 1fr, b 가 고정)도 같은 상한을 쓴다", () => {
+      // [null, 300, null] 에서 index 0 을 밀어 b(인덱스 1)를 키우면, 다른 null
+      // 이웃(인덱스 2)도 min 을 요구하므로 상한은 784 - 0 - 400 = 384 다.
+      const result = applyDelta([null, 300, null], 0, -1000, MIN_COLUMN_PX, 784);
+      expect(result).toEqual([null, 384, null]);
+    });
+  });
 });
