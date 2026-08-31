@@ -17,6 +17,11 @@ import {
 } from "@/services/history";
 import { HttpError } from "@/services/http/types";
 import { graphLookupNotice, type GraphLookup } from "@/utils/graphLookupNotice";
+import {
+  renalGateNotice,
+  renalItemNotice,
+  type RenalGate,
+} from "@/utils/renalGateNotice";
 import { llmStatusNotice } from "@/utils/llmStatus";
 import {
   itemVerificationOutcome,
@@ -180,6 +185,10 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
   // 이 파일 밖이나 게이트 밖에서 aiVerification 을 읽기 시작하면 그 논증이
   // 깨지고, 검증된 적 없는 추천이 검증된 것처럼 보이는 결함이 되돌아온다.
   const [aiVerification, setAiVerification] = useState<Verification | null | undefined>(undefined);
+  // 신기능 금기 관문. aiVerification 과 같은 생명주기이고 같은 게이트 안에서만
+  // 읽는다. 다른 서비스(prescription_api)의 판정이므로 aiVerification 과 합치지
+  // 않는다 — 축이 다르다(추적 가능성 vs 임상 금기).
+  const [aiRenalGate, setAiRenalGate] = useState<RenalGate | null | undefined>(undefined);
   // 처방 상세 선택으로 스왑된 랭크의 집합. rank 는 표의 "행 위치"고, aiVerification
   // 은 그 위치에 원래 앉아있던 처방을 검사한 결과다. 스왑 후에도 rank 는 그대로라
   // `prescription[${rank}]` 로 조회하면 새 처방이 옛 검사 결과를 뒤집어쓴다 —
@@ -209,6 +218,7 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
       setAiRecommendations([]);
       setAiLlmStatus(undefined);
       setAiVerification(undefined);
+      setAiRenalGate(undefined);
       setSwappedRanks(new Set());
       setSelectedRecommendationKeys([]);
       setPrescriptionPicker(null);
@@ -222,6 +232,7 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
     setAiRecommendations([]);
     setAiLlmStatus(undefined);
     setAiVerification(undefined);
+    setAiRenalGate(undefined);
     setSwappedRanks(new Set());
     setSelectedRecommendationKeys([]);
     setPrescriptionPicker(null);
@@ -344,6 +355,9 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
       // 항상 미검증으로 굳는다(최종 리뷰 C1). prescription_api 자신의 항목 단위
       // 검증인 result.prescriptionVerification 을 읽어야 한다.
       setAiVerification(result.prescriptionVerification);
+      // 관문 결과가 없으면 undefined 가 남고 renalGateNotice 가 "관문 미확인"을
+      // 낸다. 여기서 빈 객체로 채우면 "확인 못 함"이 "해당 없음"이 된다(GC-3).
+      setAiRenalGate(result.prescriptionRenalGate);
       setSwappedRanks(new Set());
       setSelectedRecommendationKeys(recommended.map(recommendationKey));
       setAiSessionHistoryId(historyId);
@@ -458,6 +472,17 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
       return itemVerificationOutcome(aiVerification, `prescription[${rank}]`);
     },
     [aiVerification, swappedRanks]
+  );
+
+  // 스왑된 rank 는 관문 판정도 무효다 — 그 판정은 지금 화면의 약이 아니라
+  // 스왑되기 전 약을 대조한 결과다. 검증 축에서 하는 것과 정확히 같은 이유이고,
+  // 여기서 빼먹으면 금기 약으로 바꿔 넣어도 옛 `clear` 가 그대로 남는다.
+  const getRenalItemNotice = useCallback(
+    (rank: number) => {
+      if (swappedRanks.has(rank)) return { label: "신기능 미확인", tone: "warning" as const };
+      return renalItemNotice(aiRenalGate, rank);
+    },
+    [aiRenalGate, swappedRanks]
   );
 
   // 응답 단위 판정(최종 리뷰 M1). schema_top3 는 target="response" 라
@@ -809,6 +834,29 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
                 선택 처방 반영
               </Button>
             </div>
+            {(() => {
+              const notice = renalGateNotice(aiRenalGate);
+              if (!notice) return null;
+              return (
+                <div className={styles.renalBanner} data-tone={notice.tone}>
+                  <div className={styles.renalBannerHead}>
+                    <span className={styles.modalVerificationLabel}>신기능</span>
+                    <Badge tone={notice.tone}>{notice.label}</Badge>
+                  </div>
+                  {/* 환자 축. 판정 축과 한 줄로 합치지 않는다 — "신기능 저하인데
+                      이 약들은 표 밖" 과 "신기능을 못 읽어서 판정 불가" 가 같아
+                      보이면 이 관문이 있는 이유가 사라진다. */}
+                  <p className={styles.renalBannerPatient}>{notice.patientLine}</p>
+                  {notice.lines.length > 0 && (
+                    <ul>
+                      {notice.lines.map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              );
+            })()}
             <Table dense>
               <thead>
                 <tr>
@@ -839,6 +887,10 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
                             outcome === "flagged" ? "flagged" : "skipped"
                           );
                           return <Badge tone={notice!.tone}>{notice!.label}</Badge>;
+                        })()}
+                        {(() => {
+                          const notice = getRenalItemNotice(item.rank);
+                          return notice ? <Badge tone={notice.tone}>{notice.label}</Badge> : null;
                         })()}
                       </td>
                       <td>

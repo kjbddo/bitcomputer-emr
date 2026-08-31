@@ -79,3 +79,9 @@ class ValidationAgentResponse(BaseModel):
     # 그 경우 "폴백으로 만들었다" 고 말하면 하지 않은 주장을 하는 것이다(GC-2).
     # 웹은 None 을 "출처 미확인" 으로 렌더한다(GC-3).
     prescriptionLlmStatus: Optional[str] = None
+    # prescription_api 의 신기능 금기 관문(services/prescription/renal_gate.py).
+    # {status, renalStatus, renalEvidence, items[], undeterminedReason} 를 그대로
+    # 들고 온다. status 는 warn / clear / unknown 셋이고 이 셋은 서로 무너지지
+    # 않는다 — clear 는 "이 표의 범위 안에서 해당 없음" 이지 "안전함" 이
+    # 아니다. 조회를 안 했으면 None 이고, 그것은 clear 가 아니다(GC-3).
+    prescriptionRenalGate: Optional[Dict[str, Any]] = None

@@ -2,6 +2,7 @@ import { get, post, put } from "./http/client";
 import type { PaginatedResponse } from "@/types/api";
 import type { HistoryEntry } from "@/types/history";
 import type { Verification } from "@/utils/verificationNotice";
+import type { RenalGate } from "@/utils/renalGateNotice";
 
 export interface HistoryPayload {
   employeeId: number;
@@ -121,6 +122,12 @@ export interface ValidationJobResponse {
     // 결정을 어떻게 냈는지)와는 다른 서비스, 다른 축이다 — 처방 표의 모델 출처
     // 배지는 이 값을 읽어야 한다(F-H3). 값이 없으면 "미확인"으로 렌더한다.
     prescriptionLlmStatus?: string | null;
+    // prescription_api 의 신기능 금기 관문(services/prescription/renal_gate.py).
+    // status(warn|clear|unknown) 는 판정 축이고 renalStatus(impaired|suspected|
+    // undetermined) 는 환자 축이다 — 둘을 합치면 "신기능 저하인데 이 약들은 표
+    // 밖" 과 "신기능을 못 읽어서 판정 불가" 가 같아 보인다. 값이 없으면
+    // "관문 미확인" 으로 렌더한다(GC-3).
+    prescriptionRenalGate?: RenalGate | null;
     [key: string]: unknown;
   } | null;
   lastError?: string | null;

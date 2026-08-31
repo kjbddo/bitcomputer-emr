@@ -258,6 +258,9 @@ def prescription_finder(
             "recommendationLlmStatus": "fallback",
             "recommendationVerification": None,
             "graphLookup": _graph_lookup_failed(str(exc)),
+            # 관문을 돌리지 못했다. clear 를 지어내면 "확인해 보니 해당 없음" 이
+            # 되어 이 부품이 있는 이유가 사라진다(renal_gate.py 모듈 주석).
+            "recommendationRenalGate": None,
         }
 
     graph_lookup = _graph_lookup_loaded(body)
@@ -278,6 +281,11 @@ def prescription_finder(
         # prescription_api 자신의 검증 결과. 이 스텝의 근거 정보이지
         # 검증 에이전트 자신의 판정이 아니다 — 최상위에 섞지 않는다.
         "recommendationVerification": body.get("verification"),
+        # prescription_api 의 신기능 금기 관문(services/prescription/renal_gate.py).
+        # warn / clear / unknown 세 결과와 항목별 evidence 를 그대로 넘긴다 —
+        # 여기서 요약하거나 outcome 만 뽑으면 `clear` 가 뜻하는 "이 표의 범위
+        # 안에서 해당 없음" 이 "안전함" 으로 바뀐다.
+        "recommendationRenalGate": body.get("renalGate"),
     }
 
 

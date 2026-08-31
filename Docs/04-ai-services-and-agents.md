@@ -154,6 +154,51 @@ prescription_api /recommend   used_arango_top_rx, arango_top_rx_count, ...
 - 회귀 테스트: `services/validation-agent/tests/test_graph_lookup_visibility.py`,
   `apps/web/src/utils/__tests__/graphLookupNotice.test.ts`
 
+### 4.5 신기능 금기 관문 배선
+
+`services/prescription/renal_gate.py` 가 내는 판정을 화면까지 잇는다. 관문 자체는 PR #14 가
+만들었고, 여기서는 그 결과가 Java·웹까지 살아서 가는 경로와 표시 규칙만 정한다.
+
+```
+prescription_api /recommend   renalGate {status, renalStatus, renalEvidence,
+                                         items[], undeterminedReason}
+  → prescription_finder       recommendationRenalGate (원본 그대로, 요약하지 않음)
+  → run_validation_agent      최상위 prescriptionRenalGate
+  → ValidationAgentResponse   prescriptionRenalGate (Java DTO)
+  → Diagnosis.tsx             추천 목록 위 배너 + 행별 배지
+```
+
+`prescriptionVerification` / `prescriptionLlmStatus` 와 정확히 같은 자리, 같은 원칙이다 —
+prescription_api 자신의 판정이므로 validation-agent 자신의 판정(`verification`, `llmStatus`)과
+병합하지 않는다.
+
+**축이 둘이고, 합치면 이 관문이 무의미해진다.**
+
+| 축 | 값 | 뜻 |
+|---|---|---|
+| `renalStatus` | `impaired` / `suspected` / `undetermined` | 환자 상태. 자유텍스트 노트 파싱 결과 |
+| `status`, `items[].outcome` | `warn` / `clear` / `unknown` | 판정. 그 약이 신배설 금기 표 안에 있는가 |
+
+노트 파싱 실패는 item outcome 이 아니라 **`renalStatus="undetermined"`** 로 나타난다. 그래서
+`renalStatus=undetermined` 인데 항목이 전부 `clear` 인 조합이 실재하고, 그때의 `clear` 는
+"금기 없음"을 뜻하지 않는다. 화면이 `renalStatus` 를 빼고 outcome 만 렌더하면 정확히 그
+오독이 생긴다.
+
+- `clear` 를 환자 근거로 내는 경로는 파이썬에 없다. 자유텍스트가 "신장 정상"이라고 말해
+  주지 않기 때문이다. **완전히 깨끗한 상태가 없으므로** 관문 결과가 있으면 배너를 항상
+  띄운다 — `llmStatus`/`verification` 처럼 "정상이면 무표시" 하지 않고 tone 으로만 가른다.
+- `items[].evidence` 는 표의 좁은 범위를 문장으로 들고 다닌다(예: "신배설 금기 표(11개
+  성분)에 없는 성분입니다 — 이 표의 범위 안에서 해당 없음"). 버리고 outcome 만 렌더하면
+  그 한정이 사라져 "안전함"으로 읽힌다. 배너가 evidence 원문을 그대로 보여준다.
+- 관문 결과가 없으면(`null`) "관문 미확인"이다. `clear` 로 접지 않는다(GC-3).
+- **스왑된 rank 는 관문 판정도 무효다.** 그 판정은 지금 화면의 약이 아니라 스왑되기 전
+  약을 대조한 결과다 — 검증 축이 이미 지키는 규칙과 같고, 빠뜨리면 금기 약으로 바꿔 넣어도
+  옛 `clear` 가 그대로 남는다.
+- 회귀 테스트: `services/validation-agent/tests/test_renal_gate_relay.py`,
+  `apps/api/.../ValidationAgentResponseTest`,
+  `apps/web/src/utils/__tests__/renalGateNotice.test.ts`,
+  `apps/web/src/components/__tests__/Diagnosis.test.tsx`
+
 ## 5. Certificate API
 
 Certificate API는 Spring이 MySQL에서 모은 환자/진료/상병/처방 데이터를 받아 진단서 소견 문장을 생성한다.
@@ -257,6 +302,7 @@ URL(`LLM_GATEWAY_BASE_URL`)만 안다.
 - `validation.pubmedEvidence`: PubMed 논문 근거
 - `validation.pubmedEvidenceSummary`: 초록 요약
 - `validation.graphLookup`: ArangoDB 처방 그래프 조회 결과. 후보 조회 단계를 돌지 않았으면 `null` 이고, 그 "확인 못 함"은 "0건"과 다른 상태다 (§4.4)
+- `prescriptionRenalGate`: prescription_api 의 신기능 금기 관문. 최상위 별도 필드다 — `verification`(이 에이전트 자신의 판정)과 병합하지 않는다 (§4.5)
 
 ## 7. AI 서비스 간 관계
 

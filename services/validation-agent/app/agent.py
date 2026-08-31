@@ -238,6 +238,10 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
     # prescriptionVerification 과 정확히 같은 이유, 같은 방식이다(F-H3).
     # 후보 조회가 아예 없었으면 None 그대로 둔다(GC-2/GC-3).
     response_payload["prescriptionLlmStatus"] = state.get("prescription_llm_status")
+    # prescription_api 의 신기능 금기 관문. 위 verification / llmStatus 와 정확히
+    # 같은 이유로 최상위 별도 필드다 — 다른 서비스의 판정을 이 에이전트의 판정에
+    # 병합하지 않는다(최종 리뷰 C1). 후보 조회가 없었으면 None 이다(GC-2/GC-3).
+    response_payload["prescriptionRenalGate"] = state.get("renal_gate")
     return ValidationAgentResponse(**response_payload)
 
 
@@ -354,6 +358,9 @@ def _invoke_prescription_finder(
         # ArangoDB 처방 그래프 조회 결과(F-M6). 키가 없으면 None 이 남아 "확인
         # 못 함" 으로 렌더된다 — "0건" 이라고 주장하지 않는다(GC-3).
         state["graph_lookup"] = observation.get("graphLookup")
+        # 신기능 금기 관문. 값이 없으면 None 이 남고 웹은 "확인 못 함" 으로
+        # 렌더한다 — 관문의 clear(표 범위 밖) 와 다른 상태다(설계 §3.3).
+        state["renal_gate"] = observation.get("recommendationRenalGate")
     return observation if isinstance(observation, dict) else {"status": "UNKNOWN", "raw": observation}
 
 
