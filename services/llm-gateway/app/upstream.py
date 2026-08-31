@@ -1,6 +1,10 @@
-"""상류(OpenAI API) 호출과 재시도.
+"""상류 호출과 재시도.
 
-도메인 판단을 하지 않는다. 일시적 실패를 재시도하고, 끝내 실패하면
+상류가 어디이고 어떻게 인증하는지는 **모른다.** 그것은 제공자가 조립한
+UpstreamRequest 안에 이미 들어 있고, 이 모듈은 그것을 그대로 보낼 뿐이다.
+그래서 제공자를 늘려도 여기는 바뀌지 않는다.
+
+도메인 판단도 하지 않는다. 일시적 실패를 재시도하고, 끝내 실패하면
 타입이 있는 에러를 올린다. 저하시킬지 실패시킬지는 서비스가 정한다(spec §6.1).
 """
 from __future__ import annotations
@@ -8,6 +12,8 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable, Dict, Tuple
 
 import httpx
+
+from app.providers.base import UpstreamRequest
 
 # 재시도해서 결과가 달라질 수 있는 상태코드만 넣는다.
 # 4xx(429 제외)는 요청 자체가 잘못된 것이라 재시도해도 같다.
@@ -34,9 +40,7 @@ def _backoff_seconds(attempt: int) -> float:
 async def call_upstream(
     client: httpx.AsyncClient,
     *,
-    url: str,
-    api_key: str,
-    payload: Dict[str, Any],
+    request: UpstreamRequest,
     max_retries: int,
     sleep: SleepFn,
 ) -> Tuple[Dict[str, Any], int]:
@@ -48,8 +52,7 @@ async def call_upstream(
     Raises:
         UpstreamError: 재시도 상한까지 실패했거나 재시도 대상이 아닌 실패.
     """
-    # 헤더는 매 시도마다 새로 만든다. 에러 메시지에 절대 싣지 않는다(GC-7).
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    # request.headers 는 자격증명을 담는다. 에러 메시지에 절대 싣지 않는다(GC-7).
     attempts = 0
     last_status: int | None = None
     last_detail = ""
@@ -57,7 +60,9 @@ async def call_upstream(
     while True:
         attempts += 1
         try:
-            response = await client.post(url, headers=headers, json=payload)
+            response = await client.post(
+                request.url, headers=dict(request.headers), json=request.body
+            )
         except httpx.HTTPError as exc:
             last_status = None
             last_detail = f"connection error: {type(exc).__name__}"
