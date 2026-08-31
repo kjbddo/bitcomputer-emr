@@ -280,7 +280,7 @@ describe("검증 이유 목록의 스텝별 출처 표시", () => {
   it("source 가 llm 인 스텝에는 출처 표시가 붙지 않는다", async () => {
     mockJobWithTrace("job-trace-3", [
       {
-        action: "PubMed 요약",
+        action: "처방 후보 조회",
         observation: { status: "LOADED", evidence: ["근거 C"] },
         source: "llm",
       },
@@ -291,9 +291,9 @@ describe("검증 이유 목록의 스텝별 출처 표시", () => {
 
     const dialog = await screen.findByRole("dialog");
     expect(
-      await within(dialog).findByText("PubMed 요약: LOADED - 근거 C")
+      await within(dialog).findByText("처방 후보 조회: LOADED - 근거 C")
     ).toBeInTheDocument();
-    expect(within(dialog).queryByText(/PubMed 요약 \(/)).toBeNull();
+    expect(within(dialog).queryByText(/처방 후보 조회 \(/)).toBeNull();
   });
 
   // source 가 없거나 계약 밖이면 모델 추론과 구분되지 않는다. 이 브랜치의 다른

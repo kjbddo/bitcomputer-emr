@@ -50,18 +50,15 @@ def test_stub_provider_never_calls_the_gateway(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "stub")
     monkeypatch.setenv("LLM_GATEWAY_BASE_URL", "http://dummy-gateway.invalid")
     monkeypatch.setattr(agent, "create_llm", exploding_llm)
-    monkeypatch.setattr(agent, "pubmed_loader", _NoResultPubmedLoader())
     monkeypatch.setattr(agent, "prescription_finder", _NoCandidateFinder())
 
     response = agent.run_validation_agent(ValidationAgentRequest(historyId=1, symptoms="기침"))
 
     assert calls["n"] == 0
-    assert response.llmStatus == "stub"
-
-
-class _NoResultPubmedLoader:
-    def invoke(self, payload=None):
-        return {"status": "NO_RESULT", "evidence": ["PubMed 검색 결과 없음"], "articles": []}
+    # 이 파이프라인은 모델을 부르는 자리가 없어졌다. stub 모드든 아니든 호출이
+    # 0 이므로 "rule" 이다 — stub 은 "스텁 응답을 받았다" 는 뜻이라 받은 적이
+    # 없는 지금 그렇게 보고하면 없는 응답을 있다고 말하는 셈이다.
+    assert response.llmStatus == "rule"
 
 
 class _NoCandidateFinder:

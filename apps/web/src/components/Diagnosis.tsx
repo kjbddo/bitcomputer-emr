@@ -144,31 +144,6 @@ function extractValidationReasons(job: ValidationJobResponse | null): string[] {
   return Array.from(new Set(reasons.filter(Boolean))).slice(0, 6);
 }
 
-function extractPubmedReferences(job: ValidationJobResponse | null): string[] {
-  const validation = job?.result?.validation;
-  const pubmedEvidence =
-    validation && typeof validation === "object" && Array.isArray(validation.pubmedEvidence)
-      ? validation.pubmedEvidence
-      : [];
-  const summary =
-    validation && typeof validation === "object"
-      ? asText(validation.pubmedEvidenceSummary)
-      : "";
-
-  const references = pubmedEvidence.slice(0, 3).flatMap((article) => {
-    if (!article || typeof article !== "object") return [];
-    const row = article as Record<string, unknown>;
-    const title = asText(row.title);
-    const pmid = asText(row.pmid);
-    const source = asText(row.source);
-    const pubdate = asText(row.pubdate);
-    const abstractSnippet = asText(row.abstractSnippet);
-    if (!title) return [];
-    const meta = [source, pubdate, pmid ? `PMID ${pmid}` : ""].filter(Boolean).join(", ");
-    return [`${title}${meta ? ` (${meta})` : ""}${abstractSnippet ? ` - 초록: ${abstractSnippet}` : ""}`];
-  });
-  return summary ? [`근거 요약: ${summary}`, ...references] : references;
-}
 
 export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHistoryUpdated }: DiagnosisProps) {
   const { diseases, diagnoses, prescriptionFeedback, addDiagnosis, removeDiagnosis, clearDiagnoses, setPrescriptionFeedback, clearPrescriptionFeedback } = useMedicalSelection();
@@ -612,7 +587,6 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
   }, [addDiagnosis, aiRecommendations, aiSessionHistoryDiagnoseId, aiSessionHistoryId, selectedRecommendationKeys, setPrescriptionFeedback]);
 
   const validationReasons = extractValidationReasons(validationModal);
-  const pubmedReferences = extractPubmedReferences(validationModal);
   // 검증 결과가 아직 없는 동안(PENDING/RUNNING)에는 "그래프 근거 미확인" 을
   // 띄우지 않는다 — 아직 조회할 차례가 오지 않은 것이지 확인에 실패한 것이
   // 아니다. 결과가 도착한 뒤부터 세 상태를 구분해 표시한다.
@@ -693,16 +667,6 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
                 <ul>
                   {graphNotice.lines.map((line) => (
                     <li key={line}>{line}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {pubmedReferences.length > 0 && (
-              <div className={styles.modalReferences}>
-                <strong>PubMed 참고 근거</strong>
-                <ul>
-                  {pubmedReferences.map((reference) => (
-                    <li key={reference}>{reference}</li>
                   ))}
                 </ul>
               </div>

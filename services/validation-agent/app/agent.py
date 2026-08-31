@@ -10,10 +10,10 @@ FINALIZE 가 아니라 `max_iterations` 소진이었으며, 관측값이 다음 
 이 이미 갖고 있던 바로 그 순서:
 
     X-ray Result Loader -> Disease Validator -> Prescription Validator
-      -> Pubmed Loader -> Prescription Finder -> Rule-based Finalize
+      -> Prescription Finder -> Rule-based Finalize
 
-모델은 두 자리에서만 쓴다(gateway.py 참조): PubMed 질의 생성과 근거 요약.
-그 둘만 `ModelCallLedger` 에 기록되고, `llmStatus` 는 그 장부에서만 나온다.
+모델은 이 파이프라인에서 쓰지 않는다. `llmStatus` 는 `ModelCallLedger` 에서 나오고,
+이 실행에서 성사된 모델 호출이 없으면 그 사실이 그대로 보고된다.
 
 부수 효과 두 가지를 기록해 둔다.
 - 페이로드가 전부 state 에서 조립되므로, 모델의 `actionInput` 이 X-ray 관측값을
@@ -21,9 +21,6 @@ FINALIZE 가 아니라 `max_iterations` 소진이었으며, 관측값이 다음 
 - Prescription Validator 가 후보 처방이 아니라 **저장 처방** 을 받는다(F-H6).
   옛 코드는 `candidate_prescriptions or saved_prescriptions` 로 후보를 우선해,
   "저장 처방이 상병과 맞는가" 를 묻는 도구가 방금 자기가 만든 추천을 검사했다.
-- PubMed 조회가 `overallStatus == "PASS"` 게이팅 없이 항상 돈다(고정 순서의
-  결과다). 문헌이 가장 필요한 WARNING/CRITICAL 응답에서 근거 검사가 구조적으로
-  꺼져 있던 상태(F-H5)가 이 순서에서는 성립하지 않는다.
 """
 from __future__ import annotations
 
@@ -31,7 +28,6 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-from . import pubmed
 from .deadline import JobDeadline
 from .finalize import (
     normalize_final_result,
@@ -41,7 +37,6 @@ from .finalize import (
 from .gateway import ModelCallLedger, create_llm, resolve_llm_status
 from .llm_provider import resolve_provider
 from .models import ValidationAgentRequest, ValidationAgentResponse
-from .pubmed import format_article
 from .state import ValidationState
 from .trace import (
     downgrade_by_payload_source,
@@ -53,7 +48,6 @@ from .tools import (
     disease_validator,
     prescription_finder,
     prescription_validator,
-    pubmed_loader,
     xray_result_loader,
 )
 from .verification import verify_validation
@@ -77,14 +71,11 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
         "saved_prescriptions": request.savedPrescriptions,
         "xray_inference": request.xrayInference,
         "candidate_prescriptions": [],
-        "pubmed_articles": [],
         "finder_candidates": [],
         "prescription_verification": None,
         "prescription_llm_status": None,
     }
     trace: List[Dict[str, Any]] = []
-    pubmed_evidence: List[Dict[str, Any]] = []
-    pubmed_queries: List[str] = []
 
     # --- 1. X-ray 추론 결과 로드 -------------------------------------------
     if _budget_ok(deadline, trace, 1, "X-ray Result Loader", "X-ray 추론 결과 로드"):
@@ -125,27 +116,17 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
     interim = rule_based_finalize(state)
     interim_reason = str(interim.get("reason") or interim.get("summary") or "")
 
-    # --- 4. PubMed 근거 ----------------------------------------------------
-    if _budget_ok(deadline, trace, 4, "Pubmed Loader", "PubMed 근거 조회"):
-        pubmed_evidence.extend(
-            _load_pubmed_evidence(trace, state, interim_reason, pubmed_queries, ledger, provider)
-        )
-
-    # --- 5. 처방 후보 조회 --------------------------------------------------
-    if _budget_ok(deadline, trace, 5, "Prescription Finder", "처방 후보 조회"):
-        query_context = ", ".join(pubmed_queries[-2:]) or pubmed.build_query(state, interim_reason)
+    # --- 4. 처방 후보 조회 --------------------------------------------------
+    if _budget_ok(deadline, trace, 4, "Prescription Finder", "처방 후보 조회"):
         finder_result = _invoke_prescription_finder(
             trace,
-            thought(5, "기존 처방 RAG 에서 참고 처방 후보를 조회한다."),
+            thought(4, "기존 처방 RAG 에서 참고 처방 후보를 조회한다."),
             {
                 "patient_id": str(
                     (state.get("patient_summary") or {}).get("patientId") or request.patientId or ""
                 ),
                 "diseases": state.get("saved_diseases", []),
-                "symptoms": (
-                    f"{state.get('symptoms') or ''}\n검증 사유: {interim_reason}\n"
-                    f"PubMed query: {query_context}"
-                ),
+                "symptoms": f"{state.get('symptoms') or ''}\n검증 사유: {interim_reason}",
             },
             state,
         )
@@ -153,12 +134,12 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
         if candidates_from_finder:
             state["candidate_prescriptions"] = normalize_prescription_candidates(candidates_from_finder)
 
-    # --- 6. 규칙 기반 판정 --------------------------------------------------
+    # --- 5. 규칙 기반 판정 --------------------------------------------------
     final_result = dict(rule_based_finalize(state))
     final_overall = str(final_result.get("overallStatus") or "NEEDS_REVIEW").upper()
     trace_step(
         trace, "Rule-based Finalize",
-        thought(6, "수집된 관측값으로 결정론적 규칙이 최종 판정을 만든다."),
+        thought(5, "수집된 관측값으로 결정론적 규칙이 최종 판정을 만든다."),
         {},
         {
             "status": "FINALIZED",
@@ -170,28 +151,6 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
         },
         "rule",
     )
-
-    # PubMed 근거 요약. 모델 호출 2/2 — 근거가 하나도 없으면 호출 자체가 없다.
-    pubmed_evidence_summary, summary_source = pubmed.summarize_evidence(
-        state, pubmed_evidence, final_overall, ledger, create_llm, provider
-    )
-    if pubmed_evidence_summary:
-        checks = final_result.get("checks") if isinstance(final_result.get("checks"), list) else []
-        # 규칙 기반 문자열 조합 요약을 모델이 쓴 것처럼 보이게 하지 않는다.
-        summary_label = "PubMed 근거 요약" if summary_source == "llm" else "PubMed 근거 요약(규칙 기반)"
-        checks.append({
-            "type": "PUBMED_EVIDENCE",
-            "status": "REFERENCE",
-            "message": f"{summary_label}: {pubmed_evidence_summary}",
-            "evidence": [
-                format_article(article, include_abstract=True)
-                for article in pubmed_evidence[:3]
-            ],
-            "relatedDiseases": state.get("saved_diseases", []),
-            "relatedPrescriptions": state.get("candidate_prescriptions") or state.get("saved_prescriptions", []),
-            "recommendedAction": "논문 초록 기반 참고 근거이므로 의료진이 환자 상태와 원문을 함께 확인하세요.",
-        })
-        final_result["checks"] = checks
 
     graph_lookup = state.get("graph_lookup")
     graph_check = _graph_lookup_check(state, graph_lookup)
@@ -210,9 +169,6 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
             "diseaseValidation": state.get("disease_check") or {},
             "prescriptionValidation": state.get("prescription_check") or {},
             "xrayInference": state.get("xray_inference"),
-            "pubmedEvidence": pubmed_evidence,
-            "pubmedQueries": pubmed_queries,
-            "pubmedEvidenceSummary": pubmed_evidence_summary,
             # 후보 조회 단계를 돌지 않았으면 None 이다. "확인 못 함" 은 "0건" 과
             # 다른 상태이므로 빈 dict 로 채우지 않는다(GC-3, 설계 문서 §3.2).
             "graphLookup": graph_lookup,
@@ -222,8 +178,6 @@ def run_validation_agent(request: ValidationAgentRequest) -> ValidationAgentResp
         # 상류 서비스가 보고한 출처는 여기 들어오지 않는다.
         "llmStatus": resolve_llm_status(ledger.sources),
     })
-    if pubmed_evidence and final_overall != "PASS":
-        final_result["reason"] = _with_pubmed_reason(str(final_result.get("reason") or ""), pubmed_evidence)
     # normalize_final_result 는 알려진 키만 남기는 새 dict 를 만들어 돌려주므로
     # (임의 키를 그대로 통과시키지 않는다), verification 은 정규화 이후에 얹는다.
     response_payload = normalize_final_result(final_result)
@@ -365,95 +319,18 @@ def _invoke_prescription_finder(
 
 
 # ---------------------------------------------------------------------------
-# PubMed 조회
-# ---------------------------------------------------------------------------
-
-def _load_pubmed_evidence(
-    trace: List[Dict[str, Any]],
-    state: ValidationState,
-    reason: str,
-    pubmed_queries: List[str],
-    ledger: ModelCallLedger,
-    provider: str,
-) -> List[Dict[str, Any]]:
-    """모델 질의를 먼저, 규칙 빌더 질의를 뒤에 시도하고 첫 성공에서 멈춘다.
-
-    이 재시도 목록이 리뷰가 관측한 유일한 "관측이 다음 행동을 바꾼" 지점이다
-    (§5.3) — 그리고 그것은 루프가 아니라 여기 있었다. 옛 루프는 0건이라는
-    사실을 보지도 못했다.
-
-    스텝의 `source` 는 **이번에 실제로 검색에 쓰인 질의문 하나** 를 기준으로
-    정한다: 모델이 만든 질의면 "llm", 규칙 빌더 질의면 "rule"(모델 호출이
-    실패했다면 "fallback"). 배치 단위로 판정하면, 모델 질의가 0건을 내고
-    사전 질의가 성공한 스텝까지 "llm" 으로 찍힌다.
-    """
-    llm_queries, query_source = pubmed.generate_queries_with_llm(
-        state, reason, ledger, create_llm, provider
-    )
-    candidates = pubmed.build_query_candidates(state, reason, llm_queries)
-
-    max_attempts = int(os.environ.get("VALIDATION_PUBMED_MAX_QUERY_ATTEMPTS", "4"))
-    articles: List[Dict[str, Any]] = []
-    for index, query in enumerate(candidates[:max_attempts], start=1):
-        if not query or query in pubmed_queries:
-            continue
-        pubmed_queries.append(query)
-        if query in llm_queries:
-            step_source = "llm"
-            origin = "모델이 생성한 영어 질의"
-        else:
-            # 모델 호출이 실패해서 여기로 떨어졌는지, 애초에 모델을 안 쓰는
-            # 경로였는지를 구분해서 표기한다.
-            step_source = query_source if query_source in {"stub", "fallback"} else "rule"
-            origin = "규칙 기반 질의 빌더"
-        observation = invoke_tool(
-            trace, "Pubmed Loader",
-            thought(4, f"PubMed 검색 시도 {index} — 검색어 출처: {origin}."),
-            {"query": query, "max_results": 3},
-            pubmed_loader,
-            source=step_source,
-        )
-        raw_articles = observation.get("articles") or []
-        # 검증기(app.verification) 대조 기준은 관측값 원본이다(spec §4.1).
-        # dedupe 는 표시용 가공이므로 여기에 쌓는 것은 원본이어야 한다.
-        state.setdefault("pubmed_articles", []).extend(raw_articles)
-        articles.extend(raw_articles)
-        if articles:
-            break
-    return pubmed.dedupe_articles(articles)
-
-
-def _with_pubmed_reason(reason: str, pubmed_evidence: List[Dict[str, Any]]) -> str:
-    evidence_lines = []
-    for article in pubmed_evidence[:3]:
-        citation = format_article(article, include_abstract=True)
-        if not citation:
-            continue
-        evidence_lines.append(citation)
-
-    if not evidence_lines:
-        return reason
-
-    pubmed_reason = "PubMed 근거 후보: " + " / ".join(evidence_lines)
-    if reason:
-        return f"{reason} {pubmed_reason}"
-    return pubmed_reason
-
-
-# ---------------------------------------------------------------------------
 # 검증
 # ---------------------------------------------------------------------------
 
 def _safe_verify(state: Any, response_payload: Dict[str, Any]) -> Dict[str, Any]:
     """검증을 돌리되 본 응답을 실패시키지 않는다(GC-4).
 
-    반드시 도구 관측값 원본(state["pubmed_articles"] / state["finder_candidates"])을
+    반드시 도구 관측값 원본(state["finder_candidates"])을
     넘긴다 — state["candidate_prescriptions"] 처럼 응답에 그대로 실리는 정규화값을
     넘기면 응답이 자기 자신과 비교돼 어떤 입력으로도 flagged 가 나올 수 없다.
     """
     try:
         return verify_validation(
-            pubmed_articles=state.get("pubmed_articles") or [],
             finder_candidates=state.get("finder_candidates") or [],
             response_dict=response_payload,
         ).to_dict()

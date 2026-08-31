@@ -48,6 +48,7 @@ def build_record(
     settings: Settings,
     execution: ExecutionFacts,
     upstream_status: Optional[int] = None,
+    failure_detail: Optional[str] = None,
 ) -> Dict[str, Any]:
     """요청 한 건의 계측 레코드를 만든다.
 
@@ -58,6 +59,13 @@ def build_record(
 
     upstreamStatus 는 실패의 성격을 가른다 — Bedrock API 키 만료는 401/403 으로
     나타나므로 이 값이 없으면 만료를 일반 장애와 구별할 수 없다.
+
+    failure_detail 은 upstreamStatus 가 없을 때 남는 유일한 단서다. 상류에
+    닿지도 못한 실패(DNS, 연결 거부, 타임아웃)는 status 가 None 이라, 이것이
+    없으면 레코드가 "실패했다"고만 말하고 왜인지는 말하지 않는다 — 운영자가
+    타임아웃과 네트워크 단절을 구별할 방법이 사라진다. 상류 본문은 여기 싣지
+    않는다(GC-7): 예외 타입과 상태 코드까지만이고, 본문은 upstream.py 에서
+    이미 300자로 잘려 온다.
     """
     input_tokens = _coerce_token_count(usage.input_raw)
     output_tokens = _coerce_token_count(usage.output_raw)
@@ -80,6 +88,7 @@ def build_record(
         "attempts": attempts,
         "outcome": outcome,
         "upstreamStatus": upstream_status,
+        "failureDetail": failure_detail,
         "paramNotes": param_notes,
         "estimatedCostUsd": round(cost, 6),
     }

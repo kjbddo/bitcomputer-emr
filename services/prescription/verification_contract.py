@@ -23,7 +23,7 @@ VerificationStatus = Literal["passed", "flagged", "skipped"]
 # 형식이 맞다는 것과 근거가 있다는 것은 다른 말이다.
 #
 # trace_step_has_observation 이 여기 든 이유: 그것은 "스텝에 관측값이 있나"만
-# 보고 조회 데이터와 대조하지 않는다. 근거 검사로 집계하면, PubMed 도 finder 도
+# 보고 조회 데이터와 대조하지 않는다. 근거 검사로 집계하면, finder 가
 # 아무것도 못 가져온 응답이 트레이스만 멀쩡하면 "passed" 가 된다.
 #
 # candidates_from_finder 가 여기 든 이유(최종 리뷰 C2): validation-agent 의
@@ -34,7 +34,7 @@ VerificationStatus = Literal["passed", "flagged", "skipped"]
 # 공집합이라 flagged 가 나올 수 없고, 응답이 자기 자신과 비교되는 "발화할 수
 # 없는 검사"가 된다(제거된 dosage_verbatim 과 같은 부류). 그런데 skipped 가
 # 아니라 늘 ok 를 내므로, 근거 검사로 집계하면 다른 근거 검사가 전부
-# skipped(트레이스도 PubMed 인용도 없음)여도 이 ok 하나로 "passed" 가 나가
+# skipped(대조할 조회 데이터가 없음)여도 이 ok 하나로 "passed" 가 나가
 # GC-2 가 실질적으로 뚫린다. 검사 자체와 malformed/코드없음 탐지는 남긴다 —
 # 미래에 정규화 로직이 바뀌어 두 값이 실제로 갈라지는 회귀는 여전히 잡아야
 # 하기 때문이다. 다만 그 ok 는 "형식이 안 깨졌다"는 신호일 뿐 "조회 데이터와

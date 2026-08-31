@@ -1,7 +1,7 @@
 """LLM provider 선택 (ValidationAgent).
 
 `stub` 은 게이트웨이를 한 번도 부르지 않는 경로다. 이 서비스가 모델을 쓰는
-자리는 PubMed 질의 생성과 근거 요약 둘뿐이고(gateway.py), stub 모드에서는
+자리는 현재 없고(gateway.py 참조), stub 모드에서는
 그 둘이 규칙 기반 대체물로 대체되며 `llmStatus` 가 "stub" 이 된다.
 
 옛 `stub_tool_decision(iteration)` 은 ReAct 도구 선택 루프에 결정론적 순서를

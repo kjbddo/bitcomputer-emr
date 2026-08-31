@@ -277,7 +277,7 @@ curl http://localhost:5001/health
 2. Spring이 `validation_job`을 `PENDING`으로 생성
 3. Spring이 RabbitMQ `validation.prescription.request` queue에 job 메시지 발행
 4. `validation-agent`가 메시지를 소비하고 `RUNNING` 상태 이벤트 발행
-5. ValidationAgent가 `X-ray Result Loader` → `Disease Validator` → `Prescription Validator` → `Pubmed Loader` → `Prescription Finder` 순서로 고정 파이프라인 수행 (모델은 PubMed 질의 생성과 근거 요약에만 쓴다)
+5. ValidationAgent가 `X-ray Result Loader` → `Disease Validator` → `Prescription Validator` → `Prescription Finder` 순서로 고정 파이프라인 수행 (이 파이프라인은 모델을 호출하지 않는다)
 6. 규칙 기반 최종 판정(`rule_based_finalize`) 후 structured JSON result 생성. 도구 선택 루프가 없으므로 "최대 반복 횟수" 라는 종료 조건도 없다 — 각 단계 앞에서 전역 예산(`VALIDATION_JOB_BUDGET_SECONDS`)만 확인하고, 소진되면 남은 단계를 건너뛰고 지금까지의 관측값으로 마감한다
 7. ValidationAgent가 RabbitMQ `validation.prescription.result` queue에 결과 발행
 8. Spring consumer가 `validation_result`에 결과 JSON을 저장하고 `validation_job`을 `DONE` 또는 `FAILED`로 갱신
@@ -305,7 +305,6 @@ RabbitMQ queue:
 - `history_diagnose`: 저장 처방
 - `radiology_report`: 같은 환자의 최신 완료 영상판독 결과
 - `prescription-api`: 불일치 가능성이 있을 때 참고 처방 후보 조회
-- PubMed API: 처방 근거 검색 보조
 
 헬스 체크:
 
@@ -348,7 +347,7 @@ curl "http://localhost:8080/api/validation-jobs/{jobId}"
 | `VALIDATION_RABBITMQ_REQUEST_QUEUE` | `validation.prescription.request` | 추천/검증 요청 queue |
 | `VALIDATION_RABBITMQ_RESULT_QUEUE` | `validation.prescription.result` | 추천/검증 결과 queue |
 | `LLM_GATEWAY_BASE_URL` | `http://llm-gateway:8003/v1` | ValidationAgent 가 게이트웨이 경유로 LLM 을 호출하는 base URL. 자격증명은 게이트웨이가 가짐 |
-| `LLM_MODEL` | `gpt-5.6-luna` (`infra/.env.example`) / 환경변수가 없을 때 코드 폴백 `openai.gpt-5.6-luna` | ValidationAgent 의 두 모델 호출(PubMed 질의 생성, 근거 요약)용 모델. 도구 선택 루프는 PR #11 에서 제거됐다 |
+| `LLM_MODEL` | `gpt-5.6-luna` (`infra/.env.example`) / 환경변수가 없을 때 코드 폴백 `openai.gpt-5.6-luna` | 게이트웨이가 상류에 실어 보내는 모델 ID. ValidationAgent 는 현재 모델을 호출하지 않는다 — 도구 선택 루프는 PR #11 에서, PubMed 질의·요약 호출은 이후 제거됐다 |
 
 검증 에이전트는 DB를 직접 수정하지 않는다. 상병/처방 자동 변경도 하지 않고, 의료진 검토용 결과만 `validation_result`에 저장한다.
 

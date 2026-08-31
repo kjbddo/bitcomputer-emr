@@ -8,10 +8,15 @@
 max_retries=0 도 timeout 만큼 중요하다 — 재시도는 게이트웨이가 소유한다
 (spec §6.1).
 
-ReAct 루프 제거 이후 이 서비스의 게이트웨이 호출은 둘뿐이다(PubMed 질의 생성,
-근거 요약). 옛 `_llm_tool_decision`·`_llm_finalize` 로깅 테스트는 그 함수들과
-함께 삭제했다 — `_llm_finalize` 는 애초에 어떤 실행 경로에서도 불리지 않는
-죽은 코드였고, 그 테스트가 죽은 코드를 살아 있는 것처럼 보이게 했다(F-M2).
+이 서비스는 현재 게이트웨이를 부르지 않는다. 부르던 두 자리(질의 생성과 근거
+요약)가 함께 사라졌기 때문이다. 그래도 `create_llm` 의 타임아웃·재시도·헤더와
+`resolve_llm_status` 는 계속 고정한다 — 전자는 다시 호출자가 생기는 순간 바로
+쓰이고, 후자는 "이번 실행에서 모델이 돌았는가" 를 답하는 유일한 경로라 지금처럼
+아무도 부르지 않을 때 `fallback` 을 내는 것 자체가 지켜야 할 동작이다.
+
+옛 `_llm_tool_decision`·`_llm_finalize` 로깅 테스트는 그 함수들과 함께
+삭제했다 — `_llm_finalize` 는 애초에 어떤 실행 경로에서도 불리지 않는 죽은
+코드였고, 그 테스트가 죽은 코드를 살아 있는 것처럼 보이게 했다(F-M2).
 """
 from __future__ import annotations
 
@@ -19,7 +24,7 @@ import logging
 
 import pytest
 
-from app import gateway, pubmed
+from app import gateway
 from app.gateway import ModelCallLedger
 
 
@@ -100,45 +105,17 @@ class _RaisingLLM:
         raise ValueError(self.SECRET_MARKER)
 
 
-def test_generate_pubmed_queries_failure_logs_warning_with_type_only(caplog):
-    ledger = ModelCallLedger()
-
-    with caplog.at_level(logging.WARNING, logger="validation_agent.pubmed"):
-        queries, source = pubmed.generate_queries_with_llm(
-            {}, "검증 사유", ledger, lambda: _RaisingLLM()
-        )
-
-    assert queries == []
-    assert source == "fallback"
-    assert ledger.sources == ["fallback"], "실패한 호출도 장부에 남아야 한다"
-    assert "ValueError" in caplog.text
-    assert _RaisingLLM.SECRET_MARKER not in caplog.text
-
-
-def test_summarize_pubmed_evidence_failure_logs_warning_with_type_only(caplog):
-    ledger = ModelCallLedger()
-    articles = [{"pmid": "111", "title": "t", "source": "s", "pubdate": "2024", "abstract": "a"}]
-
-    with caplog.at_level(logging.WARNING, logger="validation_agent.pubmed"):
-        summary, source = pubmed.summarize_evidence(
-            {}, articles, "PASS", ledger, lambda: _RaisingLLM()
-        )
-
-    assert source == "fallback"
-    assert summary, "실패해도 규칙 기반 요약은 남아야 한다"
-    assert ledger.sources == ["fallback"]
-    assert "ValueError" in caplog.text
-    assert _RaisingLLM.SECRET_MARKER not in caplog.text
-
-
 # ---------------------------------------------------------------------------
 # 장부와 llmStatus 도출
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_llm_status_without_any_model_call_is_fallback():
+def test_resolve_llm_status_without_any_model_call_is_rule():
     """호출이 하나도 없으면 "real" 이 될 근거가 없다(fail-closed)."""
-    assert gateway.resolve_llm_status([]) == "fallback"
+    # 호출이 하나도 없으면 "rule" 이다 — 부르지 않은 것과 불렀다가 실패한 것
+    # (fallback)은 다른 사실이고, 화면이 후자만 장애로 표시해야 한다.
+    assert gateway.resolve_llm_status([]) == "rule"
+    assert gateway.resolve_llm_status(["fallback"]) == "fallback"
 
 
 def test_resolve_llm_status_needs_a_successful_call_for_real():
@@ -151,10 +128,10 @@ def test_resolve_llm_status_needs_a_successful_call_for_real():
 
 def test_ledger_records_call_names_for_auditing():
     ledger = ModelCallLedger()
-    ledger.record("pubmed_query_generation", "llm")
-    ledger.record("pubmed_evidence_summary", "fallback")
+    ledger.record("disease_validation", "llm")
+    ledger.record("prescription_validation", "fallback")
 
     assert [c["call"] for c in ledger.calls] == [
-        "pubmed_query_generation", "pubmed_evidence_summary",
+        "disease_validation", "prescription_validation",
     ]
     assert ledger.sources == ["llm", "fallback"]
