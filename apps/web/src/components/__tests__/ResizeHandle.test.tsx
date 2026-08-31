@@ -204,7 +204,8 @@ describe("aria-valuenow", () => {
   });
 
   it("ResizeObserver 콜백으로 드래그 이후 크기 변화를 따라간다", () => {
-    // @ts-expect-error 테스트 전용 가짜 구현체를 주입한다.
+    // 테스트 전용 가짜 구현체를 주입한다. FakeResizeObserver 는
+    // ResizeObserver 인터페이스를 구조적으로 만족해 타입 단언이 필요 없다.
     window.ResizeObserver = FakeResizeObserver;
     const { handle, sibling } = setupWithSibling("vertical", 800, 200);
     expect(handle).toHaveAttribute("aria-valuenow", "25");
