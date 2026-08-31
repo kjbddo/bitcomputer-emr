@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ResizeHandle } from "../ResizeHandle";
 
@@ -77,6 +78,43 @@ function setupWithSibling(
   (handle as HTMLElement).releasePointerCapture = vi.fn();
   const sibling = screen.getByTestId("sibling");
   return { handle, sibling, onDelta, container };
+}
+
+/**
+ * `setupWithSibling` 과 달리 앞 형제 크기를 React state 로 들고 있어,
+ * 버튼 클릭 한 번으로 "부모 리렌더 → 앞 형제 크기 변경" 을 재현한다.
+ * 실제 드래그도 이와 같다: page.tsx 의 state 가 바뀌어 리렌더되면서
+ * ResizeHandle 도 함께 리렌더된다.
+ */
+function renderWithGrowableSibling(
+  orientation: "vertical" | "horizontal",
+  parentSize: number,
+  initialSiblingSize: number,
+  grownSiblingSize: number
+) {
+  const onDelta = vi.fn();
+  const dim = orientation === "vertical" ? "width" : "height";
+  const parentProps = { [`data-stub-${dim}`]: String(parentSize) };
+
+  function Harness() {
+    const [siblingSize, setSiblingSize] = useState(initialSiblingSize);
+    const siblingProps = { [`data-stub-${dim}`]: String(siblingSize) };
+    return (
+      <div {...parentProps}>
+        <div data-testid="sibling" {...siblingProps} />
+        <ResizeHandle orientation={orientation} label="왼쪽 열 너비 조절" onDelta={onDelta} />
+        <button type="button" onClick={() => setSiblingSize(grownSiblingSize)}>
+          grow
+        </button>
+      </div>
+    );
+  }
+
+  render(<Harness />);
+  const handle = screen.getByRole("separator", { name: "왼쪽 열 너비 조절" });
+  (handle as HTMLElement).setPointerCapture = vi.fn();
+  (handle as HTMLElement).releasePointerCapture = vi.fn();
+  return { handle, onDelta };
 }
 
 describe("접근성", () => {
@@ -215,6 +253,22 @@ describe("aria-valuenow", () => {
       FakeResizeObserver.instances.forEach((observer) => observer.trigger());
     });
 
+    expect(handle).toHaveAttribute("aria-valuenow", "50");
+  });
+
+  it("ResizeObserver 가 전혀 발화하지 않아도, 리렌더 후 aria-valuenow 가 새 크기를 반영한다", () => {
+    // 콜백을 절대 부르지 않는 가짜로 관찰 경로를 완전히 침묵시킨다.
+    // FakeResizeObserver 인스턴스는 생성되지만 trigger() 를 호출하는
+    // 코드가 없으므로 콜백은 한 번도 실행되지 않는다.
+    window.ResizeObserver = FakeResizeObserver;
+    const { handle } = renderWithGrowableSibling("vertical", 800, 200, 400);
+    expect(handle).toHaveAttribute("aria-valuenow", "25");
+
+    fireEvent.click(screen.getByRole("button", { name: "grow" }));
+
+    // 관찰 경로가 정말 침묵했는지 확인한다 — 인스턴스는 있지만
+    // trigger() 는 이 테스트 어디에서도 호출되지 않는다.
+    expect(FakeResizeObserver.instances.length).toBeGreaterThan(0);
     expect(handle).toHaveAttribute("aria-valuenow", "50");
   });
 });

@@ -59,21 +59,49 @@ export function ResizeHandle({ orientation, label, onDelta, keyStepPx = DEFAULT_
   // "모른다" 는 뜻으로 undefined 를 유지한다.
   const [valueNow, setValueNow] = useState<number | undefined>(undefined);
 
-  // 마운트 시 동기 측정 — 첫 페인트부터 정확한 값이 나가야 한다. useEffect
-  // 를 쓰면 페인트 이후에 갱신되어 스크린리더가 잠깐 값 없는 상태를 읽을
-  // 수 있다.
+  // 주 경로 — 매 커밋마다 동기 측정한다 (의존성 배열을 아예 생략).
+  //
+  // 관찰(ResizeObserver)에만 기대면, 관찰이 침묵하는 환경에서 값이 영원히
+  // 옛 숫자로 남는다. 그 상태는 aria-valuenow 가 아예 없는 것보다 나쁘다 —
+  // 스크린리더에 틀린 위치를 자신 있게 알려주기 때문이다(위 measureValueNow
+  // 주석의 "거짓 정보보다 undefined" 원칙과 같은 이유). 드래그하면 이 핸들을
+  // 소유한 page.tsx 가 리렌더되고 핸들도 함께 리렌더되므로, 매 렌더 측정하면
+  // ResizeObserver 없이도 값이 항상 따라온다.
+  //
+  // 매 렌더 setState 는 보통 무한 루프를 의심할 패턴이라 왜 안전한지
+  // 남긴다: React 는 새 상태가 Object.is 로 이전 상태와 같으면 그 지점에서
+  // 리렌더를 건너뛴다(bail out). 즉 이 effect 는 실제로 값이 달라진
+  // 렌더에서만 추가 리렌더를 일으키고, 값이 그대로인 렌더(예: 다른 이유로
+  // 부모가 리렌더된 경우)에서는 setValueNow 가 아무 것도 바꾸지 않아 거기서
+  // 수렴한다.
+  //
+  // eslint(react-hooks/exhaustive-deps) 는 의존성 배열이 없으면 무한 갱신
+  // 사슬을 의심해 [orientation] 을 넣으라고 권한다. 여기서는 의도적으로
+  // 생략한다 — [orientation] 을 넣으면 orientation 이 바뀔 때만 재측정하는
+  // 옛 동작(관찰 침묵 시 값이 멈추는 버그)으로 되돌아간다. 안전성 근거는
+  // 위 주석 참고.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
     const node = handleRef.current;
     if (!node) return;
+    setValueNow(measureValueNow(node, orientation));
+  });
 
-    const measure = () => setValueNow(measureValueNow(node, orientation));
-    measure();
+  // 보조 경로 — 리렌더를 동반하지 않는 외부 변화를 잡는다(예: 창
+  // 리사이즈로 부모 컨테이너 크기만 바뀌고 이 컴포넌트의 props/state 는
+  // 그대로인 경우). 위 주 경로가 이미 매 렌더 값을 맞추므로, 이 observer 가
+  // 침묵하는 환경이어도(관찰 여부는 환경에 따라 다를 수 있다) 드래그로 인한
+  // 갱신 자체는 영향받지 않는다.
+  useLayoutEffect(() => {
+    const node = handleRef.current;
+    if (!node) return;
 
     // ResizeObserver 가 없는 환경(jsdom 등)에서 던지지 않게 가드한다 —
     // window.matchMedia 무가드 호출로 이 브랜치가 한 번 데인 적이 있다
     // (useResizableLayout.ts 참고).
     if (typeof ResizeObserver === "undefined") return;
 
+    const measure = () => setValueNow(measureValueNow(node, orientation));
     const observer = new ResizeObserver(measure);
     // 드래그로 앞 형제 크기가 바뀌거나(직접 관찰 대상), 부모 컨테이너 자체
     // 크기가 바뀌어도(예: 창 리사이즈) 백분율은 따라와야 한다.
