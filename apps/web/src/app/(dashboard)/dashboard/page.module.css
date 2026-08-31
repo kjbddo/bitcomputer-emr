@@ -27,7 +27,7 @@
 
 .contentGrid {
   display: grid;
-  grid-template-columns: var(--col-tracks, 300px 1fr 1fr);
+  grid-template-columns: var(--col-tracks, 300px 6px 1fr 6px 1fr);
   gap: var(--space-4);
   height: 100%;
   min-height: 600px;
@@ -35,21 +35,25 @@
 
 .contentGridClinic {
   display: grid;
-  grid-template-columns: var(--col-tracks, 300px 1fr 350px);
+  grid-template-columns: var(--col-tracks, 300px 6px 1fr 6px 350px);
   gap: var(--space-4);
   height: 100%;
   min-height: 600px;
 }
 
-/* 반응형 그리드 */
+/* 반응형 그리드
+   1025px 이상은 useResizableLayout 의 enabled 범위와 겹친다(RESIZE_MIN_VIEWPORT).
+   그 구간에서는 --col-tracks 가 이미 붙어 있으므로 var() 를 거쳐야 핸들 트랙 몫이
+   유지된다 — 값을 직접 못박으면 핸들이 렌더된 상태(5개 그리드 항목)인데 트랙은
+   3개짜리로 깨진다. */
 @media (max-width: 1200px) {
   .contentGrid {
-    grid-template-columns: 280px 1fr 1fr;
+    grid-template-columns: var(--col-tracks, 280px 1fr 1fr);
     gap: var(--space-3);
   }
-  
+
   .contentGridClinic {
-    grid-template-columns: 280px 1fr 320px;
+    grid-template-columns: var(--col-tracks, 280px 1fr 320px);
     gap: var(--space-3);
   }
 }
@@ -96,7 +100,7 @@
 
 .contentGridCertificate {
   display: grid;
-  grid-template-columns: var(--col-tracks, 280px 1fr 1fr);
+  grid-template-columns: var(--col-tracks, 280px 6px 1fr 6px 1fr);
   gap: var(--space-4);
   height: 100%;
   min-height: 600px;
@@ -104,7 +108,7 @@
 
 .certificateCenterColumn {
   display: grid;
-  grid-template-rows: var(--row-tracks, 1fr 1fr);
+  grid-template-rows: var(--row-tracks, 1fr 6px 1fr);
   gap: var(--space-4);
   min-height: 0;
   height: 100%;
@@ -120,21 +124,21 @@
 
 .clinicMiddleColumn {
   display: grid;
-  grid-template-rows: var(--row-tracks, 1fr 1fr 1fr);
+  grid-template-rows: var(--row-tracks, 1fr 6px 1fr 6px 1fr);
   gap: var(--space-4);
   min-height: 0;
 }
 
 .clinicRightColumn {
   display: grid;
-  grid-template-rows: var(--row-tracks, 1fr 1fr);
+  grid-template-rows: var(--row-tracks, 1fr 6px 1fr);
   gap: var(--space-4);
   min-height: 0;
 }
 
 .leftColumn {
   display: grid;
-  grid-template-rows: var(--row-tracks, 1fr 1fr);
+  grid-template-rows: var(--row-tracks, 1fr 6px 1fr);
   gap: var(--space-4);
   min-height: 0;
 }
@@ -155,7 +159,26 @@
 
 .rightColumn {
   display: grid;
-  grid-template-rows: var(--row-tracks, 1fr 1fr);
+  grid-template-rows: var(--row-tracks, 1fr 6px 1fr);
   gap: var(--space-4);
   min-height: 0;
+}
+
+.layoutBar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--space-2);
+}
+
+.resetLayout {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.resetLayout:hover {
+  border-color: var(--border-strong);
 }

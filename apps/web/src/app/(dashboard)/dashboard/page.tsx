@@ -28,6 +28,9 @@ import { ClinicVisitContext } from "@/types/clinic";
 import { Role } from "@/types/user";
 import { getMe, getRole } from "@/services/auth";
 import { post } from "@/services/http/client";
+import { ResizeHandle } from "@/components/ResizeHandle";
+import { useResizableLayout } from "@/hooks/useResizableLayout";
+import type { TabId } from "@/utils/layoutStorage";
 import styles from "./page.module.css";
 import {
   createHistory,
@@ -428,30 +431,69 @@ export default function DashboardPage() {
     }
   }, [getDeptIdFromDepartment]);
 
+  const layout = useResizableLayout(activeMenu as TabId);
+  const gridRef = useRef<HTMLDivElement>(null);
+
+  // 델타를 트랙에 반영하려면 컨테이너 실제 크기가 필요하다. 1fr 트랙의
+  // 상한을 계산하는 데 쓴다(layoutStorage.applyDelta 참고).
+  const gridWidth = () => gridRef.current?.getBoundingClientRect().width ?? 0;
+
   const renderContent = () => {
     if (activeMenu === "환자접수") {
       return (
-        <div className={styles.contentGrid}>
+        <div className={styles.contentGrid} style={layout.columnStyle} ref={gridRef}>
           {/* Left Column - Special Notes & History */}
-          <div className={styles.leftColumn}>
+          <div className={styles.leftColumn} style={layout.rowStyle("left")}>
             <SpecialNote />
+            {layout.enabled && (
+              <ResizeHandle
+                orientation="horizontal"
+                label="특이사항 높이 조절"
+                onDelta={(d) =>
+                  layout.resizeRow("left", 0, d, gridRef.current?.getBoundingClientRect().height ?? 0)
+                }
+              />
+            )}
             <History
               employeeId={employeeId}
               patientId={selectedPatientId}
               refreshKey={historyRefreshKey}
             />
           </div>
+          {layout.enabled && (
+            <ResizeHandle
+              orientation="vertical"
+              label="왼쪽 열 너비 조절"
+              onDelta={(d) => layout.resizeColumn(0, d, gridWidth())}
+            />
+          )}
 
           {/* Middle Column - Patient Form */}
           <div className={styles.middleColumn}>
             <PatientForm ref={patientFormRef} />
           </div>
+          {layout.enabled && (
+            <ResizeHandle
+              orientation="vertical"
+              label="가운데 열 너비 조절"
+              onDelta={(d) => layout.resizeColumn(1, d, gridWidth())}
+            />
+          )}
 
           {/* Right Column - Waiting Status & Medical Info */}
-          <div className={styles.rightColumn}>
+          <div className={styles.rightColumn} style={layout.rowStyle("right")}>
             <WaitingStatus
               onPatientSelect={(patient, visit) => handlePatientSelection(patient, visit)}
             />
+            {layout.enabled && (
+              <ResizeHandle
+                orientation="horizontal"
+                label="대기 현황 높이 조절"
+                onDelta={(d) =>
+                  layout.resizeRow("right", 0, d, gridRef.current?.getBoundingClientRect().height ?? 0)
+                }
+              />
+            )}
             <MedicalInfo ref={medicalInfoRef} />
           </div>
         </div>
@@ -459,10 +501,19 @@ export default function DashboardPage() {
     } else if (activeMenu === "진료실") {
       return (
         <MedicalSelectionProvider>
-          <div className={styles.contentGridClinic}>
+          <div className={styles.contentGridClinic} style={layout.columnStyle} ref={gridRef}>
             {/* Left Column - Calendar & History */}
-            <div className={styles.leftColumn}>
+            <div className={styles.leftColumn} style={layout.rowStyle("left")}>
               <Calender employeeId={employeeId} patientId={clinicPatientId} refreshKey={historyRefreshKey} />
+              {layout.enabled && (
+                <ResizeHandle
+                  orientation="horizontal"
+                  label="캘린더 높이 조절"
+                  onDelta={(d) =>
+                    layout.resizeRow("left", 0, d, gridRef.current?.getBoundingClientRect().height ?? 0)
+                  }
+                />
+              )}
               <ClinicTimelineSection
                 employeeId={employeeId}
                 patientId={clinicPatientId}
@@ -472,18 +523,43 @@ export default function DashboardPage() {
                 onPendingHistoryReset={resetPendingHistoryCreation}
               />
             </div>
+            {layout.enabled && (
+              <ResizeHandle
+                orientation="vertical"
+                label="왼쪽 열 너비 조절"
+                onDelta={(d) => layout.resizeColumn(0, d, gridWidth())}
+              />
+            )}
 
             {/* Middle Column - Vertical Layout for Clinic Components */}
-            <div className={styles.clinicMiddleColumn}>
+            <div className={styles.clinicMiddleColumn} style={layout.rowStyle("middle")}>
               <WaitingStatus
                 onPatientSelect={(patient, visit) => handlePatientSelection(patient, visit)}
               />
+              {layout.enabled && (
+                <ResizeHandle
+                  orientation="horizontal"
+                  label="대기 현황 높이 조절"
+                  onDelta={(d) =>
+                    layout.resizeRow("middle", 0, d, gridRef.current?.getBoundingClientRect().height ?? 0)
+                  }
+                />
+              )}
               <Disease
                 clinicVisit={clinicVisit}
                 ensureHistory={ensureHistory}
                 employeeId={employeeId}
                 onHistoryUpdated={() => setHistoryRefreshKey((prev) => prev + 1)}
               />
+              {layout.enabled && (
+                <ResizeHandle
+                  orientation="horizontal"
+                  label="상병 높이 조절"
+                  onDelta={(d) =>
+                    layout.resizeRow("middle", 1, d, gridRef.current?.getBoundingClientRect().height ?? 0)
+                  }
+                />
+              )}
               <Diagnosis
                 clinicVisit={clinicVisit}
                 ensureHistory={ensureHistory}
@@ -491,11 +567,27 @@ export default function DashboardPage() {
                 onHistoryUpdated={() => setHistoryRefreshKey((prev) => prev + 1)}
               />
             </div>
+            {layout.enabled && (
+              <ResizeHandle
+                orientation="vertical"
+                label="가운데 열 너비 조절"
+                onDelta={(d) => layout.resizeColumn(1, d, gridWidth())}
+              />
+            )}
 
             {/* Right Column - ViewDataBase & AIReport */}
-            <div className={styles.clinicRightColumn}>
+            <div className={styles.clinicRightColumn} style={layout.rowStyle("right")}>
               <ViewDataBase />
-              <AIReport 
+              {layout.enabled && (
+                <ResizeHandle
+                  orientation="horizontal"
+                  label="데이터베이스 높이 조절"
+                  onDelta={(d) =>
+                    layout.resizeRow("right", 0, d, gridRef.current?.getBoundingClientRect().height ?? 0)
+                  }
+                />
+              )}
+              <AIReport
                 patientId={clinicPatientId}
                 employeeId={employeeId}
                 deptId={clinicVisit?.deptId ?? defaultDeptId}
@@ -507,21 +599,44 @@ export default function DashboardPage() {
       );
     } else if (activeMenu === "진단서") {
       return (
-        <div className={styles.contentGridCertificate}>
+        <div className={styles.contentGridCertificate} style={layout.columnStyle} ref={gridRef}>
           <div className={styles.certificateLeftColumn}>
             <CertificatePatientSearch onPatientFound={setCertificatePatient} />
           </div>
-          <div className={styles.certificateCenterColumn}>
+          {layout.enabled && (
+            <ResizeHandle
+              orientation="vertical"
+              label="왼쪽 열 너비 조절"
+              onDelta={(d) => layout.resizeColumn(0, d, gridWidth())}
+            />
+          )}
+          <div className={styles.certificateCenterColumn} style={layout.rowStyle("middle")}>
             <CertificateList
               selected={selectedCertificate}
               onSelect={setSelectedCertificate}
             />
+            {layout.enabled && (
+              <ResizeHandle
+                orientation="horizontal"
+                label="진단서 목록 높이 조절"
+                onDelta={(d) =>
+                  layout.resizeRow("middle", 0, d, gridRef.current?.getBoundingClientRect().height ?? 0)
+                }
+              />
+            )}
             <CertificateBottom
               patientId={certificatePatient?.patientId}
               employeeId={employeeId}
               onApplyDiagnosisToCertificate={applyCertificateDiagnosis}
             />
           </div>
+          {layout.enabled && (
+            <ResizeHandle
+              orientation="vertical"
+              label="가운데 열 너비 조절"
+              onDelta={(d) => layout.resizeColumn(1, d, gridWidth())}
+            />
+          )}
           <div className={styles.certificateRightColumn}>
             <MedicalCertificate
               selected={selectedCertificate}
@@ -555,7 +670,16 @@ export default function DashboardPage() {
           />
           <PatientInfoBar patient={selectedPatient ?? undefined} />
 
-          <div className={styles.contentArea}>{renderContent()}</div>
+          <div className={styles.contentArea}>
+            {layout.enabled && (
+              <div className={styles.layoutBar}>
+                <button type="button" className={styles.resetLayout} onClick={layout.reset}>
+                  기본 배치로
+                </button>
+              </div>
+            )}
+            {renderContent()}
+          </div>
         </main>
       </div>
     </div>

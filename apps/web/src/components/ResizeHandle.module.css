@@ -31,8 +31,9 @@
   align-self: center;
 }
 
-/* 드래그 중 텍스트가 선택되는 것을 막는다. */
-:global(body.isResizing) {
-  user-select: none;
-  cursor: grabbing;
-}
+/* 드래그 중 텍스트가 선택되는 것을 막는 body.isResizing 규칙은 globals.css 에
+   있다. ResizeHandle.tsx 가 document.body.classList 에 직접 문자열
+   "isResizing" 을 붙이는 전역 클래스라 CSS module 로 해시되면 안 되고
+   (css-loader 의 "pure selector" 요구도 충족 못 한다 — 로컬 토큰이 하나도
+   없는 규칙은 .module.css 안에서 빌드 에러가 난다), print-surface 와 같은
+   이유로 globals.css 에 둔다. */
