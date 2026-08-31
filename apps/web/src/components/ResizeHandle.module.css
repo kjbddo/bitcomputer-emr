@@ -1,0 +1,38 @@
+/* 평소에는 gap 안에서 거의 드러나지 않고, 만질 수 있다는 것만 알린다. */
+.handle {
+  background: transparent;
+  border: none;
+  padding: 0;
+  border-radius: 2px;
+  transition: background-color 120ms ease;
+}
+
+.handle:hover,
+.handle:focus-visible {
+  background: var(--border-strong);
+}
+
+.handle:focus-visible {
+  outline: 2px solid var(--border-strong);
+  outline-offset: 2px;
+}
+
+.vertical {
+  cursor: col-resize;
+  width: 6px;
+  align-self: stretch;
+  justify-self: center;
+}
+
+.horizontal {
+  cursor: row-resize;
+  height: 6px;
+  justify-self: stretch;
+  align-self: center;
+}
+
+/* 드래그 중 텍스트가 선택되는 것을 막는다. */
+:global(body.isResizing) {
+  user-select: none;
+  cursor: grabbing;
+}
