@@ -49,7 +49,7 @@ flowchart TB
     XRAGRAG[X-ray 상병 추론 RAG<br/>유사 영상 검색 / 상병 후보 추론]
     RXRAG[처방 추천 RAG<br/>상병-처방 그래프 기반 추천]
     VALRAG[검증 RAG<br/>상병 / 처방 / 영상 결과 일관성 검증]
-    AGENT[처방 추천 에이전트<br/>Tool Calling / ReAct Loop]
+    AGENT[처방 추천 에이전트<br/>그래프 조회 + LLM 설명]
   end
 
   BE --> XRAY
@@ -62,14 +62,13 @@ flowchart TB
   AGENT --> XRAGRAG
   AGENT --> RXRAG
   AGENT --> VALRAG
-  AGENT --> PUBMED[PubMed API<br/>의학 문헌 검색]
-  AGENT --> LLM[LLM API<br/>OpenAI / Gemini]
+  AGENT --> LLM[llm-gateway<br/>상류 LLM 단일 진입점]
 
   XRAGRAG --> ARANGO[(ArangoDB<br/>X-ray Graph / Vector DB)]
   RXRAG --> ARANGO
   VALRAG --> ARANGO
 
-  BE --> CERT[진단서 생성 API<br/>Gemini 기반 문안 생성]
+  BE --> CERT[진단서 생성 API<br/>게이트웨이 경유 문안 생성]
   CERT --> LLM
 ```
 
@@ -92,7 +91,7 @@ flowchart TB
 - 상병-처방 그래프 데이터를 활용한 처방 추천 RAG 적용
 - 추천 처방과 환자 상태의 일관성을 확인하는 검증 RAG 적용
 - 처방 추천 에이전트가 여러 도구를 호출하며 단계적으로 판단
-- ReAct 방식의 Tool Calling 구조로 검색, 추천, 검증 과정을 분리
+- 검색·추천·검증을 고정 순서 파이프라인으로 분리 (ReAct 는 계측 결과 값을 하지 않아 제거)
 - AI 결과를 자동 확정하지 않고 의료진 검토용 보조 정보로 제공
 
 ## 6. 결과물 - 장점

@@ -21,9 +21,8 @@ flowchart TB
   RX -->|AQL / Graph Query| ARANGO[(ArangoDB GraphDB<br/>방문-상병-처방 그래프)]
 
   BE -->|Validation Job 발행| MQ[(RabbitMQ<br/>validation.prescription.request/result)]
-  MQ --> VA[ValidationAgent<br/>LangGraph / ReAct 검증]
+  MQ --> VA[ValidationAgent<br/>고정 순서 파이프라인 검증]
   VA -->|처방 후보 조회| RX
-  VA -->|문헌 근거 검색| PUBMED[PubMed API]
   VA -->|검증 결과 반환| MQ
 
   BE -->|REST API| XRAY[X-ray AI Service<br/>Anomaly Detection / Masking / Embedding]
@@ -129,12 +128,14 @@ XAI 처방 신뢰도 계산은 빈도 점수와 유사도 점수를 결합하여
 | 역할 | AI 추천 및 저장 처방이 환자 정보, 상병, 증상, X-ray 추론 결과와 일관되는지 검증 |
 | 주요 파일 | `ValidationAgent/app/agent.py`, `ValidationAgent/app/tools.py`, RabbitMQ consumer |
 | 주요 데이터 구조 | ValidationAgentRequest, ValidationAgentResponse, reasoningTrace |
-| 알고리즘 / 절차 | RabbitMQ 메시지 수신 → ReAct tool decision → 도구 호출 → rule-based finalize → JSON 결과 반환 |
+| 알고리즘 / 절차 | RabbitMQ 메시지 수신 → 고정 순서 도구 호출 → rule-based finalize → verification 대조 → JSON 결과 반환 |
 | 입력값 | 환자 요약, 증상, 저장 상병, 저장 처방, X-ray 추론 결과 |
 | 출력값 | overallStatus, summary, reason, checks, recommendedPrescriptions, reasoningTrace |
-| 의존 모듈 | RabbitMQ, Prescription API, PubMed API, Spring Boot |
+| 의존 모듈 | RabbitMQ, Prescription API, Spring Boot |
 
-ValidationAgent는 처방 추천 결과를 그대로 신뢰하지 않고, 별도의 검증 계층을 통해 안전성을 확인한다. 사용 가능한 도구는 X-ray Result Loader, Disease Validator, Prescription Validator, Prescription Finder, PubMed Loader로 구성된다. 에이전트는 ReAct 방식으로 필요한 도구를 선택하고, 검증 결과와 추론 과정을 reasoningTrace 형태로 반환한다.
+ValidationAgent는 처방 추천 결과를 그대로 신뢰하지 않고, 별도의 검증 계층을 통해 안전성을 확인한다. 도구는 X-ray Result Loader, Disease Validator, Prescription Validator, Prescription Finder 로 구성되며, **도메인이 정한 고정 순서로 호출된다.** 검증 결과와 각 단계의 관측값을 reasoningTrace 형태로 반환한다.
+
+초기 구현은 ReAct 방식이었다. 에이전트가 상태를 보고 도구를 고르게 했으나, **실행 로그를 계측한 결과 그 결정이 값을 하지 않았다.** 모델이 고른 순서는 매번 하드코딩된 순서를 재생산했고, 관측값이 다음 행동을 바꾼 사례가 없었으며, 루프 종료는 FINALIZE 가 아니라 `max_iterations` 소진이었다. 게이트웨이 호출 4회를 써서 `for` 루프가 만들었을 시퀀스를 재생산한 셈이다. 고정 순서로 바꾸면서 결정 호출 4회가 0회가 됐고, 실행 경로가 결정론적이 되어 테스트 가능해졌다.
 
 ##### 7. X-ray 이미지 기반 상병 추론 모듈
 
@@ -228,7 +229,7 @@ X-ray 이미지 분석 결과는 환자의 최신 영상 판독 결과로 저장
 
 [그림 8 삽입: X-ray 이미지 분석 결과 화면]
 
-ValidationAgent 검증 결과는 모달 형태로 표시된다. 모달에는 전체 검증 상태, 요약, 검증 이유, PubMed 참고 근거, 추천 처방 후보가 포함된다. 이를 통해 의사는 AI 추천 처방이 환자 상태 및 기존 상병과 일관되는지 확인할 수 있다.
+ValidationAgent 검증 결과는 모달 형태로 표시된다. 모달에는 전체 검증 상태, 요약, 검증 이유, 그래프 조회 결과, 추천 처방 후보가 포함된다. 이를 통해 의사는 AI 추천 처방이 환자 상태 및 기존 상병과 일관되는지 확인할 수 있다.
 
 [그림 9 삽입: ValidationAgent 검증 결과 모달]
 
@@ -250,7 +251,7 @@ ValidationAgent 검증 결과는 모달 형태로 표시된다. 모달에는 전
 | MySQL | 관계형 병원 업무 데이터 저장 | 환자, 진료 이력, 사용자 권한, 진단서 등 정형 데이터 저장에 적합하며, 트랜잭션 기반 데이터 일관성을 제공한다. |
 | ArangoDB | 그래프 기반 처방 추천 근거 저장 | 방문-상병-처방 관계를 그래프 형태로 표현할 수 있어 co-occurrence 조회와 유사 환자군 처방 패턴 분석에 적합하다. |
 | Python FastAPI | AI 서비스 API 구현 | 처방 추천, 검증, 진단서 생성, X-ray 분석과 같은 Python AI 로직을 REST API로 빠르게 서비스화할 수 있다. |
-| LangGraph / LangChain | ValidationAgent 구현 | ReAct 방식의 tool orchestration과 reasoning loop를 구현하기 적합하며, 검증 도구 호출 과정을 구조화할 수 있다. |
+| LangChain | ValidationAgent 의 도구 정의와 게이트웨이 클라이언트 | 초기에는 LangGraph 로 ReAct 루프를 구성했으나, 계측 결과 도구 선택이 값을 하지 않아 고정 순서로 대체했다. 도구 추상화와 클라이언트만 남겼다. |
 | OpenAI / Gemini | LLM 기반 추천, 검증, 문서 생성 | 자연어 기반 진료 컨텍스트를 해석하고 JSON 형태의 추천 및 검증 결과를 생성하는 데 활용하였다. |
 | RabbitMQ | 비동기 검증 job 처리 | 처방 추천 요청과 검증 에이전트 실행을 분리하여 응답성을 확보하고, 검증 작업을 안정적으로 큐잉할 수 있다. |
 | Redis | 캐시 및 확장 가능한 인프라 구성 | 향후 세션, 임시 데이터, 캐시 처리 등 성능 개선을 위한 인프라 요소로 구성하였다. |

@@ -311,15 +311,35 @@ python scripts/seed_chexpert.py ... --reset
 **분할기를 바꿨다면(`USE_PSPNET_ROI` 등) 반드시 전량 재적재한다.** 마스크가
 달라지면 저장된 ROI 임베딩과 질의가 서로 다른 해부 기준을 비교하게 된다.
 
+**적재는 호스트에서 돈다. compose 를 거치지 않는다.** 컨테이너가 쓰는 값과
+같아지도록 토글을 직접 올려야 한다 — 이것을 빠뜨리면 저장과 질의가 서로 다른
+기준 위에 놓인다.
+
 ```bash
 cd services/xray-rag
 export ARANGO_HOST=localhost ARANGO_PORT=8529 ARANGO_USER=root XRAY_ARANGO_DATABASE=xray_graph_db
 export ARANGO_PASSWORD="$(grep '^ARANGO_PASSWORD=' ../../infra/.env | cut -d= -f2-)"
+
+# 컨테이너와 같은 모델·분할기를 쓰게 한다. `.env` 에서 그대로 읽어 온다.
 export USE_TORCH_EMBEDDING=true
+export USE_PSPNET_ROI="$(grep '^USE_PSPNET_ROI=' ../../infra/.env | cut -d= -f2-)"
+
 python scripts/seed_chexpert.py --archive ./archive --split valid --frontal-only --uncertainty ones --batch 25 --use-real-model
 ```
 
-`valid` 는 202건에 약 6분(0.59 rows/s)이다. `train` 은 훨씬 크므로 수 시간을 예상한다.
+`USE_PSPNET_ROI` 를 `.env` 에서 읽는 이유: 이 값이 컨테이너의 질의 마스크를
+정한다. 적재 쪽이 다른 값을 쓰면 **양쪽 다 정상으로 보이면서** 유사도 검색이
+서로 다른 해부 기준끼리를 비교한다. 컨테이너는 healthy 고, 시더는 적재 성공을
+보고하고, 검색은 결과를 낸다 — 그래서 증상으로 드러나지 않는다.
+
+소요 시간은 분할기에 따라 크게 다르다:
+
+| `USE_PSPNET_ROI` | 202건 소요 | 속도 |
+|---|---|---|
+| `false`(기본) | 약 6분 | 0.59 rows/s |
+| `true` | 약 15분 | 0.22 rows/s |
+
+`train` 은 훨씬 크므로 수 시간을 예상한다.
 
 확인 — 건수만 보지 말고 **무엇이 저장됐는지** 본다:
 
@@ -594,6 +614,10 @@ docker images --format "{{.Repository}}\t{{.CreatedAt}}" | grep "^infra-"
 **`python3` 은 쓰지 않는다.** Windows 에서 Microsoft Store 스텁에 잡히면 아무 일도 하지 않고 성공한 것처럼 끝난다. 실제로 이 저장소에서 잘못된 측정 결과를 한 번 만들어냈다.
 
 **`docker compose down` 은 데이터를 지우지 않는다.** 볼륨을 지우면 이 런북을 §3 부터 전부 다시 돌려야 한다.
+
+**이 런북이 복원하는 것은 마스터·그래프·X-ray 까지다.** 환자·진료 이력처럼 화면에서 만든 운영 데이터는 복원되지 않는다. `docker compose down -v` 뒤에는 `employee` 에 부트스트랩 계정(`admin`) 하나만 남고 `patient` 는 0건이다 — 그 상태가 정상이며, 진료 데이터는 화면에서 다시 만들어야 한다.
+
+실제로 볼륨을 지우고 이 런북을 처음부터 돌려 확인했다: 그래프 9항목·X-ray 7항목·MySQL 마스터 2항목이 전부 이전 값과 일치했고, 차이가 난 것은 `patient`(9→0)와 `employee`(16→1) 둘뿐이었다.
 
 **진단서 평가(`/api/agent/document/evaluate`)는 게이트웨이를 거치지 않으며, 지금은 죽어 있다.** `CertificateEvaluationServiceImpl` 이 Gemini 를 직접 호출하며 `GEMINI_API_KEY` 를 따로 요구하는데 그 키가 폐기됐다. 이 엔드포인트를 쓰는 화면(`apps/web/src/app/evaluation`)은 어디에서도 링크되지 않으므로 적재 검증 경로에는 영향이 없다. 다른 AI 기능은 전부 게이트웨이 경유다.
 
