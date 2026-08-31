@@ -175,6 +175,16 @@ services:
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
       LLM_INPUT_PRICE_PER_1M: ${LLM_INPUT_PRICE_PER_1M:-0.20}
       LLM_OUTPUT_PRICE_PER_1M: ${LLM_OUTPUT_PRICE_PER_1M:-1.20}
+      # 상류 제공자 선택. 이 여섯이 없으면 .env 에 bedrock 을 적어도 컨테이너는
+      # openai 기본값을 읽어 PR #22 의 옵션을 고를 수 없다 — 설정이 조용히
+      # 무시되므로 적용된 줄 알게 된다.
+      # openai | bedrock
+      LLM_UPSTREAM_PROVIDER: ${LLM_UPSTREAM_PROVIDER:-openai}
+      LLM_BEDROCK_API_KEY: ${LLM_BEDROCK_API_KEY:-}
+      LLM_BEDROCK_REGION: ${LLM_BEDROCK_REGION:-}
+      LLM_BEDROCK_ENDPOINT: ${LLM_BEDROCK_ENDPOINT:-bedrock-runtime}
+      LLM_BEDROCK_MODEL: ${LLM_BEDROCK_MODEL:-global.openai.gpt-5.6-luna}
+      LLM_BEDROCK_BASE_URL: ${LLM_BEDROCK_BASE_URL:-}
     ports:
       - "8003:8003"
     healthcheck:
@@ -248,6 +258,17 @@ services:
       # model_loader.py 를 강제로 로드한다. 그래서 가중치 디렉터리만 마운트하면
       # "AI_BackEnd/config.py not found" 로 깨진다 - 부모까지 통째로 넣는다.
       SQUID_MODEL_DIR: /app/weights/squid_exp1_256_mask
+      # ChestX-Det PSPNet 해부학 ROI 분할. 끄면 고전 CV 분할로 내려간다.
+      # 기본값이 false 다. CPU 에서 분할 한 번에 18~32초가 걸려 추론 전체가
+      # 90초가 되는데, 그 대가로 얻는 것이 없다 - EVALUATION.md 11.3 에서
+      # 다수 라벨 기준선을 넘지 못했다. 끄면 CV 분할로 내려가고 1.3초다.
+      # GPU(T4 급)가 붙으면 2~4초가 되므로 그때 true 로 켠다.
+      USE_PSPNET_ROI: ${USE_PSPNET_ROI:-false}
+      # 아래 마운트 경로와 반드시 같아야 한다. 비워 두면 어댑터가 컨테이너의
+      # ~/.torchxrayvision/models_data 를 보는데 그 경로는 비어 있다.
+      PSPNET_CACHE_DIR: ${PSPNET_CACHE_DIR:-/root/.torchxrayvision/models_data}
+      # egress 가 없다. true 로 두면 기동이 다운로드 타임아웃만큼 멈춘다.
+      PSPNET_ALLOW_DOWNLOAD: "false"
     ports:
       - "8000:8000"
     volumes:
@@ -258,6 +279,9 @@ services:
       # 다운로드가 불가능하므로 호스트 캐시를 그대로 쓴다. 없으면 임베딩이
       # mock 으로 fallback 한다.
       - ${TORCH_CACHE_DIR:-~/.cache/torch}:/root/.cache/torch:ro
+      # ChestX-Det PSPNet 가중치(260MB). 없으면 ROI 가 CV 분할로 내려간다 —
+      # 조용히가 아니라 WARNING + roi_status="cv" 로 보고된다.
+      - ${PSPNET_HOST_CACHE_DIR:-~/.torchxrayvision/models_data}:/root/.torchxrayvision/models_data:ro
     depends_on:
       arangodb:
         condition: service_healthy
