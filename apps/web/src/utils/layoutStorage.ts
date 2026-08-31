@@ -72,25 +72,21 @@ function isUsable(tracks: unknown, expectedLength: number, min: number): tracks 
   return tracks.every((t) => t === null || t >= min);
 }
 
-/**
- * 행 트랙 배열이 쓸 수 있는 상태인가. 열과 달리 행 키(`left`/`middle`/`right`)는
- * 탭마다 일부만 저장될 수 있어 길이나 키 구성을 기본값과 맞춰 요구하지 않는다
- * — 존재하는 각 배열이 축 하나로서 유효한지(타입·최소값·1fr 존재)만 본다.
- */
-function isUsableRow(tracks: unknown, min: number): tracks is Track[] {
-  if (!Array.isArray(tracks) || tracks.length === 0) return false;
-  if (!tracks.every(isTrack)) return false;
-  if (!tracks.some((t) => t === null)) return false; // 1fr 이 하나도 없다
-  return tracks.every((t) => t === null || t >= min);
-}
-
 function matchesShape(value: unknown, fallback: LayoutState): value is LayoutState {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Partial<LayoutState>;
   if (!isUsable(candidate.columns, fallback.columns.length, MIN_COLUMN_PX)) return false;
   if (typeof candidate.rows !== "object" || candidate.rows === null) return false;
   const rows = candidate.rows as Record<string, unknown>;
-  return Object.values(rows).every((tracks) => isUsableRow(tracks, MIN_ROW_PX));
+  // 키 집합이 기본값과 정확히 같아야 한다 — 안 그러면 열이 하나 빠진 채로
+  // 렌더링되거나(누락) 존재하지 않는 열의 값이 쓰레기로 섞여 들어온다.
+  const fallbackKeys = Object.keys(fallback.rows);
+  if (Object.keys(rows).length !== fallbackKeys.length) return false;
+  return fallbackKeys.every((key) =>
+    // 각 열의 배열 길이도 기본값(=현재 패널 수)과 정확히 같아야 한다 —
+    // 안 그러면 패널이 추가/삭제된 뒤 옛 트랙 수가 새 패널 수와 안 맞는다(spec §4.3).
+    isUsable(rows[key], fallback.rows[key].length, MIN_ROW_PX)
+  );
 }
 
 export function loadLayout(tab: TabId): LayoutState {

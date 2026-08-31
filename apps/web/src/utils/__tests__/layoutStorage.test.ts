@@ -25,14 +25,20 @@ describe("저장 키", () => {
 
 describe("왕복", () => {
   it("저장한 값을 그대로 돌려준다", () => {
-    const state = { columns: [320, null, 400], rows: { left: [200, null] } };
+    const state = {
+      columns: [320, null, 400],
+      rows: { left: [200, null], middle: [null, null, null], right: [null, null] },
+    };
     saveLayout("진료실", state);
     expect(loadLayout("진료실")).toEqual(state);
   });
 
   it("clearLayout 은 그 탭만 지운다", () => {
-    saveLayout("진료실", { columns: [320, null, 400], rows: {} });
-    saveLayout("진단서", { columns: [300, null, null], rows: {} });
+    saveLayout("진료실", {
+      columns: [320, null, 400],
+      rows: { left: [null, null], middle: [null, null, null], right: [null, null] },
+    });
+    saveLayout("진단서", { columns: [300, null, null], rows: { middle: [null, null] } });
     clearLayout("진료실");
     expect(loadLayout("진료실")).toEqual(DEFAULT_LAYOUTS["진료실"]);
     expect(loadLayout("진단서").columns).toEqual([300, null, null]);
@@ -73,6 +79,30 @@ describe("손상값은 기본값으로 떨어진다", () => {
     window.localStorage.setItem(
       storageKey("진료실"),
       JSON.stringify({ columns: [300, 400, 500], rows: {} })
+    );
+    expect(loadLayout("진료실")).toEqual(DEFAULT_LAYOUTS["진료실"]);
+  });
+
+  it("rows 에 열 키가 하나라도 빠지면 — 그 열은 저장된 값 없이 렌더링돼 패널이 깨진다", () => {
+    window.localStorage.setItem(
+      storageKey("진료실"),
+      JSON.stringify({
+        columns: [320, null, 400],
+        // "middle" 이 빠졌다 — 진료실은 left/middle/right 세 열이 모두 있어야 한다.
+        rows: { left: [200, null], right: [null, null] },
+      })
+    );
+    expect(loadLayout("진료실")).toEqual(DEFAULT_LAYOUTS["진료실"]);
+  });
+
+  it("rows 행 배열 길이가 현재 패널 수와 다르면 — 패널이 추가/삭제된 뒤 남은 옛 트랙 수가 새 패널 수와 안 맞아 넘치거나 찌그러진다", () => {
+    window.localStorage.setItem(
+      storageKey("진료실"),
+      JSON.stringify({
+        columns: [320, null, 400],
+        // 진료실의 middle 열은 패널 3개(트랙 3개)인데 2개만 저장돼 있다.
+        rows: { left: [null, null], middle: [null, null], right: [null, null] },
+      })
     );
     expect(loadLayout("진료실")).toEqual(DEFAULT_LAYOUTS["진료실"]);
   });
