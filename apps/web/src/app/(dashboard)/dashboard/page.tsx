@@ -508,7 +508,7 @@ export default function DashboardPage() {
     } else if (activeMenu === "진단서") {
       return (
         <div className={styles.contentGridCertificate}>
-          <div className={styles.leftColumn}>
+          <div className={styles.certificateLeftColumn}>
             <CertificatePatientSearch onPatientFound={setCertificatePatient} />
           </div>
           <div className={styles.certificateCenterColumn}>

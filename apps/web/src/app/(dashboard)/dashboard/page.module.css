@@ -139,6 +139,16 @@
   min-height: 0;
 }
 
+/* 진단서 탭의 왼쪽 열은 패널이 하나뿐이라 행 리사이즈 대상이 아니다
+   (layoutStorage 의 DEFAULT_LAYOUTS.진단서.rows 에 left 키가 없다).
+   .leftColumn 의 `1fr 1fr` 을 물려받으면 자식 하나가 첫 트랙에만 들어가
+   height:100% 가 절반 높이로 계산되므로, flex 를 그대로 둔다. */
+.certificateLeftColumn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
 .middleColumn {
   /* Middle column styles if needed */
 }
