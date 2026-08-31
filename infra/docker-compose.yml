@@ -259,7 +259,11 @@ services:
       # "AI_BackEnd/config.py not found" 로 깨진다 - 부모까지 통째로 넣는다.
       SQUID_MODEL_DIR: /app/weights/squid_exp1_256_mask
       # ChestX-Det PSPNet 해부학 ROI 분할. 끄면 고전 CV 분할로 내려간다.
-      USE_PSPNET_ROI: ${USE_PSPNET_ROI:-true}
+      # 기본값이 false 다. CPU 에서 분할 한 번에 18~32초가 걸려 추론 전체가
+      # 90초가 되는데, 그 대가로 얻는 것이 없다 - EVALUATION.md 11.3 에서
+      # 다수 라벨 기준선을 넘지 못했다. 끄면 CV 분할로 내려가고 1.3초다.
+      # GPU(T4 급)가 붙으면 2~4초가 되므로 그때 true 로 켠다.
+      USE_PSPNET_ROI: ${USE_PSPNET_ROI:-false}
       # 아래 마운트 경로와 반드시 같아야 한다. 비워 두면 어댑터가 컨테이너의
       # ~/.torchxrayvision/models_data 를 보는데 그 경로는 비어 있다.
       PSPNET_CACHE_DIR: ${PSPNET_CACHE_DIR:-/root/.torchxrayvision/models_data}
