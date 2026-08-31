@@ -1271,3 +1271,111 @@ describe("신기능 금기 관문 표시", () => {
     expect(await screen.findByText("신기능 미확인")).toBeInTheDocument();
   });
 });
+
+// 설계 §3.2: 추천이 0건인 것은 오류가 아니라 답이다. E78(고지혈증)은 PR #9
+// 필터 이후 실제로 약제 후보가 0건이다.
+//
+// 이전 동작: `recommended.length === 0` 이면 "결과가 비어 있습니다" 라고
+// 알리고 아무 state 도 세우지 않은 채 돌아갔다. 그러면 (a) 정상적인 0건 답이
+// 장애처럼 읽히고, (b) 모달을 닫는 순간 그 사실이 화면에서 사라진다.
+//
+// 두 경우를 구분해야 한다. 목록 길이는 둘 다 0 이므로 길이로는 구분되지
+// 않는다 — 구분을 지고 있는 것은 graphLookup 이다.
+describe("추천 0건 — 조회 결과와 조회 실패의 구분", () => {
+  const clinicVisit = { patientId: 1, deptId: 1 };
+
+  function renderDiagnosis() {
+    return render(
+      <MedicalSelectionProvider>
+        <Diagnosis clinicVisit={clinicVisit} ensureHistory={async () => 10} employeeId={1} />
+      </MedicalSelectionProvider>
+    );
+  }
+
+  function mockEmptyJob(jobId: string, graphLookup: unknown, prescriptionLlmStatus?: string) {
+    mockedRecommend.mockResolvedValue({ jobId, historyId: 10, status: "RUNNING" });
+    mockedGetJob.mockResolvedValue({
+      jobId,
+      historyId: 10,
+      status: "DONE",
+      result: {
+        overallStatus: "NEEDS_REVIEW",
+        summary: "검토 필요",
+        llmStatus: "real",
+        prescriptionLlmStatus,
+        recommendedPrescriptions: [],
+        validation: { graphLookup },
+      },
+    } as unknown as ValidationJobResponse);
+  }
+
+  const FOUND_NOTHING = {
+    status: "LOADED",
+    usedArangoTopRx: false,
+    arangoTopRxCount: 0,
+    usedCohortRx: false,
+    cohortRxCount: 0,
+    foundNothing: true,
+    evidence: ["같은 상병 코호트의 처방을 그래프에서 찾지 못했습니다 (0건)."],
+  };
+
+  const LOOKUP_FAILED = {
+    status: "FAILED",
+    usedArangoTopRx: false,
+    arangoTopRxCount: 0,
+    usedCohortRx: false,
+    cohortRxCount: 0,
+    foundNothing: false,
+    evidence: ["처방 그래프를 조회하지 못했습니다: boom"],
+  };
+
+  it("조회했고 0건이면 그 사실을 패널로 남긴다 — 모달을 닫아도 사라지지 않는다", async () => {
+    mockEmptyJob("job-empty-1", FOUND_NOTHING, "skipped");
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "확인" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    expect(screen.getByText("데이터가 뒷받침하는 처방 후보 없음")).toBeInTheDocument();
+    expect(screen.getByText(/조회 실패가 아니라 조회 결과/)).toBeInTheDocument();
+  });
+
+  it("조회에 실패한 0건은 '후보 없음'이라고 주장하지 않는다", async () => {
+    mockEmptyJob("job-empty-2", LOOKUP_FAILED);
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "확인" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    expect(screen.queryByText("데이터가 뒷받침하는 처방 후보 없음")).not.toBeInTheDocument();
+  });
+
+  it("후보 조회 단계를 돌지 않은 0건도 '후보 없음'이 아니다", async () => {
+    mockEmptyJob("job-empty-3", undefined);
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "확인" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    expect(screen.queryByText("데이터가 뒷받침하는 처방 후보 없음")).not.toBeInTheDocument();
+  });
+
+  it("모델을 부르지 않은 것을 '출처 미확인'으로 렌더하지 않는다", () => {
+    // llmStatus="skipped" 는 "모르겠다"가 아니라 "부를 항목이 없어 부르지
+    // 않았다"는 확정된 사실이다. 미확인 문구로 뭉개면 아는 것을 모른다고 말한다.
+    const skipped = llmStatusNotice("skipped");
+    expect(skipped).not.toBeNull();
+    expect(skipped!.label).toBe("조회 후보 없음 — 모델 미호출");
+    expect(skipped!.label).not.toBe(llmStatusNotice(undefined)!.label);
+    expect(skipped!.tone).toBe("neutral");
+  });
+});

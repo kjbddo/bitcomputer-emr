@@ -37,17 +37,21 @@ def _row_code(row: Any) -> str:
     return ""
 
 
-def stub_prescription_response(top_rx: Any) -> str:
-    """parse_prescriptions_llm_response 가 파싱 가능한 JSON 문자열을 만든다."""
-    rows = top_rx if isinstance(top_rx, list) else []
-    picked = [r for r in rows if _row_name(r) or _row_code(r)][:3]
+def stub_prescription_response(ranked_slate: Any) -> str:
+    """parse_prescriptions_llm_response 가 파싱 가능한 JSON 문자열을 만든다.
+
+    **입력은 조회가 확정한 slate 다**(`RankedCandidate.to_prompt_row()` 목록),
+    후보 원본(top_rx)이 아니다. 응답 길이가 slate 길이와 같아야 하므로(설계
+    §3.2) 스텁도 그 길이를 따라야 한다 — top_rx 를 받아 언제나 3건을 만들면
+    후보가 2건일 때 파서가 정당하게 거부하고, 스텁 경로가 실패한다.
+    """
+    rows = [r for r in (ranked_slate or []) if isinstance(r, dict)]
 
     items = []
-    for rank in (1, 2, 3):
-        row = picked[rank - 1] if rank <= len(picked) else None
+    for rank, row in enumerate(rows, start=1):
         items.append({
             "rank": rank,
-            "name": _row_name(row) or "데이터 부족: top_rx 비어 있음",
+            "name": _row_name(row),
             "prescription_code": _row_code(row) or "미기재",
             "dosage": "미기재",
             "reason": STUB_MARKER,

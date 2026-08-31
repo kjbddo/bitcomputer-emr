@@ -22,6 +22,7 @@ _PH_SIMILAR = "<<<SIMILAR_OUTCOMES>>>"
 _PH_OPTIONAL_MENTION = "<<<OPTIONAL_MENTION_BLOCK>>>"
 _PH_OPTIONAL_CLINICIAN = "<<<OPTIONAL_CLINICIAN_BLOCK>>>"
 _PH_RANKED_SLATE = "<<<RANKED_SLATE>>>"
+_PH_SLATE_COUNT = "<<<SLATE_COUNT>>>"
 
 PRESCRIPTION_AGENT_PROMPT = """## Role
 당신은 ArangoDB 기반 의료 그래프 조회 결과를 의사에게 **설명하는** AI 의료 어시스턴트입니다.
@@ -44,9 +45,9 @@ PRESCRIPTION_AGENT_PROMPT = """## Role
 3. **당신이 실제로 쓰는 것은 각 항목의 `reason` 한 단락뿐입니다.** 이 환자 맥락에서 이 처방이 왜 타당한지 / 무엇을 주의해야 하는지를 한국어로 짧게 쓰십시오.
 4. **데이터 앵커 + 임상 해석**: `reason`은 먼저 아래 Patient Context·top_rx·mention·similar_outcomes에 **실제로 등장한** 처방명·코드·증상·토큰을 인용한 뒤, 그 안에서만 **일반적인 의학·약리 지식**(약 계열, 상호작용 개념, 감시 항목 등)을 짧게 보강할 수 있습니다. 입력에 없는 진단·처방 **사실**을 새로 만들지는 마십시오.
 5. **dosage**: 입력에 용량이 없으면 `"미기재"` 또는 `"데이터에 용량 없음"`만 사용하고, 임의 mg/cc를 지어내지 마십시오.
-6. 표의 어떤 순위가 `"데이터 부족: 조회된 처방 후보 없음"` 이면, 그 순위를 채울 약품을 **제안하지 마십시오**. `name`·`prescription_code`를 표 그대로 두고, `reason`에는 "이 상병에 대해 우리 데이터가 뒷받침하는 후보가 이 순위까지 없다"는 사실만 적으십시오. 그것이 유용한 신호입니다.
+6. **표의 행 수가 곧 답의 항목 수입니다.** 표에 <<<SLATE_COUNT>>>행이 있으므로 `prescriptions` 배열도 정확히 <<<SLATE_COUNT>>>개여야 합니다. 조회가 뒷받침하는 후보가 3건보다 적으면 표도 그만큼만 있습니다 — **빈 자리를 만들어 채우지 마십시오.** "우리 데이터가 뒷받침하는 후보가 여기까지다"는 것이 유용한 신호이며, 억지로 채운 3건보다 정직합니다.
 
-아래의 환자 상태와 ArangoDB 그래프 조회 결과를 읽고, 확정된 3개 순위 각각에 대한 설명을 쓰십시오.
+아래의 환자 상태와 ArangoDB 그래프 조회 결과를 읽고, 확정된 <<<SLATE_COUNT>>>개 순위 각각에 대한 설명을 쓰십시오.
 
 ### Patient Context
 - Patient ID: <<<PATIENT_ID>>>
@@ -62,6 +63,7 @@ PRESCRIPTION_AGENT_PROMPT = """## Role
 
 <<<OPTIONAL_MENTION_BLOCK>>><<<OPTIONAL_CLINICIAN_BLOCK>>>
 ### Required JSON Format (Strict)
+`prescriptions` 배열의 길이는 위 표의 행 수(<<<SLATE_COUNT>>>개)와 정확히 같아야 하고, rank 는 1부터 <<<SLATE_COUNT>>>까지 각각 한 번씩 나와야 합니다. 아래는 형식 예시이며 행 수는 표를 따르십시오.
 {
   "prescriptions": [
     {
@@ -70,9 +72,7 @@ PRESCRIPTION_AGENT_PROMPT = """## Role
       "prescription_code": "위 표 1순위의 prescription_code 를 그대로",
       "dosage": "미기재 또는 입력에 있는 용량만",
       "reason": "데이터 인용 후, 필요 시 짧은 임상·약리 보강(한국어)"
-    },
-    { "rank": 2, "name": "...", "prescription_code": "...", "dosage": "...", "reason": "..." },
-    { "rank": 3, "name": "...", "prescription_code": "...", "dosage": "...", "reason": "..." }
+    }
   ]
 }
 
@@ -99,16 +99,19 @@ def _render_ranked_slate(ranked_slate: Any) -> str:
     부수 효과로 §1.1 의 조건부 관측("모델은 지어내지 않는다 — 단 이 분기가
     걸리지 않았을 뿐")이 무조건이 된다. 이는 설계 §3.2(step 2)가 예정한
     제거이기도 하지만, step 1 이 이 분기를 논리적으로 성립 불가능하게 만들어
-    먼저 강제했다. §3.2 의 나머지 절반(3건을 채우지 않고 거절을 1급 답으로
-    허용 = 응답 항목 수를 줄이는 것)은 여기서 하지 않는다 — 응답 계약을
-    바꾸는 일이라 step 2 의 몫이다.
+    먼저 강제했다.
+
+    **빈 slate 분기도 사라졌다(§3.2 나머지 절반).** 예전에는 후보 0건일 때
+    "세 항목 모두 플레이스홀더로 두십시오" 라고 지시했다. 이제 그런 답은
+    존재하지 않는다 — 후보가 0건이면 호출자가 모델을 부르지 않는다. 빈
+    slate 로 여기까지 오는 것은 배선 결함이므로 조용히 문자열을 만들지 않고
+    ValueError 로 세운다(GC-3 fail-closed).
     """
-    rows = ranked_slate if isinstance(ranked_slate, (list, tuple)) else []
+    rows = [r for r in (ranked_slate or []) if isinstance(r, dict)]
     if not rows:
-        return (
-            "(조회된 처방 후보가 0건입니다. 순위를 채울 약품을 제안하지 말고, "
-            "세 항목 모두 name 을 `데이터 부족: 조회된 처방 후보 없음`, "
-            "prescription_code 를 `미기재`로 두십시오.)"
+        raise ValueError(
+            "ranked_slate 가 비어 있습니다. 설명할 항목이 없으면 모델을 호출하지 "
+            "않아야 합니다 — 빈손을 프롬프트로 만들지 않습니다(설계 §3.2)."
         )
     lines: list[str] = []
     for row in rows:
@@ -197,13 +200,17 @@ def build_prescription_agent_prompt(
     optional_block = (
         f"### Clinician question\n{cq}\n\n" if cq else ""
     )
+    # 먼저 표를 렌더한다 — 비어 있으면 여기서 ValueError 로 선다.
+    slate_block = _render_ranked_slate(ranked_slate)
+    slate_count = len([r for r in (ranked_slate or []) if isinstance(r, dict)])
     base = (
         PRESCRIPTION_AGENT_PROMPT.replace(_PH_PATIENT_ID, _as_prompt_text(patient_id))
         .replace(_PH_SYMPTOMS, _as_prompt_text(symptoms))
         .replace(_PH_HISTORY, _as_prompt_text(history))
         .replace(_PH_TOP_RX, _as_prompt_text(top_rx))
         .replace(_PH_SIMILAR, _as_prompt_text(similar_outcomes))
-        .replace(_PH_RANKED_SLATE, _render_ranked_slate(ranked_slate))
+        .replace(_PH_RANKED_SLATE, slate_block)
+        .replace(_PH_SLATE_COUNT, str(slate_count))
         .replace(_PH_OPTIONAL_MENTION, _optional_mention_section(mention_links))
         .replace(_PH_OPTIONAL_CLINICIAN, optional_block)
     )
@@ -256,11 +263,30 @@ def extract_json_object_from_llm_text(raw: str) -> dict[str, Any]:
     return obj
 
 
-def validate_prescriptions_payload(data: dict[str, Any]) -> list[dict[str, Any]]:
-    """Required JSON Format 스키마를 검증하고 prescriptions 배열을 반환합니다."""
+def validate_prescriptions_payload(
+    data: dict[str, Any], *, expected_count: int
+) -> list[dict[str, Any]]:
+    """Required JSON Format 스키마를 검증하고 prescriptions 배열을 반환합니다.
+
+    expected_count: 조회가 확정한 slate 의 행 수. **기본값을 두지 않는다** —
+        기본값 3 이 남아 있으면 호출자가 인자를 빠뜨렸을 때 "3건이어야 한다"는
+        옛 계약이 조용히 되살아난다. 그 계약이 §11.8.2 의 중복 추천을 만든
+        원인이다(설계 §3.2). 빠뜨리는 것은 TypeError 여야 한다.
+    """
+    if expected_count < 1:
+        # 0 건이면 애초에 모델을 호출하지 않는다(prescription_api). 여기까지
+        # 온 것은 배선 결함이므로 조용히 빈 배열을 통과시키지 않는다.
+        raise ValueError(
+            f"expected_count 는 1 이상이어야 합니다(받은 값: {expected_count}). "
+            "후보가 0건이면 모델을 호출하지 않습니다."
+        )
     rx = data.get("prescriptions")
-    if not isinstance(rx, list) or len(rx) != 3:
-        raise ValueError('키 "prescriptions" 는 길이 3인 배열이어야 합니다.')
+    if not isinstance(rx, list) or len(rx) != expected_count:
+        raise ValueError(
+            f'키 "prescriptions" 는 길이 {expected_count}인 배열이어야 합니다 '
+            f"(확정된 순위 행 수). 받은 값: "
+            f"{len(rx) if isinstance(rx, list) else type(rx).__name__}"
+        )
 
     required_fields = ("rank", "name", "prescription_code", "dosage", "reason")
     parsed: list[tuple[int, dict[str, Any]]] = []
@@ -278,9 +304,10 @@ def validate_prescriptions_payload(data: dict[str, Any]) -> list[dict[str, Any]]
 
     parsed.sort(key=lambda t: t[0])
     ranks_sorted = [t[0] for t in parsed]
-    if ranks_sorted != [1, 2, 3]:
+    expected_ranks = list(range(1, expected_count + 1))
+    if ranks_sorted != expected_ranks:
         raise ValueError(
-            "prescriptions 의 rank 는 1, 2, 3 이 각각 한 번씩 있어야 합니다 "
+            f"prescriptions 의 rank 는 {expected_ranks!r} 가 각각 한 번씩 있어야 합니다 "
             f"(정렬 후: {ranks_sorted!r}). 모델이 순서를 바꿨거나 중복 rank 를 냈을 수 있습니다."
         )
 
@@ -291,8 +318,12 @@ def validate_prescriptions_payload(data: dict[str, Any]) -> list[dict[str, Any]]
     return out
 
 
-def parse_prescriptions_llm_response(raw: str) -> dict[str, Any]:
-    """모델 출력을 파싱·검증한 뒤 prescriptions 스키마를 만족하는 dict를 반환합니다."""
+def parse_prescriptions_llm_response(raw: str, *, expected_count: int) -> dict[str, Any]:
+    """모델 출력을 파싱·검증한 뒤 prescriptions 스키마를 만족하는 dict를 반환합니다.
+
+    expected_count 는 `validate_prescriptions_payload` 와 같은 이유로 기본값이
+    없다(설계 §3.2).
+    """
     data = extract_json_object_from_llm_text(raw)
-    validate_prescriptions_payload(data)
+    validate_prescriptions_payload(data, expected_count=expected_count)
     return data

@@ -16,7 +16,11 @@ import {
   type ValidationJobResponse,
 } from "@/services/history";
 import { HttpError } from "@/services/http/types";
-import { graphLookupNotice, type GraphLookup } from "@/utils/graphLookupNotice";
+import {
+  graphLookupFoundNothing,
+  graphLookupNotice,
+  type GraphLookup,
+} from "@/utils/graphLookupNotice";
 import {
   renalGateNotice,
   renalItemNotice,
@@ -189,6 +193,13 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
   // 읽는다. 다른 서비스(prescription_api)의 판정이므로 aiVerification 과 합치지
   // 않는다 — 축이 다르다(추적 가능성 vs 임상 금기).
   const [aiRenalGate, setAiRenalGate] = useState<RenalGate | null | undefined>(undefined);
+  // 마지막 AI 실행이 "조회했고 뒷받침하는 후보가 0건" 으로 끝났는가(설계 §3.2).
+  // E78(고지혈증)이 실제 사례다. 추천 0건은 오류가 아니라 답이므로 화면에
+  // 남아야 하는데, aiRecommendations 는 이 경우와 "조회에 실패해서 0건" 과
+  // "아직 한 번도 안 돌렸다" 를 전부 빈 배열 하나로 표현한다 — 그래서 구분이
+  // 필요하다. 서버 상태를 복제하는 것이 아니라, 응답의 graphLookup 을 읽어
+  // 한 번 판정한 결과를 다른 ai* state 와 같은 생명주기로 들고 있는 것이다.
+  const [aiNoCandidates, setAiNoCandidates] = useState(false);
   // 처방 상세 선택으로 스왑된 랭크의 집합. rank 는 표의 "행 위치"고, aiVerification
   // 은 그 위치에 원래 앉아있던 처방을 검사한 결과다. 스왑 후에도 rank 는 그대로라
   // `prescription[${rank}]` 로 조회하면 새 처방이 옛 검사 결과를 뒤집어쓴다 —
@@ -219,6 +230,7 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
       setAiLlmStatus(undefined);
       setAiVerification(undefined);
       setAiRenalGate(undefined);
+      setAiNoCandidates(false);
       setSwappedRanks(new Set());
       setSelectedRecommendationKeys([]);
       setPrescriptionPicker(null);
@@ -233,6 +245,7 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
     setAiLlmStatus(undefined);
     setAiVerification(undefined);
     setAiRenalGate(undefined);
+    setAiNoCandidates(false);
     setSwappedRanks(new Set());
     setSelectedRecommendationKeys([]);
     setPrescriptionPicker(null);
@@ -333,14 +346,36 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
         [];
 
       if (recommended.length === 0) {
+        // 0건은 두 가지 서로 다른 사실이다(설계 §3.2, GC-3). 목록 길이로는
+        // 갈리지 않으므로 graphLookup 을 읽는다.
+        //   조회했고 후보가 없었다  -> 우리 데이터에 대한 답. 화면에 남는다
+        //   조회에 실패했거나 단계를 안 돌았다 -> 확인 못 함. 답이 아니다
+        const lookedAndFoundNothing = graphLookupFoundNothing(
+          (result.validation as { graphLookup?: GraphLookup } | undefined)?.graphLookup
+        );
+        setAiRecommendations([]);
+        setAiNoCandidates(lookedAndFoundNothing);
+        // 항목이 없으므로 항목 단위 배지는 읽히지 않는다. 낡은 값이 남지
+        // 않도록 명시적으로 비운다(aiVerification 불변식 유지).
+        setAiVerification(undefined);
+        setAiRenalGate(undefined);
+        setAiLlmStatus(result.prescriptionLlmStatus);
+        setSwappedRanks(new Set());
+        setSelectedRecommendationKeys([]);
+        setAiSessionHistoryId(historyId);
+        setAiSessionHistoryDiagnoseId(null);
+        clearPrescriptionFeedback();
         alert(
-          "AI 추천/검증 결과가 비어 있습니다. 검증 요약을 확인해주세요."
+          lookedAndFoundNothing
+            ? "이 상병에 대해 우리 데이터가 뒷받침하는 처방 후보가 0건입니다. 없는 추천을 만들지 않았습니다."
+            : "AI 추천/검증 결과가 비어 있습니다. 검증 요약을 확인해주세요."
         );
         setValidationModal(job);
         return;
       }
 
       setAiRecommendations(recommended);
+      setAiNoCandidates(false);
       // 이 배지는 아래 표 안의 처방에 붙는다. 그 처방을 실제로 만든 것은
       // prescription-api 이므로 읽어야 하는 값은 그쪽의 llmStatus 다.
       // result.llmStatus 는 validation-agent 가 자기 검증 결정을 어떻게 냈는지라
@@ -903,6 +938,26 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
                 })}
               </tbody>
             </Table>
+          </div>
+        ) : aiNoCandidates ? (
+          // 설계 §3.2 가 말하는 "유용한 신호". 추천 표가 사라지기만 하면
+          // 의사는 요청이 실패한 것과 구분할 수 없다. 조회 실패는 이 자리에
+          // 오지 않는다 — graphLookupFoundNothing 이 걸러낸다(GC-3).
+          <div className={styles.aiPanel}>
+            <div className={styles.aiPanelHeader}>
+              <span className={styles.aiPanelTitle}>
+                <strong>AI 추천 처방</strong>
+                <Badge tone="warning">데이터가 뒷받침하는 처방 후보 없음</Badge>
+                {(() => {
+                  const notice = llmStatusNotice(aiLlmStatus);
+                  return notice ? <Badge tone={notice.tone}>{notice.label}</Badge> : null;
+                })()}
+              </span>
+            </div>
+            <EmptyState
+              title="이 상병에 대해 조회된 처방 후보가 0건입니다."
+              description="없는 추천을 만들지 않았습니다 — 조회 실패가 아니라 조회 결과입니다. 검증 요약에서 그래프 조회 근거를 확인하세요."
+            />
           </div>
         ) : null}
         {diagnoses.length === 0 ? (

@@ -39,12 +39,16 @@ def test_llm_status_field_is_required_with_no_default():
 
 
 def test_llm_status_field_enum_is_pinned_to_real_or_stub():
-    """MINOR 9: `Literal["real", "stub"]` 를 `str` 로 되돌려도(엄격한 열거형을
-    풀어도) 37개 전부 통과했다. OpenAPI 스키마의 enum 자체를 고정해 이 변이를
-    잡는다."""
+    """MINOR 9: `Literal[...]` 를 `str` 로 되돌려도(엄격한 열거형을 풀어도)
+    37개 전부 통과했다. OpenAPI 스키마의 enum 자체를 고정해 이 변이를 잡는다.
+
+    "skipped" 는 설계 §3.2 에서 더한 세 번째 값이다 — 조회 후보가 0건이면
+    모델을 호출하지 않으므로 "real" 이라고 말할 수 없다. 열거형을 넓힌 것은
+    느슨하게 하려는 것이 아니라, 없던 상태를 정직하게 이름 붙인 것이다.
+    """
     schema = PrescriptionRecommendResponse.model_json_schema()
     llm_status_schema = schema["properties"]["llmStatus"]
-    assert llm_status_schema.get("enum") == ["real", "stub"]
+    assert llm_status_schema.get("enum") == ["real", "stub", "skipped"]
     assert schema["required"] and "llmStatus" in schema["required"]
 
 
@@ -87,14 +91,11 @@ def test_real_provider_reports_llm_status_real(monkeypatch):
 
     def _fake_invoke_gateway_json(system_prompt, user_prompt, model):
         calls.append((system_prompt, user_prompt, model))
+        # _request() 의 top_rx 는 후보 1건이므로 모델 답도 1건이다(§3.2).
         return (
             '{"prescriptions": ['
             '{"rank": 1, "name": "아목시실린캡슐", "prescription_code": "A001", '
-            '"dosage": "1일 3회", "reason": "발열"},'
-            '{"rank": 2, "name": "미기재", "prescription_code": "미기재", '
-            '"dosage": "미기재", "reason": "발열"},'
-            '{"rank": 3, "name": "미기재", "prescription_code": "미기재", '
-            '"dosage": "미기재", "reason": "발열"}'
+            '"dosage": "1일 3회", "reason": "발열"}'
             ']}'
         )
 

@@ -48,11 +48,12 @@ def _success_response(content_obj) -> httpx.Response:
     )
 
 
+# 아래 _real_request 의 top_rx 는 후보 1건이다. 응답 길이는 조회가 확정한
+# slate 길이와 같아야 하므로(설계 §3.2) 모델 답도 1건이다 — 예전처럼 남는
+# 두 칸을 "미기재" 로 채우면 파서가 정당하게 거부한다.
 _FAKE_PRESCRIPTIONS = {
     "prescriptions": [
         {"rank": 1, "name": "아목시실린캡슐", "prescription_code": "A001", "dosage": "1일 3회", "reason": "발열"},
-        {"rank": 2, "name": "미기재", "prescription_code": "미기재", "dosage": "미기재", "reason": "발열"},
-        {"rank": 3, "name": "미기재", "prescription_code": "미기재", "dosage": "미기재", "reason": "발열"},
     ]
 }
 

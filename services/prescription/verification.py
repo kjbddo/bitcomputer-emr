@@ -90,16 +90,15 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Sequence
 
 from medication_codes import is_medication_code
+from ranking import SLATE_SIZE
 from verification_contract import CheckResult, VerificationResult, aggregate_status
 
 # 근거 없음을 정직하게 신고할 때 쓰는 고정 문자열들.
 # prescription_agent.py 의 프롬프트 본문과 ranking.py 의 상수(임의 목록이
 # 아니라 실제 지시문·코드에서 뽑은 값)가 출처다:
-#   - "미기재": 프롬프트 dosage 필드 폴백, ranking.NO_CANDIDATE_CODE
-#     (조회 후보가 없는 순위에 조회층이 직접 넣는 코드)
+#   - "미기재": 프롬프트 dosage 필드 폴백, ranking.MISSING_CODE
+#     (처방명은 있는데 처방코드가 없는 후보 행에 조회층이 넣는 값)
 #   - "데이터 부족": name 필드 안내문의 어근
-#     (ranking.NO_CANDIDATE_NAME = "데이터 부족: 조회된 처방 후보 없음",
-#      llm_provider.stub_prescription_response 의 "데이터 부족: top_rx 비어 있음")
 #   - "데이터에 용량 없음": 프롬프트 dosage 필드 폴백
 #   - "": 필드 자체가 채워지지 않은 경우
 # 이 값들은 지어낸 코드·이름이 아니라 "낼 근거가 없다"는 모델의 정직한
@@ -175,9 +174,35 @@ def verify_prescriptions(*, candidates: Sequence[Any], items: Sequence[Any]) -> 
     # comparable_codes(플레이스홀더 제외)로만 집합 크기를 비교한다.
     comparable_codes = [c for c in codes if c not in _PLACEHOLDER_VALUES]
     duplicate_count = len(comparable_codes) - len(set(comparable_codes))
+    # 순위 무결성의 정의가 바뀌었다(설계 §3.2). 예전에는 `sorted(ranks) ==
+    # [1, 2, 3]` 이었다 — 응답이 항상 3건이었기 때문이다. 이제 응답은 조회가
+    # 뒷받침하는 만큼만 길다(0~3건).
+    #
+    # 그 상수를 그대로 두면 정상 응답(1건·2건·0건)을 전부 flag 한다. 반대로
+    # 조건을 지우면 검사가 공허해진다 — 이 저장소가 죽은 검사 둘을 걷어내고
+    # 하나를 되살린 이력이 있으니 그 실수를 새로 만들지 않는다. 남는 주장은
+    # 셋이고, 셋 다 실제로 발화한다:
+    #
+    #   (1) rank 가 1 부터 빈틈·중복 없이 이어진다 — `[1..N]`. rank 누락·중복·
+    #       0 시작·문자열 rank 를 전부 잡는다(예전 조건이 지키던 것에서 "N=3"
+    #       만 뺀 것이다)
+    #   (2) N 이 조회 상한(SLATE_SIZE)을 넘지 않는다 — "top-≤3" 의 3 이 여기
+    #       남는다. 조회가 정한 상한보다 긴 응답은 여전히 위반이다
+    #   (3) 실제 코드가 중복되지 않는다 — §11.5 방어 그대로
+    #
+    # N=0(E78)은 `ok` 다. 형식이 깨진 것이 아니라 온전한 빈 응답이기 때문이다.
+    # 이것이 "빈 응답 = 통과" 를 뜻하지는 않는다 — schema_top3 는 구조 검사라
+    # (STRUCTURAL_CHECK_IDS) 이 ok 하나로는 절대 `passed` 가 되지 않고, 후보가
+    # 없으면 전체 status 는 skippedReason 과 함께 `skipped` 로 나간다(GC-2).
+    #
+    # 이 검사는 **조회 데이터와 대조하지 않는다.** 항목 수를 후보 수와 맞춰
+    # 보고 싶은 유혹이 있지만, 그러면 구조 검사가 근거 검사가 되어 자기 집합
+    # (STRUCTURAL_CHECK_IDS)의 정의를 깨고 `passed` 게이트가 뚫린다.
+    item_count = len(raw_ranks)
     schema_ok = (
         None not in raw_ranks
-        and sorted(raw_ranks) == [1, 2, 3]
+        and sorted(raw_ranks) == list(range(1, item_count + 1))
+        and item_count <= SLATE_SIZE
         and duplicate_count == 0
     )
     checks.append(
@@ -185,7 +210,10 @@ def verify_prescriptions(*, candidates: Sequence[Any], items: Sequence[Any]) -> 
             id="schema_top3",
             target="response",
             outcome="ok" if schema_ok else "flagged",
-            evidence=f"rank={raw_ranks} 코드중복={duplicate_count}건",
+            evidence=(
+                f"rank={raw_ranks} 항목수={item_count}(상한 {SLATE_SIZE}) "
+                f"코드중복={duplicate_count}건"
+            ),
         )
     )
 

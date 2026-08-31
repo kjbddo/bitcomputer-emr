@@ -17,5 +17,12 @@ export function llmStatusNotice(
   if (llmStatus === "fallback") {
     return { label: "규칙 기반 결과 — 모델 미사용", tone: "warning" };
   }
+  // 조회 후보가 0건이라 처방 서비스가 모델을 아예 부르지 않았다(설계 §3.2).
+  // "미확인"으로 뭉개면 아는 것을 모른다고 말하는 것이고, tone 은 경고가
+  // 아니다 — 무언가 잘못돼서 모델이 빠진 것이 아니라, 설명할 항목이 없어서
+  // 부르지 않은 정상 경로다.
+  if (llmStatus === "skipped") {
+    return { label: "조회 후보 없음 — 모델 미호출", tone: "neutral" };
+  }
   return { label: "모델 출처 미확인", tone: "warning" };
 }

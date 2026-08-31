@@ -30,6 +30,11 @@ confidence 가 순서를 가르는 4건 전부 모델의 순서가 confidence �
 AQL 결과 행 순서는 동점에서 보장되지 않으므로, 그것이 새어 들어오면 같은
 데이터에 같은 질의를 해도 화면 순서가 달라진다.
 
+**길이도 조회가 정한다(§3.2).** `build_ranked_slate` 는 원래부터 뒷받침되는
+만큼만 돌려줬다 — 채우지 않는다. 그 뒤에서 응답을 3칸으로 늘리던 패딩은
+제거했다. 후보가 2건이면 응답도 2건이고, 0건이면 빈 목록이다. "3순위는 여기
+있습니다 — 다만 없습니다" 는 없는 것을 있다고 말하는 형식이다.
+
 **점수 없음은 0.0 이 아니다.** 조회에 없는 코드는 `None` 으로 남기고 정렬에서
 점수 있는 후보들 **뒤로** 보낸다. 모름을 0.0 으로 채우면 실제로 0.0 이 조회된
 후보와 구분되지 않고(M-4 가 기록한 한계 — 순위가 이 값에 걸리는 순간 한계가
@@ -48,15 +53,16 @@ SLATE_SIZE = 3
 _NAME_KEYS = ("처방명", "prescription_name", "canonical_name", "name")
 _CODE_KEYS = ("처방코드", "prescription_code", "code")
 
-# 조회 후보가 없는 순위. 모델이 아니라 조회층이 직접 쓴다 — 빈 자리를 모델의
-# 문장으로 채우면 그것이 곧 §11.8.2 의 퇴화(같은 약 반복)나 지어내기가 된다.
-NO_CANDIDATE_NAME = "데이터 부족: 조회된 처방 후보 없음"
-NO_CANDIDATE_CODE = "미기재"
-NO_CANDIDATE_DOSAGE = "미기재"
-NO_CANDIDATE_REASON = (
-    "이 순위에 올릴 조회 후보가 없습니다. 조회 결과가 뒷받침하지 않는 처방은 "
-    "채우지 않습니다."
-)
+# 필드를 채울 근거가 없을 때 쓰는 정직한 신고값(프롬프트 지시문과 같은 문자열).
+#
+# **"이 순위에는 후보가 없다" 는 뜻이 아니다.** 그런 순위는 이제 존재하지
+# 않는다 — 응답은 조회가 뒷받침하는 만큼만 길다(설계 §3.2). 빈 순위를 만들어
+# 플레이스홀더로 채우던 `NO_CANDIDATE_NAME`·`NO_CANDIDATE_REASON` 은 그래서
+# 삭제했다. 남은 둘은 **실재하는 후보의 한 필드**가 비어 있는 경우다:
+#   MISSING_CODE    후보 행에 처방명은 있는데 처방코드가 없다
+#   MISSING_DOSAGE  입력 어디에도 용량이 없다(프롬프트가 지어내기를 금지한다)
+MISSING_CODE = "미기재"
+MISSING_DOSAGE = "미기재"
 
 # 순위가 무엇에 근거했는지. 응답 계약은 건드리지 않고 toolTrace·로그로만 남긴다.
 # 항목별 진실은 각 항목의 confidence_score(None 이면 근거 없음)에 이미 있다.
@@ -92,7 +98,7 @@ def _row_value(row: Any, keys: Sequence[str]) -> str:
         if value is None:
             continue
         text = str(value).strip()
-        if text and text != NO_CANDIDATE_CODE:
+        if text and text != MISSING_CODE:
             return text
     return ""
 
@@ -156,7 +162,7 @@ def build_ranked_slate(
             RankedCandidate(
                 rank=rank,
                 name=name,
-                prescription_code=code or NO_CANDIDATE_CODE,
+                prescription_code=code or MISSING_CODE,
                 confidence_score=_lookup_confidence(confidence_by_code, code),
                 candidate_index=index,
             )

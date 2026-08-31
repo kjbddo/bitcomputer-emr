@@ -24,16 +24,26 @@ def test_verifier_exception_becomes_skipped(monkeypatch):
 
 
 def test_safe_verify_passes_through_normal_result():
-    # items=[] 이면 verify_prescriptions 의 schema_top3 검사가 rank 집합을
-    # {1,2,3} 과 대조하다 항상 flagged 로 떨어진다(candidates 유무와 무관) —
-    # 따라서 실제로 통과 가능한 status 는 "skipped" 가 아니라 "flagged" 다.
-    # 여기서 확인하려는 것은 특정 status 값이 아니라, _safe_verify 가 정상
-    # 결과를 (예외 경로처럼) skipped 로 뭉개지 않고 그대로 통과시킨다는 것.
+    # 확인하려는 것은 특정 status 값이 아니라, _safe_verify 가 정상 결과를
+    # (예외 경로처럼) skipped 로 뭉개지 않고 그대로 통과시킨다는 것이다.
+    # 후보와 항목이 실제로 맞물리는 입력을 주어 "passed" 를 받는다 — 예외
+    # 경로가 내는 skipped 와 확실히 구분되는 값이다.
+    #
+    # 예전에는 items=[] 로 호출해 flagged 를 기대했다. schema_top3 가
+    # `sorted(ranks) == [1,2,3]` 이던 시절 items=[] 는 항상 flagged 였기
+    # 때문이다. 응답 길이가 가변이 된 지금 빈 응답은 온전한 형식이므로
+    # (설계 §3.2) 그 기대는 더 이상 성립하지 않는다.
+    class _Item:
+        rank = 1
+        prescription_code = "642202450"
+        name = "약가"
+        confidence_score = 0.5
+
     result = prescription_api._safe_verify(
-        candidates=[{"prescription_code": "A01", "prescription_name": "약가"}],
-        items=[],
+        candidates=[{"prescription_code": "642202450", "prescription_name": "약가"}],
+        items=[_Item()],
     )
-    assert result["status"] == "flagged"
+    assert result["status"] == "passed"
     assert isinstance(result["checks"], list)
 
 

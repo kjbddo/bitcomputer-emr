@@ -20,31 +20,40 @@ def test_resolve_provider_reads_env(monkeypatch):
     assert resolve_provider() == "stub"
 
 
+# 스텁의 입력은 조회가 확정한 slate 다(RankedCandidate.to_prompt_row 목록).
+# 응답 길이가 slate 길이와 같아야 하므로(설계 §3.2) 스텁도 그 길이를 따른다.
+_SLATE_2 = [
+    {"rank": 1, "name": "아목시실린캡슐", "prescription_code": "A001", "confidence_score": 0.4},
+    {"rank": 2, "name": "타이레놀정", "prescription_code": "B002", "confidence_score": None},
+]
+_SLATE_1 = [_SLATE_2[0]]
+
+
 def test_stub_response_parses_with_real_parser():
-    top_rx = [
-        {"처방명": "아목시실린캡슐", "처방코드": "A001"},
-        {"처방명": "타이레놀정", "처방코드": "B002"},
-    ]
-    raw = stub_prescription_response(top_rx)
-    data = parse_prescriptions_llm_response(raw)
-    assert len(data["prescriptions"]) == 3
-    assert [p["rank"] for p in data["prescriptions"]] == [1, 2, 3]
+    raw = stub_prescription_response(_SLATE_2)
+    data = parse_prescriptions_llm_response(raw, expected_count=2)
+    assert len(data["prescriptions"]) == 2
+    assert [p["rank"] for p in data["prescriptions"]] == [1, 2]
+
+
+def test_stub_response_length_follows_the_slate_not_a_fixed_three():
+    """3건 고정으로 되돌리면 후보 2건일 때 파서가 정당하게 거부한다."""
+    assert len(json.loads(stub_prescription_response(_SLATE_1))["prescriptions"]) == 1
+    assert len(json.loads(stub_prescription_response(_SLATE_2))["prescriptions"]) == 2
 
 
 def test_stub_response_uses_codes_from_input():
-    top_rx = [{"처방명": "아목시실린캡슐", "처방코드": "A001"}]
-    data = json.loads(stub_prescription_response(top_rx))
+    data = json.loads(stub_prescription_response(_SLATE_1))
     assert data["prescriptions"][0]["prescription_code"] == "A001"
 
 
 def test_stub_response_is_deterministic():
-    top_rx = [{"처방명": "아목시실린캡슐", "처방코드": "A001"}]
-    assert stub_prescription_response(top_rx) == stub_prescription_response(top_rx)
+    assert stub_prescription_response(_SLATE_1) == stub_prescription_response(_SLATE_1)
 
 
-def test_stub_response_handles_empty_input():
-    data = json.loads(stub_prescription_response([]))
-    assert data["prescriptions"][0]["prescription_code"] == "미기재"
+def test_stub_response_for_an_empty_slate_is_empty():
+    """빈손을 3건으로 채우지 않는다. 호출자는 애초에 여기까지 오지 않는다."""
+    assert json.loads(stub_prescription_response([]))["prescriptions"] == []
 
 
 def _certificate_req(**overrides):
