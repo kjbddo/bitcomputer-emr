@@ -51,6 +51,21 @@ export interface PredictedDisease {
  * @param memo 메모 (선택)
  * @returns AI 분석 결과
  */
+// X-ray 추론은 CPU 에서 10~15초가 걸린다. 컨테이너 안에서 잰 내역:
+//   SQUID 이상탐지(reconstruct)  ~4초
+//   DenseNet 임베딩(embed_all)   ~8초   전역 + 좌폐 + 우폐 + 심장 4회
+//   나머지(전처리·마스크·검색)     ~0.3초
+//
+// 이 함수는 http/client 의 기본값 15000ms 를 그대로 쓰고 있었다. 추론 시간이
+// 그 값 바로 아래라, 같은 영상이라도 어떤 요청은 통과하고 어떤 요청은
+// 타임아웃났다 — 브라우저가 먼저 포기했을 뿐 서버는 정상 처리 중이었는데
+// 사용자에게는 분석 실패로 보였다.
+//
+// 값은 Java 의 http.client.rest-template.read-timeout-ms(180000ms) 보다 작게
+// 둔다. 이쪽이 더 크면 Java 가 이미 포기한 요청을 브라우저가 계속 기다리게
+// 된다. GPU(T4 급)를 붙이면 추론이 2~4초로 떨어지므로 그때 다시 줄인다.
+export const RADIOLOGY_ANALYZE_TIMEOUT_MS = 60000;
+
 export async function uploadAndAnalyzeImage(
   file: File,
   patientId: number,
@@ -85,6 +100,7 @@ export async function uploadAndAnalyzeImage(
       headers: {
         "Content-Type": "multipart/form-data",
       },
+      timeout: RADIOLOGY_ANALYZE_TIMEOUT_MS,
     }
   );
 
