@@ -142,12 +142,16 @@ def test_engine_status_is_exposed_and_matches_the_running_provider():
     assert engine_status in {"real", "stub", "fallback"}, (
         f"계약 밖의 engineStatus: {engine_status!r}"
     )
-    assert len(body["prescriptions"]) == 3
+    # 후보를 1건만 실어 보냈으므로 추천도 1건이다. 설계 §3.2 이후 응답 길이는
+    # 조회가 뒷받침하는 만큼이고, 모자란 자리를 플레이스홀더로 채우지 않는다 —
+    # 예전에는 여기서 3 을 요구했고 그게 정확히 없앤 계약이다.
+    assert len(body["prescriptions"]) == 1
+    assert [p["rank"] for p in body["prescriptions"]] == [1]
 
     if engine_status != "stub":
         pytest.skip(
             f"스택이 engineStatus={engine_status!r} 로 돌고 있어 stub 고유 단언은 건너뛴다. "
-            "이 테스트의 나머지(계약 준수, 추천 3건)는 이미 확인했다."
+            "이 테스트의 나머지(계약 준수, 후보 수만큼의 추천)는 이미 확인했다."
         )
 
 
