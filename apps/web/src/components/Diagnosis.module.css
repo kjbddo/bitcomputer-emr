@@ -136,6 +136,33 @@
   margin-top: var(--space-1);
 }
 
+.modalGraphNotice {
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--warning-text);
+  border-radius: var(--radius-md);
+  background: var(--warning-bg);
+  color: var(--warning-text);
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+}
+
+.modalGraphNoticeHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.modalGraphNotice ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.modalGraphNotice li + li {
+  margin-top: var(--space-1);
+}
+
 .modalReferences {
   margin: 0;
   padding: var(--space-3);

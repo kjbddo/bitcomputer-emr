@@ -36,6 +36,10 @@ class ValidationState(TypedDict, total=False):
     # 모델 호출 원장과는 다른 축이라 절대 그쪽에 섞지 않는다 — 응답 최상위
     # prescriptionLlmStatus 로만 나간다(F-H3).
     prescription_llm_status: Optional[str]
+    # prescription_api 가 보고한 ArangoDB 처방 그래프 조회 결과(F-M6). 후보 조회
+    # 단계를 아예 돌지 않았으면 키가 없고, 그 "확인 못 함" 은 "0건" 과 다른
+    # 상태로 응답까지 그대로 간다(GC-3).
+    graph_lookup: Optional[Dict[str, Any]]
 
 
 def compact_state(state: ValidationState) -> Dict[str, Any]:

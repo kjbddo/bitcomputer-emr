@@ -90,15 +90,20 @@ class PythonProvenanceFieldsSurviveJavaDtoTest {
         }
     }
 
+    /*
+     * prescription_api 의 PrescriptionRecommendResponse 는 여기 없다. 그 응답을
+     * Java 로 받던 유일한 경로(AgentServiceImpl.callAgentAndMap →
+     * PrescriptionAgentClient.recommend)가 죽은 코드라 삭제됐고, 지금 그 응답을
+     * 받는 것은 validation-agent(파이썬)다. 그쪽의 출처·검증은
+     * ValidationAgentResponse 의 prescriptionLlmStatus / prescriptionVerification
+     * 로 건너오므로 이 목록의 첫 번째 경계가 이미 덮는다. 동기 경로를 되살리지
+     * 않는 한 다시 넣지 말 것.
+     */
     private static final List<Boundary> BOUNDARIES = List.of(
             new Boundary(
                     "services/validation-agent/app/models.py",
                     "ValidationAgentResponse",
                     ValidationAgentResponse.class),
-            new Boundary(
-                    "services/prescription/prescription_api.py",
-                    "PrescriptionRecommendResponse",
-                    PrescriptionAgentResponse.class),
             new Boundary(
                     "services/prescription/certificate_api.py",
                     "CertificateGenerateResponse",
