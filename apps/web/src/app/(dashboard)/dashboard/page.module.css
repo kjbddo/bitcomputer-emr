@@ -27,7 +27,7 @@
 
 .contentGrid {
   display: grid;
-  grid-template-columns: 300px 1fr 1fr;
+  grid-template-columns: var(--col-tracks, 300px 1fr 1fr);
   gap: var(--space-4);
   height: 100%;
   min-height: 600px;
@@ -35,7 +35,7 @@
 
 .contentGridClinic {
   display: grid;
-  grid-template-columns: 300px 1fr 350px;
+  grid-template-columns: var(--col-tracks, 300px 1fr 350px);
   gap: var(--space-4);
   height: 100%;
   min-height: 600px;
@@ -96,16 +96,17 @@
 
 .contentGridCertificate {
   display: grid;
-  grid-template-columns: 280px 1fr 1fr;
+  grid-template-columns: var(--col-tracks, 280px 1fr 1fr);
   gap: var(--space-4);
   height: 100%;
   min-height: 600px;
 }
 
 .certificateCenterColumn {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: var(--row-tracks, 1fr 1fr);
   gap: var(--space-4);
+  min-height: 0;
   height: 100%;
 }
 
@@ -118,22 +119,24 @@
 }
 
 .clinicMiddleColumn {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: var(--row-tracks, 1fr 1fr 1fr);
   gap: var(--space-4);
   min-height: 0;
 }
 
 .clinicRightColumn {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: var(--row-tracks, 1fr 1fr);
   gap: var(--space-4);
+  min-height: 0;
 }
 
 .leftColumn {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: var(--row-tracks, 1fr 1fr);
   gap: var(--space-4);
+  min-height: 0;
 }
 
 .middleColumn {
@@ -141,7 +144,8 @@
 }
 
 .rightColumn {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: var(--row-tracks, 1fr 1fr);
   gap: var(--space-4);
+  min-height: 0;
 }
