@@ -129,6 +129,21 @@ class Settings:
     # 어댑터가 생긴 지금 그 이름을 살려두면 "torch ROI 모델이 있다"는 잘못된 신호가
     # 되므로 지운다. 학습된 ROI 모델을 붙이는 날 별도 토글을 새로 만든다.
     USE_CV_ROI: bool = _bool(os.environ.get("USE_CV_ROI"), True)
+    # 사전학습 해부학 분할(ChestX-Det PSPNet, app.ml.pspnet_roi_model). ROI 어댑터
+    # 우선순위는 pspnet > cv > mock 이고, 이 토글은 그 첫 번째를 "시도하라"는
+    # 뜻일 뿐이다 - 실제로 올라왔는지는 factory.BuildResult.roi_status 가 답한다.
+    # 기본값이 true 인 이유: 이것이 이 서비스의 ROI 분할기이고, 실패해도 mock 이
+    # 아니라 cv 로 내려가며 그 사실이 WARNING 과 roi_status 에 남는다.
+    USE_PSPNET_ROI: bool = _bool(os.environ.get("USE_PSPNET_ROI"), True)
+    # 가중치(273MB) 캐시 디렉터리. 비우면 torchxrayvision 기본값
+    # (~/.torchxrayvision/models_data/)을 쓴다. 컨테이너는 호스트 캐시를
+    # 마운트한 경로를 여기로 준다.
+    PSPNET_CACHE_DIR: Optional[str] = os.environ.get("PSPNET_CACHE_DIR") or None
+    # 가중치가 없을 때 런타임 다운로드를 허용할지. **기본은 false 다.** 운영
+    # 컨테이너에는 egress 가 없어서, 허용해두면 기동이 네트워크 타임아웃만큼
+    # 멈춘다. 호스트에서 한 번 받아두는 것은
+    # scripts/fetch_pspnet_weights.py 가 한다.
+    PSPNET_ALLOW_DOWNLOAD: bool = _bool(os.environ.get("PSPNET_ALLOW_DOWNLOAD"), False)
 
     # SQUID 모델 폴더. 가중치는 scripts/fetch-models.sh 로 내려받는다.
     # 주의: services/radiology-legacy/ 의 직계 자식이어야 한다. torch_anomaly_model.py 가

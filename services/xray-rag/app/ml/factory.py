@@ -20,10 +20,24 @@ class BuildResult(NamedTuple):
     fallback 한다). anomaly_is_real / embedding_is_real 은 그 "결과"를 담아,
     engineStatus 가 토글이 아니라 실제로 만들어진 모델을 근거로 판정되도록 한다.
 
-    roi_is_real 도 같은 규칙이다. 예전에는 이 필드가 없었다 - 실 ROI 어댑터가
+    roi_source 도 같은 규칙이다. 예전에는 이런 필드가 없었다 - 실 ROI 어댑터가
     없어 USE_TORCH_ROI 가 no-op 이었고 factory 가 항상 MockROIModel 을 돌려줬기
-    때문이다. 이제 영상 적응형 어댑터(app.ml.cv_roi_model)가 있으므로 그 이유는
-    만료됐고, 어느 쪽이 구성됐는지 기록한다.
+    때문이다. 이제 ROI 어댑터가 셋이므로(pspnet > cv > mock) 어느 것이 실제로
+    구성됐는지 문자열로 기록한다. roi_is_real 은 그 값에서 파생된다 - 두 곳에
+    따로 두면 서로 어긋날 수 있다.
+
+    **우선순위 pspnet > cv > mock 의 근거.**
+
+    1. pspnet(`app.ml.pspnet_roi_model`)만이 학습된 해부학 분할 모델이다
+       (ChestX-Det). 나머지 둘은 그것을 흉내 낸 휴리스틱이다. 대신 273MB 가중치가
+       있어야 해서 항상 쓸 수 있지는 않다.
+    2. cv(`app.ml.cv_roi_model`)는 외부 파일 없이 numpy/scipy 만으로 돌고, 영상에
+       실제로 적응한다. pspnet 을 못 올린 환경에서 고정 타원보다 낫다.
+    3. mock 은 입력과 무관한 고정 타원이다. 마지막 수단이다.
+
+    품질 순서와 가용성 순서가 정확히 반대이므로 "가장 좋은 것부터 시도하고 실패하면
+    한 칸 내려간다"가 성립한다. **내려간 사실은 감추지 않는다** - 각 단계가 WARNING
+    을 남기고 최종 결과가 roi_status 에 남는다.
 
     다만 **engine_status 판정에는 여전히 ROI 를 넣지 않는다.** 이유는 두 가지다:
 
@@ -42,7 +56,7 @@ class BuildResult(NamedTuple):
     embedder: EmbeddingModel
     anomaly_is_real: bool
     embedding_is_real: bool
-    roi_is_real: bool = False
+    roi_source: str = "mock"
     settings_embedding_version: Optional[str] = None
 
     @property
@@ -56,13 +70,21 @@ class BuildResult(NamedTuple):
         return "real" if (self.anomaly_is_real and self.embedding_is_real) else "mock"
 
     @property
+    def roi_is_real(self) -> bool:
+        """ROI 마스크가 입력 영상에 실제로 반응하는 분할에서 나왔는가.
+
+        roi_source 에서 파생된다 - 별도 필드로 두면 둘이 어긋날 수 있다.
+        """
+        return self.roi_source != "mock"
+
+    @property
     def roi_status(self) -> str:
-        """ROI 마스크가 영상 적응형 분할("cv")인지 고정 타원 mock("mock")인지.
+        """어느 ROI 분할기가 실제로 구성됐는지: "pspnet" / "cv" / "mock".
 
         engine_status 와 달리 별도로 보고된다(위 독스트링 참고). roiStats 와
         ROI별 임베딩의 의미가 이 값에 달려 있다.
         """
-        return "cv" if self.roi_is_real else "mock"
+        return self.roi_source
 
     @property
     def mask_version(self) -> str:
@@ -105,15 +127,27 @@ def build_models(settings: Settings) -> BuildResult:
             anomaly = m
             anomaly_is_real = True
 
+    # ROI 어댑터: pspnet > cv > mock. 각 단계는 "시도"이고, 실패하면 한 칸
+    # 내려간다. 근거는 BuildResult 독스트링 참고.
     roi: ROIMaskModel = MockROIModel()
-    roi_is_real = False
-    if settings.USE_CV_ROI:
+    roi_source = "mock"
+    if settings.USE_PSPNET_ROI:
+        from app.ml import pspnet_roi_model
+
+        p = pspnet_roi_model.build_pspnet_roi_model(
+            cache_dir=settings.PSPNET_CACHE_DIR,
+            allow_download=settings.PSPNET_ALLOW_DOWNLOAD,
+        )
+        if p is not None:
+            roi = p
+            roi_source = "pspnet"
+    if roi_source == "mock" and settings.USE_CV_ROI:
         from app.ml import cv_roi_model
 
         r = cv_roi_model.build_cv_roi_model()
         if r is not None:
             roi = r
-            roi_is_real = True
+            roi_source = "cv"
 
     embedder: EmbeddingModel = MockEmbeddingModel(dim=settings.EMBEDDING_DIM)
     embedding_is_real = False
@@ -131,6 +165,6 @@ def build_models(settings: Settings) -> BuildResult:
         embedder=embedder,
         anomaly_is_real=anomaly_is_real,
         embedding_is_real=embedding_is_real,
-        roi_is_real=roi_is_real,
+        roi_source=roi_source,
         settings_embedding_version=settings.EMBEDDING_VERSION,
     )
