@@ -789,6 +789,12 @@ def main() -> None:
     # "confidence 없음, 후보는 있음" 경우다. 순위를 모델에게 되돌려주지 않고
     # 조회(여기서는 컨텍스트 JSON)가 준 후보 순서를 그대로 확정 순위로 쓴다.
     ranked_slate = build_ranked_slate(ctx["top_rx"], {})
+    if not ranked_slate:
+        # 조회가 뒷받침하는 후보가 0건이다. 설명할 항목이 없으므로 모델을
+        # 부르지 않는다 — 빈손을 3건으로 채우지 않는다(설계 §3.2). 오류가
+        # 아니라 답이므로 종료 코드도 0 이다.
+        print(json.dumps({"prescriptions": []}, ensure_ascii=False, indent=2))
+        return
     user_msg = build_prescription_agent_prompt(
         patient_id=ctx["patient_id"],
         symptoms=ctx["symptoms"],
@@ -832,7 +838,7 @@ def main() -> None:
         return
 
     try:
-        data = parse_prescriptions_llm_response(raw)
+        data = parse_prescriptions_llm_response(raw, expected_count=len(ranked_slate))
     except ValueError as e:
         print(f"[오류] JSON 파싱/검증 실패: {e}", file=sys.stderr)
         print("--- 모델 원문 ---", file=sys.stderr)

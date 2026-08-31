@@ -17,8 +17,7 @@ import json  # noqa: E402
 import prescription_agent  # noqa: E402
 import prescription_api  # noqa: E402
 from ranking import (  # noqa: E402
-    NO_CANDIDATE_CODE,
-    NO_CANDIDATE_NAME,
+    MISSING_CODE,
     RANKING_STRATEGY_CANDIDATE_ORDER,
     RANKING_STRATEGY_CONFIDENCE,
     RANKING_STRATEGY_NO_CANDIDATES,
@@ -193,7 +192,8 @@ def _fixed_llm(monkeypatch, payload):
     )
 
 
-def _three_items(codes, names):
+def _model_items(codes, names):
+    """모델이 낸 답. 길이는 slate 길이와 같아야 한다(설계 §3.2)."""
     return {
         "prescriptions": [
             {
@@ -203,9 +203,13 @@ def _three_items(codes, names):
                 "dosage": "미기재",
                 "reason": f"모델이 쓴 {i + 1}순위 설명",
             }
-            for i in range(3)
+            for i in range(len(codes))
         ]
     }
+
+
+def _three_items(codes, names):
+    return _model_items(codes[:3], names[:3])
 
 
 def _request(**kwargs):
@@ -311,7 +315,7 @@ def test_response_codes_are_unique_when_candidates_repeat_a_code(monkeypatch):
         "fetch_confidence_scores_by_diagnosis_codes",
         lambda *a, **k: [],
     )
-    _fixed_llm(monkeypatch, _three_items(["C1", "C1", "C1"], ["약1", "약1", "약1"]))
+    _fixed_llm(monkeypatch, _model_items(["C1", "C1"], ["약1", "약1"]))
 
     resp = prescription_api.recommend(
         _request(
@@ -320,11 +324,8 @@ def test_response_codes_are_unique_when_candidates_repeat_a_code(monkeypatch):
         x_prescription_eval_trace=None,
     )
 
-    real_codes = [
-        p.prescription_code
-        for p in resp.prescriptions
-        if p.prescription_code != NO_CANDIDATE_CODE
-    ]
+    # 후보가 (중복을 접고) 2건이므로 응답도 2건이다 — 세 번째 칸이 없다.
+    real_codes = [p.prescription_code for p in resp.prescriptions]
     assert real_codes == ["C1", "C2"]
     assert len(real_codes) == len(set(real_codes))
     # 전체 status 는 보지 않는다 — 이 픽스처의 "C1"·"C2"는 9자리 약제 코드가
@@ -365,8 +366,11 @@ def test_caller_supplied_top_rx_leaves_confidence_none_not_zero(monkeypatch):
     assert conf_checks and all(c["outcome"] == "skipped" for c in conf_checks)
 
 
-def test_zero_candidates_yields_retrieval_authored_placeholders(monkeypatch):
-    """E78: 약제 후보 0건. 빈손을 모델이 지어낸 3건으로 채우지 않는다."""
+def test_zero_candidates_yield_an_empty_response(monkeypatch):
+    """E78: 약제 후보 0건. 빈손을 3건으로 채우지 않는다(설계 §3.2).
+
+    예전에는 조회층이 쓴 플레이스홀더 3건이 나왔다. 이제는 0건이다.
+    """
     monkeypatch.setattr(prescription_api, "fetch_top_rx_from_arango", lambda *a, **k: [])
     monkeypatch.setattr(
         prescription_api, "fetch_cohort_prescriptions_by_diagnosis_codes", lambda *a, **k: []
@@ -392,10 +396,10 @@ def test_zero_candidates_yields_retrieval_authored_placeholders(monkeypatch):
         x_prescription_eval_trace=None,
     )
 
-    assert [p.name for p in resp.prescriptions] == [NO_CANDIDATE_NAME] * 3
-    assert [p.prescription_code for p in resp.prescriptions] == [NO_CANDIDATE_CODE] * 3
-    assert all(p.confidence_score is None for p in resp.prescriptions)
-    # 모델이 낸 성분명이 응답 어디에도 새어 나오지 않는다.
+    # 후보가 0건이면 응답도 0건이다 — 플레이스홀더 세 칸으로 채우지 않는다
+    # (설계 §3.2). 모델은 호출조차 되지 않으므로 위 _fixed_llm 페이로드는
+    # 어디에도 실릴 수 없다.
+    assert resp.prescriptions == []
     blob = json.dumps(resp.model_dump(), ensure_ascii=False)
     assert "아토르바스타틴" not in blob
     assert resp.used_arango_top_rx is False
@@ -403,23 +407,25 @@ def test_zero_candidates_yields_retrieval_authored_placeholders(monkeypatch):
     assert resp.verification["status"] == "skipped"
 
 
-def test_partial_slate_pads_remaining_ranks_without_inventing(monkeypatch):
-    """후보가 1건뿐이면 2·3순위를 지어내지 않고 후보 없음으로 남긴다."""
+def test_partial_slate_stops_at_the_last_supported_rank(monkeypatch):
+    """후보가 1건뿐이면 응답도 1건이다 — 2·3순위를 만들지 않는다(설계 §3.2).
+
+    예전에는 남는 두 칸을 플레이스홀더로 채웠다. 그것도 지어내기는 아니었지만
+    "3순위는 여기 있습니다 — 다만 없습니다" 라고 말하는 형식이었다.
+    """
     monkeypatch.setattr(
         prescription_api, "fetch_confidence_scores_by_diagnosis_codes", lambda *a, **k: []
     )
-    _fixed_llm(monkeypatch, _three_items(["C1", "XX", "YY"], ["약1", "가짜2", "가짜3"]))
+    _fixed_llm(monkeypatch, _model_items(["C1"], ["약1"]))
 
     resp = prescription_api.recommend(
         _request(top_rx=[_row("C1", "약1")]),
         x_prescription_eval_trace=None,
     )
 
+    assert len(resp.prescriptions) == 1
     assert resp.prescriptions[0].prescription_code == "C1"
-    assert [p.prescription_code for p in resp.prescriptions[1:]] == [NO_CANDIDATE_CODE] * 2
-    assert [p.name for p in resp.prescriptions[1:]] == [NO_CANDIDATE_NAME] * 2
-    blob = json.dumps(resp.model_dump(), ensure_ascii=False)
-    assert "가짜2" not in blob and "가짜3" not in blob
+    assert resp.prescriptions[0].rank == 1
 
 
 def test_ranking_strategy_is_recorded_in_tool_trace(monkeypatch):
@@ -428,7 +434,7 @@ def test_ranking_strategy_is_recorded_in_tool_trace(monkeypatch):
         "fetch_confidence_scores_by_diagnosis_codes",
         lambda *a, **k: [{"prescription_code": "C1", "confidence_score": 0.4}],
     )
-    _fixed_llm(monkeypatch, _three_items(["C1", "C2", "C3"], ["약1", "약2", "약3"]))
+    _fixed_llm(monkeypatch, _model_items(["C1", "C2"], ["약1", "약2"]))
 
     resp = prescription_api.recommend(
         _request(
@@ -497,18 +503,25 @@ def test_prompt_carries_the_rendered_slate_rows():
     assert "2. name='약2'  prescription_code='C2'  — confidence 없음" in prompt
 
 
-def test_prompt_for_zero_candidates_tells_the_model_not_to_fill_the_slate():
-    prompt = prescription_agent.build_prescription_agent_prompt(
-        patient_id="p1",
-        symptoms="건강검진에서 콜레스테롤 높다고 들었다",
-        history="",
-        top_rx=[{"note": "데이터 부족: top_rx 비어 있음"}],
-        similar_outcomes="",
-        ranked_slate=[],
-    )
+def test_prompt_for_zero_candidates_is_never_built():
+    """후보 0건이면 프롬프트 자체가 만들어지지 않는다(설계 §3.2).
 
-    assert "조회된 처방 후보가 0건입니다" in prompt
-    assert "순위를 채울 약품을 제안하지 말고" in prompt
+    예전에는 "세 항목 모두 플레이스홀더로 두십시오" 라고 지시하는 빈 slate
+    블록이 있었다. 응답이 후보 수만큼만 길어진 지금 그런 답은 존재하지 않고,
+    빈 slate 로 여기까지 오는 것은 배선 결함이다 — 조용히 문자열을 만들면
+    모델에게 빈손을 주고 그 출력이 어디로 갈지가 다시 열린다.
+    """
+    import pytest
+
+    with pytest.raises(ValueError):
+        prescription_agent.build_prescription_agent_prompt(
+            patient_id="p1",
+            symptoms="건강검진에서 콜레스테롤 높다고 들었다",
+            history="",
+            top_rx=[{"note": "데이터 부족: top_rx 비어 있음"}],
+            similar_outcomes="",
+            ranked_slate=[],
+        )
 
 
 def test_prompt_requires_ranked_slate_argument():

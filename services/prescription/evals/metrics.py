@@ -84,9 +84,19 @@ def collect_allowed_from_request(request: Dict[str, Any]) -> tuple[Set[str], Set
 def heuristic_answer_quality(scenario: Dict[str, Any], response: Dict[str, Any]) -> Dict[str, Any]:
     prescriptions = response.get("prescriptions") if isinstance(response, dict) else None
     schema_valid = isinstance(prescriptions, list)
-    top3_valid = schema_valid and len(prescriptions) == 3 and sorted(
-        int(item.get("rank", 0)) for item in prescriptions if isinstance(item, dict)
-    ) == [1, 2, 3]
+    # 응답 길이는 조회가 뒷받침하는 만큼이다(설계 §3.2) — 3 고정이 아니다.
+    # 여기서 "유효" 는 rank 가 1 부터 빈틈·중복 없이 이어지고 상한 3 을 넘지
+    # 않는다는 뜻이다(verification.schema_top3 와 같은 정의). 길이 3 을 계속
+    # 요구하면 정상적인 1·2건 응답이 전부 무효로 집계되고, 그 집계가 다시
+    # "3건을 채워라" 라는 압력이 된다 — 이 태스크가 없앤 바로 그 압력이다.
+    item_count = len(prescriptions) if schema_valid else 0
+    top3_valid = (
+        schema_valid
+        and item_count <= 3
+        and sorted(
+            int(item.get("rank", 0)) for item in prescriptions if isinstance(item, dict)
+        ) == list(range(1, item_count + 1))
+    )
 
     req_names, req_codes = collect_allowed_from_request(scenario.get("request") or {})
     allowed_names = set(scenario.get("allowedPrescriptionNames") or []) | req_names

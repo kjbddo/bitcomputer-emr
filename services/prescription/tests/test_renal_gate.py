@@ -247,30 +247,34 @@ def test_placeholder_item_is_unknown_not_clear():
     `unknown`(test_note_fetch_failure_is_unknown_not_clear), 판정할 항목이
     아예 없으면 `unknown`. **대조 불가를 `clear` 로 내지 않는다**는 것이
     이 부품의 원칙이고, 플레이스홀더만 그 원칙 밖에 있었다.
+
+    설계 §3.2 이후 "이 순위에는 후보가 없다" 는 항목은 더 이상 만들어지지
+    않는다(응답이 후보 수만큼만 길다). 그래도 이 경로는 죽지 않았다 —
+    **처방명은 있는데 처방코드가 없는 후보**가 남아 있고, 그 항목의 코드가
+    `ranking.MISSING_CODE` 다. 성분을 대조할 수 없으니 `clear` 가 아니다.
     """
-    from ranking import NO_CANDIDATE_CODE, NO_CANDIDATE_NAME
+    from ranking import MISSING_CODE
 
     result = rg.evaluate_renal_gate(
         notes=[NOTE_GFR13],
-        items=[_item(1, NO_CANDIDATE_NAME, code=NO_CANDIDATE_CODE)],
+        items=[_item(1, "코드 없는 후보", code=MISSING_CODE)],
     )
     assert result.items[0].outcome == "unknown"
     assert "추천 항목" in result.items[0].evidence
 
 
 def test_all_placeholder_slate_does_not_report_clear():
-    """전 항목이 플레이스홀더면 최상위도 `clear` 가 아니다.
+    """전 항목이 대조 불가면 최상위도 `clear` 가 아니다.
 
     `status` 는 항목 중 최고 심각도다. 플레이스홀더가 `clear` 였을 때는
-    후보가 0건인 응답 전체가 `clear` 로 나갔다 — GFR 13 환자에게 "확인해
-    보니 해당 없음" 으로 보이는 상태다. E78(고지혈증)이 실제로 약제 후보
-    0건이므로 가정이 아니다.
+    대조하지 못한 응답 전체가 `clear` 로 나갔다 — GFR 13 환자에게 "확인해
+    보니 해당 없음" 으로 보이는 상태다.
     """
-    from ranking import NO_CANDIDATE_CODE, NO_CANDIDATE_NAME
+    from ranking import MISSING_CODE
 
     result = rg.evaluate_renal_gate(
         notes=[NOTE_GFR13],
-        items=[_item(i, NO_CANDIDATE_NAME, code=NO_CANDIDATE_CODE) for i in (1, 2, 3)],
+        items=[_item(i, f"코드 없는 후보{i}", code=MISSING_CODE) for i in (1, 2, 3)],
     )
     assert result.renalStatus == "impaired"
     assert result.status == "unknown"

@@ -42,8 +42,9 @@ def test_recommend_stub_mode_without_google_api_key(monkeypatch):
     resp = pa.recommend(req, x_prescription_eval_trace=None)
 
     assert isinstance(resp, pa.PrescriptionRecommendResponse)
-    assert len(resp.prescriptions) == 3
-    assert [p.rank for p in resp.prescriptions] == [1, 2, 3]
+    # 후보 1건 -> 응답 1건. 남는 두 칸을 채우지 않는다(설계 §3.2).
+    assert len(resp.prescriptions) == 1
+    assert [p.rank for p in resp.prescriptions] == [1]
     assert resp.prescriptions[0].prescription_code == "A001"
 
 

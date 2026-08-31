@@ -51,11 +51,7 @@ from prescription_agent import (
     parse_prescriptions_llm_response,
 )
 from ranking import (
-    NO_CANDIDATE_CODE,
-    NO_CANDIDATE_DOSAGE,
-    NO_CANDIDATE_NAME,
-    NO_CANDIDATE_REASON,
-    SLATE_SIZE,
+    MISSING_DOSAGE,
     build_ranked_slate,
     describe_ranking_strategy,
 )
@@ -176,7 +172,11 @@ class PrescriptionRecommendResponse(BaseModel):
     # LLM 을 실제로 썼는지. engineStatus 와 달리 실행 경로에서 도출한다(spec §6.2).
     # 기본값을 두지 않는다 — 생성 시 값을 빠뜨리면 "모델이 실제로 판단했다"는
     # 거짓 신호를 조용히 내보내게 된다(MINOR 5).
-    llmStatus: Literal["real", "stub"]
+    # "skipped": 조회 후보가 0건이라 모델을 부르지 않았다(설계 §3.2). 설명할
+    # 항목이 없는데 호출하면 토큰만 쓰고, 모델이 낸 문장이 응답에 새어 들어갈
+    # 자리가 생긴다. 부르지 않았으면 "real" 이라고 말하지 않는다 — 그것이 이
+    # 필드의 존재 이유다.
+    llmStatus: Literal["real", "stub", "skipped"]
     # 출력이 조회 결과로 추적되는지. llmStatus 와 다른 축이다 —
     # llmStatus 는 "모델이 돌았나", 이건 "돈 결과에 근거가 있나"다(spec §7.1).
     verification: Optional[Dict[str, Any]] = None
@@ -709,82 +709,114 @@ def recommend(
         confidenceRowCount=len(confidence_by_code),
     )
 
-    user_msg = build_prescription_agent_prompt(
-        patient_id=req.patient_id,
-        symptoms=req.symptoms,
-        history=req.history,
-        top_rx=effective_top_rx,
-        similar_outcomes=similar_for_prompt,
-        ranked_slate=[c.to_prompt_row() for c in ranked_slate],
-        clinician_question=req.clinician_question,
-        mention_links=req.mention_links,
-    )
-    trace_tool(
-        "prompt_builder",
-        True,
-        status="success",
-        inputSummary={
-            "has_top_rx": not _is_empty_top_rx(effective_top_rx),
-            "has_similar_outcomes": bool(str(similar_for_prompt or "").strip()),
-            "has_mention_links": bool(req.mention_links),
-        },
-    )
-
-    # 게이트웨이에 실제로 실릴 모델. req.model 은 게이트웨이 payload 에 실리지
-    # 않는다(luna 계약 — 서비스가 하나의 고정 모델만 사용). GC-2: req.model /
-    # req.temperature 가 채워져 있는데도 조용히 버려지면 안 되므로 흔적을 남긴다.
-    # 최종 리뷰 IMPORTANT 2: os.environ.get() 을 여기서 또 부르지 않는다 —
-    # /health(_default_llm_model()) 와 서로 다른 시점에 읽으면 두 값이 어긋날
-    # 수 있다. 단일 함수로 합쳐 항상 같은 값을 보게 한다.
-    wire_model = _default_llm_model()
-    ignored_kwargs: Dict[str, Any] = {}
-    if req.model and req.model != wire_model:
-        logger.warning(
-            "req.model=%r 은(는) 무시됩니다 — 게이트웨이에는 항상 LLM_MODEL=%r 로 전송됩니다.",
-            req.model,
-            wire_model,
-        )
-        ignored_kwargs["ignoredRequestModel"] = req.model
-    if req.temperature is not None:
-        logger.warning(
-            "req.temperature=%r 은(는) 무시됩니다 — 게이트웨이는 temperature 를 받지 않습니다(luna 계약).",
-            req.temperature,
-        )
-        ignored_kwargs["ignoredTemperature"] = req.temperature
-
+    # 모델 호출은 **설명할 항목이 있을 때만** 한다(설계 §3.2).
+    #
+    # slate 가 비었다는 것은 "이 상병에 대해 우리 데이터가 뒷받침하는 처방
+    # 후보가 없다" 는 조회 결과다(E78 고지혈증이 PR #9 필터 이후 실제로 그렇다).
+    # 그때 모델을 부르면 (a) 설명할 것이 없는데 토큰을 쓰고, (b) 모델이 낸
+    # 문장이 응답에 새어 들어갈 자리가 생기며, (c) 모델이 3건을 내면 파서가
+    # 502 를 던져 **정상적인 0건 답이 장애로 보인다**. 부르지 않는 것이 맞다.
     provider = resolve_provider()
-    if provider == "stub":
-        raw = stub_prescription_response(effective_top_rx)
-        llm_status = "stub"
-        trace_tool(
-            "llm_generate", True, status="success", model="stub", temperature=0.0, **ignored_kwargs
+    if ranked_slate:
+        user_msg = build_prescription_agent_prompt(
+            patient_id=req.patient_id,
+            symptoms=req.symptoms,
+            history=req.history,
+            top_rx=effective_top_rx,
+            similar_outcomes=similar_for_prompt,
+            ranked_slate=[c.to_prompt_row() for c in ranked_slate],
+            clinician_question=req.clinician_question,
+            mention_links=req.mention_links,
         )
-    else:
-        raw = _invoke_gateway_json(SYSTEM_PRESCRIPTION, user_msg, wire_model)
-        llm_status = "real"
-        trace_tool("llm_generate", True, status="success", model=wire_model, **ignored_kwargs)
-
-    try:
-        data = parse_prescriptions_llm_response(raw)
         trace_tool(
-            "json_parse",
+            "prompt_builder",
             True,
             status="success",
-            prescriptionCount=len(data.get("prescriptions") or []),
+            inputSummary={
+                "has_top_rx": not _is_empty_top_rx(effective_top_rx),
+                "has_similar_outcomes": bool(str(similar_for_prompt or "").strip()),
+                "has_mention_links": bool(req.mention_links),
+            },
         )
-    except ValueError as exc:
-        logger.error("LLM 응답 파싱 실패: %s / raw=%r", exc, raw)
+
+        # 게이트웨이에 실제로 실릴 모델. req.model 은 게이트웨이 payload 에 실리지
+        # 않는다(luna 계약 — 서비스가 하나의 고정 모델만 사용). GC-2: req.model /
+        # req.temperature 가 채워져 있는데도 조용히 버려지면 안 되므로 흔적을 남긴다.
+        # 최종 리뷰 IMPORTANT 2: os.environ.get() 을 여기서 또 부르지 않는다 —
+        # /health(_default_llm_model()) 와 서로 다른 시점에 읽으면 두 값이 어긋날
+        # 수 있다. 단일 함수로 합쳐 항상 같은 값을 보게 한다.
+        wire_model = _default_llm_model()
+        ignored_kwargs: Dict[str, Any] = {}
+        if req.model and req.model != wire_model:
+            logger.warning(
+                "req.model=%r 은(는) 무시됩니다 — 게이트웨이에는 항상 LLM_MODEL=%r 로 전송됩니다.",
+                req.model,
+                wire_model,
+            )
+            ignored_kwargs["ignoredRequestModel"] = req.model
+        if req.temperature is not None:
+            logger.warning(
+                "req.temperature=%r 은(는) 무시됩니다 — 게이트웨이는 temperature 를 받지 않습니다(luna 계약).",
+                req.temperature,
+            )
+            ignored_kwargs["ignoredTemperature"] = req.temperature
+
+        if provider == "stub":
+            raw = stub_prescription_response([c.to_prompt_row() for c in ranked_slate])
+            llm_status = "stub"
+            trace_tool(
+                "llm_generate", True, status="success", model="stub", temperature=0.0,
+                **ignored_kwargs
+            )
+        else:
+            raw = _invoke_gateway_json(SYSTEM_PRESCRIPTION, user_msg, wire_model)
+            llm_status = "real"
+            trace_tool("llm_generate", True, status="success", model=wire_model, **ignored_kwargs)
+
+        try:
+            data = parse_prescriptions_llm_response(raw, expected_count=len(ranked_slate))
+            trace_tool(
+                "json_parse",
+                True,
+                status="success",
+                prescriptionCount=len(data.get("prescriptions") or []),
+            )
+        except ValueError as exc:
+            logger.error("LLM 응답 파싱 실패: %s / raw=%r", exc, raw)
+            trace_tool(
+                "json_parse",
+                True,
+                status="failed",
+                error=str(exc),
+                rawPreview=raw[:500],
+            )
+            raise HTTPException(status_code=502, detail=f"LLM JSON 파싱 실패: {exc}") from exc
+        model_rows = list(data["prescriptions"])
+    else:
+        llm_status = "skipped"
+        model_rows = []
+        logger.info(
+            "조회 후보 0건 — 모델을 호출하지 않는다 (patient_id=%r, disease_codes=%s). "
+            "빈 추천 목록은 오류가 아니라 조회 결과다.",
+            req.patient_id,
+            dx_codes,
+        )
         trace_tool(
-            "json_parse",
-            True,
-            status="failed",
-            error=str(exc),
-            rawPreview=raw[:500],
+            "prompt_builder", False, reason="ranked_slate 가 비어 있어 설명할 항목이 없음"
         )
-        raise HTTPException(status_code=502, detail=f"LLM JSON 파싱 실패: {exc}") from exc
+        trace_tool(
+            "llm_generate", False, reason="조회 후보 0건 — 설명할 항목이 없어 모델을 호출하지 않음"
+        )
+        trace_tool("json_parse", False, reason="모델 호출이 없어 파싱할 응답이 없음")
 
     # 응답 항목은 **조회가 확정한 slate** 로 조립한다. 모델 출력에서 가져오는
     # 것은 rank 별 reason 과 dosage 뿐이다(spec §3.1 "모델에게 남는 일").
+    #
+    # **길이도 slate 가 정한다(설계 §3.2).** 예전에는 `range(SLATE_SIZE)` 로
+    # 세 칸을 돌며 남는 순위를 플레이스홀더로 채웠다. 그것은 "3순위는 여기
+    # 있습니다 — 다만 없습니다" 라고 말하는 형식이고, §11.8.2 가 기록한 퇴화
+    # (후보가 무좀연고뿐일 때 무좀연고 두 번)를 만든 바로 그 계약이다. 이제
+    # 채울 칸 자체가 없다.
     #
     # 이 조립이 §11.5 의 코드중복을 구조적으로 없앤다 — slate 는 처방코드로
     # 이미 접혀 있으므로 서로 다른 두 순위가 같은 실제 코드를 가질 수 없다.
@@ -796,32 +828,15 @@ def recommend(
     # 근거 있는 0.0 처럼 보이면 GC-2 가 뚫린다. 조회에 실제로 있을 때만
     # 숫자를 싣고, 없으면 None 으로 남긴다(verification 의 confidence_in_range
     # 는 None 을 skipped 로 판정한다 — 근거 없으면 통과가 아니다).
-    model_rows = list(data["prescriptions"])
     items: List[PrescriptionItem] = []
-    for position in range(SLATE_SIZE):
+    for position, picked in enumerate(ranked_slate):
         model_row = model_rows[position] if position < len(model_rows) else {}
-        picked = ranked_slate[position] if position < len(ranked_slate) else None
-        if picked is None:
-            # 이 순위에 올릴 조회 후보가 없다. reason 까지 조회층이 쓴다 —
-            # 모델이 지시를 무시하고 약을 제안했더라도 그 문장이 빈 순위의
-            # 설명으로 새어 나가면 안 된다(GC-3 fail-closed).
-            items.append(
-                PrescriptionItem(
-                    rank=position + 1,
-                    name=NO_CANDIDATE_NAME,
-                    prescription_code=NO_CANDIDATE_CODE,
-                    dosage=NO_CANDIDATE_DOSAGE,
-                    reason=NO_CANDIDATE_REASON,
-                    confidence_score=None,
-                )
-            )
-            continue
         items.append(
             PrescriptionItem(
                 rank=picked.rank,
                 name=picked.name,
                 prescription_code=picked.prescription_code,
-                dosage=str(model_row.get("dosage") or NO_CANDIDATE_DOSAGE),
+                dosage=str(model_row.get("dosage") or MISSING_DOSAGE),
                 reason=str(model_row.get("reason") or ""),
                 confidence_score=picked.confidence_score,
             )

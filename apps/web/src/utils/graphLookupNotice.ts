@@ -32,6 +32,20 @@ function evidenceLines(lookup: GraphLookup): string[] {
     : [];
 }
 
+// 설계 §3.2: 추천이 0건일 때 "조회했고 없었다" 와 "확인 못 함" 을 갈라야 한다.
+// 두 경우 모두 목록 길이가 0 이라 길이로는 구분되지 않는다.
+//
+// fail-closed 두 곳: 값이 없으면(단계를 안 돌았다) false 이고, status 가
+// FAILED 면 foundNothing 이 실려 있어도 false 다 — 확인하지 못한 것을
+// "확인했고 없었다" 로 읽히게 하지 않는다.
+export function graphLookupFoundNothing(
+  lookup: GraphLookup | null | undefined
+): boolean {
+  if (!lookup || typeof lookup !== "object") return false;
+  if (lookup.status === "FAILED") return false;
+  return lookup.foundNothing === true;
+}
+
 export function graphLookupNotice(
   lookup: GraphLookup | null | undefined
 ): GraphLookupNotice | null {
