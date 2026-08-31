@@ -236,15 +236,44 @@ def test_gate_status_is_the_worst_item():
     assert result.status == "warn"
 
 
-def test_placeholder_item_is_not_warned_on():
+def test_placeholder_item_is_unknown_not_clear():
+    """플레이스홀더는 `clear` 가 아니라 `unknown` 이다.
+
+    경고하지 않는 것과 `clear` 를 내는 것은 다르다. 이 항목의 evidence 는
+    "대조할 약이 없습니다" 라고 정확히 말하는데, 예전에는 outcome 이
+    `clear` 였다 — 화면에서 "확인했고 해당 없음" 으로 읽힌다.
+
+    이 파일의 다른 자리는 전부 그 구분을 지킨다: 노트를 못 읽으면
+    `unknown`(test_note_fetch_failure_is_unknown_not_clear), 판정할 항목이
+    아예 없으면 `unknown`. **대조 불가를 `clear` 로 내지 않는다**는 것이
+    이 부품의 원칙이고, 플레이스홀더만 그 원칙 밖에 있었다.
+    """
     from ranking import NO_CANDIDATE_CODE, NO_CANDIDATE_NAME
 
     result = rg.evaluate_renal_gate(
         notes=[NOTE_GFR13],
         items=[_item(1, NO_CANDIDATE_NAME, code=NO_CANDIDATE_CODE)],
     )
-    assert result.items[0].outcome == "clear"
+    assert result.items[0].outcome == "unknown"
     assert "추천 항목" in result.items[0].evidence
+
+
+def test_all_placeholder_slate_does_not_report_clear():
+    """전 항목이 플레이스홀더면 최상위도 `clear` 가 아니다.
+
+    `status` 는 항목 중 최고 심각도다. 플레이스홀더가 `clear` 였을 때는
+    후보가 0건인 응답 전체가 `clear` 로 나갔다 — GFR 13 환자에게 "확인해
+    보니 해당 없음" 으로 보이는 상태다. E78(고지혈증)이 실제로 약제 후보
+    0건이므로 가정이 아니다.
+    """
+    from ranking import NO_CANDIDATE_CODE, NO_CANDIDATE_NAME
+
+    result = rg.evaluate_renal_gate(
+        notes=[NOTE_GFR13],
+        items=[_item(i, NO_CANDIDATE_NAME, code=NO_CANDIDATE_CODE) for i in (1, 2, 3)],
+    )
+    assert result.renalStatus == "impaired"
+    assert result.status == "unknown"
 
 
 def test_result_dict_carries_all_three_axes():
