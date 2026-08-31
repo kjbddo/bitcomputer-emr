@@ -8,6 +8,7 @@ import {
   MIN_COLUMN_PX,
   MIN_ROW_PX,
   applyDelta,
+  applyPanelDelta,
   clearLayout,
   loadLayout,
   saveLayout,
@@ -45,6 +46,24 @@ function usablePx(containerPx: number, trackCount: number): number {
   const handleCount = Math.max(0, trackCount - 1);
   const gapCount = Math.max(0, 2 * trackCount - 2);
   return containerPx - HANDLE_TRACK_PX * handleCount - GAP_PX * gapCount;
+}
+
+/**
+ * 단일 패널 열(`.middleColumn`, `.certificateRightColumn`)의 usable 계산은
+ * `usablePx()` 와 다르다. `usablePx()` 는 `resizeColumn`/`resizeRow` 가 다루는
+ * "패널 N개 + 핸들 N-1개" 그리드를 가정해 `2N-1`/`2N-2` 공식으로 핸들·gap
+ * 몫을 뺀다. 하지만 단일 패널 열은 트랙이 항상 정확히 둘(패널 트랙 + 핸들
+ * 트랙)이라 핸들은 하나, gap 도 그 사이 하나뿐이다 — N 에 대입해도 우연히
+ * 맞아떨어지지 않는 별개의 모양이라 `usablePx(containerPx, 2)` 로 재사용하면
+ * 안 되고(핸들 트랙이 실제로는 `auto` 라 `HANDLE_TRACK_PX` 가정 자체가
+ * 다른 근거로 성립해야 한다), 여기서 그 값을 직접 빼야 한다.
+ *
+ * 직전 커밋(acfc29ea)에서 `usablePx` 가 gap 몫을 빼먹어 드래그가 튀고
+ * 끝단에서 렌더값과 저장값이 어긋나는 Critical 회귀가 있었다 — 여기서도
+ * 핸들 몫과 gap 몫을 모두 빼야 같은 문제가 반복되지 않는다.
+ */
+function panelUsablePx(containerPx: number): number {
+  return containerPx - HANDLE_TRACK_PX - GAP_PX;
 }
 
 export function useResizableLayout(tab: TabId) {
@@ -131,6 +150,30 @@ export function useResizableLayout(tab: TabId) {
     []
   );
 
+  const resizePanel = useCallback(
+    (columnKey: string, deltaPx: number, containerPx: number) => {
+      pendingSaveRef.current = true;
+      setState((prev) => {
+        if (!(columnKey in prev.panels)) {
+          pendingSaveRef.current = false;
+          return prev;
+        }
+        return {
+          ...prev,
+          panels: {
+            ...prev.panels,
+            [columnKey]: applyPanelDelta(
+              prev.panels[columnKey],
+              deltaPx,
+              panelUsablePx(containerPx)
+            ),
+          },
+        };
+      });
+    },
+    []
+  );
+
   useEffect(() => {
     if (!pendingSaveRef.current) return;
     pendingSaveRef.current = false;
@@ -155,12 +198,23 @@ export function useResizableLayout(tab: TabId) {
     [enabled, state.rows]
   );
 
+  const panelStyle = useCallback(
+    (columnKey: string): CSSProperties => {
+      const value = state.panels[columnKey];
+      if (!enabled || typeof value !== "number") return {};
+      return { "--panel-track": `${value}px` } as CSSProperties;
+    },
+    [enabled, state.panels]
+  );
+
   return {
     enabled,
     columnStyle,
     rowStyle,
+    panelStyle,
     resizeColumn,
     resizeRow,
+    resizePanel,
     reset,
   };
 }

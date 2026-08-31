@@ -433,6 +433,11 @@ export default function DashboardPage() {
 
   const layout = useResizableLayout(activeMenu as TabId);
   const gridRef = useRef<HTMLDivElement>(null);
+  // 패널이 하나뿐인 열(환자접수의 middle, 진단서의 right) 은 한 번에 한
+  // 탭만 렌더되므로 두 ref 가 동시에 쓰이지는 않지만, 서로 다른 탭의
+  // JSX 트리에 있어 하나로 합칠 수 없다 — 열마다 하나씩 둔다.
+  const middleColRef = useRef<HTMLDivElement>(null);
+  const certificateRightColRef = useRef<HTMLDivElement>(null);
 
   // 델타를 트랙에 반영하려면 컨테이너 실제 크기가 필요하다. 1fr 트랙의
   // 상한을 계산하는 데 쓴다(layoutStorage.applyDelta 참고).
@@ -469,8 +474,25 @@ export default function DashboardPage() {
           )}
 
           {/* Middle Column - Patient Form */}
-          <div className={styles.middleColumn}>
+          <div
+            className={styles.middleColumn}
+            style={layout.panelStyle("middle")}
+            ref={middleColRef}
+          >
             <PatientForm ref={patientFormRef} />
+            {layout.enabled && (
+              <ResizeHandle
+                orientation="horizontal"
+                label="환자 정보 입력 높이 조절"
+                onDelta={(d) =>
+                  layout.resizePanel(
+                    "middle",
+                    d,
+                    middleColRef.current?.getBoundingClientRect().height ?? 0
+                  )
+                }
+              />
+            )}
           </div>
           {layout.enabled && (
             <ResizeHandle
@@ -637,13 +659,30 @@ export default function DashboardPage() {
               onDelta={(d) => layout.resizeColumn(1, d, gridWidth())}
             />
           )}
-          <div className={styles.certificateRightColumn}>
+          <div
+            className={styles.certificateRightColumn}
+            style={layout.panelStyle("right")}
+            ref={certificateRightColRef}
+          >
             <MedicalCertificate
               selected={selectedCertificate}
               patientInfo={certificatePatient}
               employeeId={employeeId}
               diagnosisApply={certificateDiagnosisApply}
             />
+            {layout.enabled && (
+              <ResizeHandle
+                orientation="horizontal"
+                label="진단서 높이 조절"
+                onDelta={(d) =>
+                  layout.resizePanel(
+                    "right",
+                    d,
+                    certificateRightColRef.current?.getBoundingClientRect().height ?? 0
+                  )
+                }
+              />
+            )}
           </div>
         </div>
       );

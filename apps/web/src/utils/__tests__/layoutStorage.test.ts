@@ -4,6 +4,7 @@ import {
   MIN_COLUMN_PX,
   MIN_ROW_PX,
   applyDelta,
+  applyPanelDelta,
   clearLayout,
   loadLayout,
   saveLayout,
@@ -28,6 +29,7 @@ describe("왕복", () => {
     const state = {
       columns: [320, null, 400],
       rows: { left: [200, null], middle: [null, null, null], right: [null, null] },
+      panels: {},
     };
     saveLayout("진료실", state);
     expect(loadLayout("진료실")).toEqual(state);
@@ -37,10 +39,12 @@ describe("왕복", () => {
     saveLayout("진료실", {
       columns: [320, null, 400],
       rows: { left: [null, null], middle: [null, null, null], right: [null, null] },
+      panels: {},
     });
     saveLayout("진단서", {
       columns: [300, null, null],
       rows: { middle: [null, null] },
+      panels: { right: null },
     });
     clearLayout("진료실");
     expect(loadLayout("진료실")).toEqual(DEFAULT_LAYOUTS["진료실"]);
@@ -108,6 +112,43 @@ describe("손상값은 기본값으로 떨어진다", () => {
       })
     );
     expect(loadLayout("진료실")).toEqual(DEFAULT_LAYOUTS["진료실"]);
+  });
+
+  it("panels 키가 없으면 — 이 필드가 생기기 전 옛 저장값이다", () => {
+    window.localStorage.setItem(
+      storageKey("진단서"),
+      JSON.stringify({
+        columns: [280, null, null],
+        rows: { middle: [null, null] },
+        // panels 없음
+      })
+    );
+    expect(loadLayout("진단서")).toEqual(DEFAULT_LAYOUTS["진단서"]);
+  });
+
+  it("panels 의 키 집합이 기본값과 다르면", () => {
+    window.localStorage.setItem(
+      storageKey("진단서"),
+      JSON.stringify({
+        columns: [280, null, null],
+        rows: { middle: [null, null] },
+        // 진단서의 panels 는 { right: ... } 여야 하는데 다른 키다.
+        panels: { middle: 300 },
+      })
+    );
+    expect(loadLayout("진단서")).toEqual(DEFAULT_LAYOUTS["진단서"]);
+  });
+
+  it("panels 값이 숫자·null 이 아니면", () => {
+    window.localStorage.setItem(
+      storageKey("진단서"),
+      JSON.stringify({
+        columns: [280, null, null],
+        rows: { middle: [null, null] },
+        panels: { right: "tall" },
+      })
+    );
+    expect(loadLayout("진단서")).toEqual(DEFAULT_LAYOUTS["진단서"]);
   });
 
   it("localStorage 가 예외를 던져도 기본값을 돌려준다", () => {
@@ -212,5 +253,23 @@ describe("applyDelta", () => {
       const result = applyDelta([null, 300, null], 0, -1000, MIN_COLUMN_PX, 784);
       expect(result).toEqual([null, 384, null]);
     });
+  });
+});
+
+describe("applyPanelDelta", () => {
+  it("null 에서 시작하면 컨테이너 높이를 물질화한 뒤 델타를 더한다", () => {
+    expect(applyPanelDelta(null, -200, 700)).toBe(500);
+  });
+
+  it("MIN_ROW_PX 아래로는 내려가지 않는다", () => {
+    expect(applyPanelDelta(null, -1000, 700)).toBe(MIN_ROW_PX);
+  });
+
+  it("containerPx 위로는 올라가지 않는다 — 패널이 열 밖으로 넘치면 안 된다", () => {
+    expect(applyPanelDelta(null, 500, 700)).toBe(700);
+  });
+
+  it("이미 숫자면 그 값에 더한다 — containerPx 는 시작점으로 쓰이지 않는다", () => {
+    expect(applyPanelDelta(400, 50, 1200)).toBe(450);
   });
 });

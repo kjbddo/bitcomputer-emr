@@ -108,6 +108,46 @@ describe("조절", () => {
   });
 });
 
+describe("패널 조절", () => {
+  it("panelStyle 은 기본(null) 상태에서 빈 객체다 — 폴백 1fr 이 산다", () => {
+    const { result } = renderHook(() => useResizableLayout("환자접수"));
+    expect(result.current.panelStyle("middle")).toEqual({});
+  });
+
+  it("resizePanel 이 null 을 containerPx 로 물질화한 뒤 델타를 반영하고 저장한다", () => {
+    const { result } = renderHook(() => useResizableLayout("환자접수"));
+    // containerPx=722 는 열 전체 높이(핸들 6px + gap 16px 포함) — panelUsablePx
+    // 가 그 몫을 빼면 700 이 물질화 시작점이 된다.
+    act(() => result.current.resizePanel("middle", -200, 722));
+
+    expect(loadLayout("환자접수").panels.middle).toBe(500);
+    expect(result.current.panelStyle("middle")["--panel-track" as never]).toBe("500px");
+  });
+
+  it("reset 은 panels 도 기본값(null)으로 되돌린다", () => {
+    const { result } = renderHook(() => useResizableLayout("환자접수"));
+    act(() => result.current.resizePanel("middle", -200, 722));
+    act(() => result.current.reset());
+
+    expect(loadLayout("환자접수")).toEqual(DEFAULT_LAYOUTS["환자접수"]);
+    expect(result.current.panelStyle("middle")).toEqual({});
+  });
+
+  it("panels 에 없는 열 키를 주면 아무 것도 바꾸지 않는다", () => {
+    // 진료실은 단일 패널 열이 없어 panels 가 {} 다.
+    const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+    const { result } = renderHook(() => useResizableLayout("진료실"));
+    setItemSpy.mockClear();
+
+    act(() => result.current.resizePanel("middle", -200, 722));
+
+    expect(loadLayout("진료실")).toEqual(DEFAULT_LAYOUTS["진료실"]);
+    expect(setItemSpy).not.toHaveBeenCalled();
+
+    setItemSpy.mockRestore();
+  });
+});
+
 describe("matchMedia 부재", () => {
   // 리뷰 지적: window.matchMedia 가 없으면(구형 브라우저, 테스트 환경,
   // 임베디드 웹뷰 등) 훅이 TypeError 를 던지며 죽는다. layoutStorage.ts 의

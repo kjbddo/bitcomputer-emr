@@ -25,6 +25,11 @@ export type LayoutState = {
   columns: Track[];
   /** 열 키(`left`/`middle`/`right`) → 그 열의 행 트랙 */
   rows: Record<string, Track[]>;
+  /**
+   * 패널이 하나뿐이라 행 경계가 없는 열(예: `middle`, `right`) → 그 패널의
+   * 높이. `null` = 열 높이를 그대로 채운다(`1fr`). 이런 열이 없는 탭은 `{}`.
+   */
+  panels: Record<string, number | null>;
 };
 
 export const MIN_COLUMN_PX = 200;
@@ -52,14 +57,17 @@ export const DEFAULT_LAYOUTS: Record<TabId, LayoutState> = {
   환자접수: {
     columns: [300, null, null],
     rows: { left: [null, null], right: [null, null] },
+    panels: { middle: null },
   },
   진료실: {
     columns: [300, null, 350],
     rows: { left: [null, null], middle: [null, null, null], right: [null, null] },
+    panels: {},
   },
   진단서: {
     columns: [280, null, null],
     rows: { middle: [null, null] },
+    panels: { right: null },
   },
 };
 
@@ -79,6 +87,11 @@ function isUsable(tracks: unknown, expectedLength: number, min: number): tracks 
   return tracks.every((t) => t === null || t >= min);
 }
 
+/** `panels` 값 하나가 쓸 수 있는 상태인가 — `null` 또는 유한한 숫자. */
+function isPanelValue(value: unknown): value is number | null {
+  return value === null || (typeof value === "number" && Number.isFinite(value));
+}
+
 function matchesShape(value: unknown, fallback: LayoutState): value is LayoutState {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Partial<LayoutState>;
@@ -89,11 +102,24 @@ function matchesShape(value: unknown, fallback: LayoutState): value is LayoutSta
   // 렌더링되거나(누락) 존재하지 않는 열의 값이 쓰레기로 섞여 들어온다.
   const fallbackKeys = Object.keys(fallback.rows);
   if (Object.keys(rows).length !== fallbackKeys.length) return false;
-  return fallbackKeys.every((key) =>
-    // 각 열의 배열 길이도 기본값(=현재 패널 수)과 정확히 같아야 한다 —
-    // 안 그러면 패널이 추가/삭제된 뒤 옛 트랙 수가 새 패널 수와 안 맞는다(spec §4.3).
-    isUsable(rows[key], fallback.rows[key].length, MIN_ROW_PX)
-  );
+  if (
+    !fallbackKeys.every((key) =>
+      // 각 열의 배열 길이도 기본값(=현재 패널 수)과 정확히 같아야 한다 —
+      // 안 그러면 패널이 추가/삭제된 뒤 옛 트랙 수가 새 패널 수와 안 맞는다(spec §4.3).
+      isUsable(rows[key], fallback.rows[key].length, MIN_ROW_PX)
+    )
+  ) {
+    return false;
+  }
+  // panels 도 rows 와 같은 원칙 — 키 집합이 기본값과 정확히 같아야 하고
+  // (열이 하나 빠지거나 존재하지 않는 열이 쓰레기로 섞여 들어오는 것을 막는다),
+  // 이 필드가 없는 옛 저장값(단일 패널 높이 조절이 생기기 전)은 형태 불일치로
+  // 기본값으로 떨어뜨린다 — panels 도 다른 필드처럼 계약의 일부다.
+  if (typeof candidate.panels !== "object" || candidate.panels === null) return false;
+  const panels = candidate.panels as Record<string, unknown>;
+  const fallbackPanelKeys = Object.keys(fallback.panels);
+  if (Object.keys(panels).length !== fallbackPanelKeys.length) return false;
+  return fallbackPanelKeys.every((key) => isPanelValue(panels[key]));
 }
 
 export function loadLayout(tab: TabId): LayoutState {
@@ -228,4 +254,29 @@ export function applyDelta(
   const upper = Math.max(min, containerPx - others - reserved);
   next[index + 1] = Math.max(min, Math.min(upper, (b as number) - deltaPx));
   return next;
+}
+
+/**
+ * 패널이 하나뿐인 열의 패널 높이에 델타를 더한다. 트랙 배열이 아니라
+ * 스칼라 하나라 `applyDelta` 는 쓸 수 없다(그리드 전체 높이를 다뤘던
+ * `applyHeightDelta` 와 모양은 비슷하지만, 이건 열 하나의 패널 트랙이지
+ * 그리드 전체가 아니다 — 그 기능은 되돌려졌다).
+ *
+ * `panel` 이 `null` 이면(아직 열 높이를 그대로 채운 상태, `1fr`) 실제 렌더
+ * 높이인 `containerPx` 를 시작점으로 물질화한다 — `applyDelta` 가 1fr
+ * 트랙을 다룰 때 쓰는 것과 같은 발상이다.
+ *
+ * 하한은 `MIN_ROW_PX`(패널 하나짜리 행이므로 행과 같은 최소값을 쓴다).
+ * 상한은 `containerPx` — 가로 트랙과 달리 상한을 두지 않으면 패널이 열
+ * 밖으로 넘쳐 아래 핸들 트랙이 열 바깥으로 밀려난다. 이 열에는 흡수할
+ * 다른 트랙이 없으므로(핸들은 `auto` 로 자기 몫만 차지) 상한을 컨테이너
+ * 자신의 높이로 못박아야 한다.
+ */
+export function applyPanelDelta(
+  panel: number | null,
+  deltaPx: number,
+  containerPx: number
+): number {
+  const base = panel === null ? containerPx : panel;
+  return Math.max(MIN_ROW_PX, Math.min(containerPx, base + deltaPx));
 }
