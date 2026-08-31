@@ -80,6 +80,41 @@ class CaseRepository:
             coll.insert(edge)
 
     # ---------- read ----------
+    #: 케이스 하나에 매달리는 간선 컬렉션. 케이스를 덮어쓸 때 함께 지워야
+    #: 하는 것들이고, 분류 체계(diseases/findings/rois 와 그 사이의 간선)는
+    #: 여기 없다 - 그쪽은 케이스와 무관하게 존재한다.
+    CASE_EDGE_COLLECTIONS = ("case_has_disease", "case_has_finding", "case_has_roi_anomaly")
+
+    def delete_case_edges(self, case_key: str) -> int:
+        """이 케이스에서 나가는 간선을 모두 지운다.
+
+        같은 키로 다시 등록할 때 필요하다. 간선 키가 case_key 에서 유도되므로
+        같은 태그는 덮어써지지만, **없어진 태그의 간선은 그대로 남는다** -
+        예를 들어 --uncertainty 정책을 바꿔 재적재하면 예전 정책에서만 붙던
+        병명이 그래프에 계속 매달려 있게 된다. 그 잔재를 여기서 끊는다.
+        """
+        removed = 0
+        for name in self.CASE_EDGE_COLLECTIONS:
+            coll = self.db.collection(name)
+            for edge in coll.find({"_from": f"xray_cases/{case_key}"}):
+                coll.delete(edge["_key"])
+                removed += 1
+        return removed
+
+    def reset_cases(self) -> Dict[str, int]:
+        """케이스와 그 간선을 전부 비운다. 분류 체계는 건드리지 않는다.
+
+        적재 스크립트의 --reset 이 쓴다. 반환값은 컬렉션별로 지운 문서 수다 -
+        무엇이 사라졌는지 요약에 남기기 위한 것이고, 호출자가 확인하지 않아도
+        되는 부수효과로 두지 않는다.
+        """
+        removed: Dict[str, int] = {}
+        for name in ("xray_cases",) + self.CASE_EDGE_COLLECTIONS:
+            coll = self.db.collection(name)
+            removed[name] = coll.count()
+            coll.truncate()
+        return removed
+
     def get_case(self, case_key: str) -> Optional[Dict[str, Any]]:
         coll = self.db.collection("xray_cases")
         if not coll.has(case_key):
