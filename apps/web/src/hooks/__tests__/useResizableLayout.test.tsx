@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_LAYOUTS, loadLayout, saveLayout, storageKey } from "../../utils/layoutStorage";
@@ -103,5 +104,80 @@ describe("조절", () => {
     const left = columns[0] as number;
     const remainingForOneFr = 800 - left - (right as number) - 2 * 6; // 핸들 2개
     expect(remainingForOneFr).toBeGreaterThanOrEqual(200);
+  });
+});
+
+describe("matchMedia 부재", () => {
+  // 리뷰 지적: window.matchMedia 가 없으면(구형 브라우저, 테스트 환경,
+  // 임베디드 웹뷰 등) 훅이 TypeError 를 던지며 죽는다. layoutStorage.ts 의
+  // 원칙(주석 3~7행) — "손상된 값으로 화면을 깨뜨리는 것보다 기본 배치로
+  // 되돌리는 편이 낫다" — 을 이 훅도 따라야 한다.
+  //
+  // 뷰포트를 판정할 수 없을 때 저장값을 붙이는 것과 붙이지 않는 것은
+  // 비대칭이다: 잘못 붙이면 좁은 화면을 깨뜨릴 수 있지만(§5.2), 안 붙이면
+  // 저장값이 이번 렌더에 적용되지 않는 것뿐이다 — 다음에 matchMedia 가 있는
+  // 환경에서 다시 열면 그대로 복원된다. 그래서 판정 불가 = 좁은 화면과 같은
+  // 편(enabled=false)으로 떨어뜨린다.
+  it("matchMedia 가 없어도 던지지 않고 좁은 화면과 같은 기본 상태로 떨어진다", () => {
+    const original = window.matchMedia;
+    // @ts-expect-error -- 존재 자체를 지워서 부재를 재현한다.
+    delete window.matchMedia;
+
+    try {
+      expect(() => {
+        const { result } = renderHook(() => useResizableLayout("진료실"));
+        expect(result.current.enabled).toBe(false);
+        expect(result.current.columnStyle).toEqual({});
+      }).not.toThrow();
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+});
+
+describe("영속화 시점", () => {
+  // 리뷰 지적(Minor): saveLayout 이 setState 의 함수형 업데이터 안에서
+  // 불린다. React 는 StrictMode(개발 모드) 에서 업데이터 함수를 실전 커밋과
+  // 무관하게 두 번 호출해 순수성을 검증한다 — 업데이터 안에 부수효과가 있으면
+  // 그 부수효과(localStorage 쓰기)도 두 번 일어난다. next.config.ts 는 지금
+  // reactStrictMode 를 켜지 않아 앱에서는 안 나타나지만, 테스트에서
+  // <StrictMode> 로 직접 감싸면 재현된다 — 언젠가 그 설정이 켜지는 날 조용히
+  // 터질 문제를 지금 막아 둔다.
+  it("StrictMode 아래에서도 열 조절 한 번에 저장은 정확히 한 번만 된다", () => {
+    const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+    const { result } = renderHook(() => useResizableLayout("진료실"), {
+      wrapper: StrictMode,
+    });
+    setItemSpy.mockClear();
+
+    act(() => result.current.resizeColumn(0, 60, 1400));
+
+    const key = storageKey("진료실");
+    const writesForKey = setItemSpy.mock.calls.filter(([k]) => k === key);
+    expect(writesForKey).toHaveLength(1);
+    expect(loadLayout("진료실").columns[0]).toBe(360);
+
+    setItemSpy.mockRestore();
+  });
+
+  it("StrictMode 아래에서도 행 조절 한 번에 저장은 정확히 한 번만 된다", () => {
+    saveLayout("진료실", {
+      ...DEFAULT_LAYOUTS["진료실"],
+      rows: { ...DEFAULT_LAYOUTS["진료실"].rows, middle: [200, null, null] },
+    });
+    const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+    const { result } = renderHook(() => useResizableLayout("진료실"), {
+      wrapper: StrictMode,
+    });
+    setItemSpy.mockClear();
+
+    act(() => result.current.resizeRow("middle", 0, 40, 900));
+
+    const key = storageKey("진료실");
+    const writesForKey = setItemSpy.mock.calls.filter(([k]) => k === key);
+    expect(writesForKey).toHaveLength(1);
+    expect(loadLayout("진료실").rows.middle[0]).toBe(240);
+
+    setItemSpy.mockRestore();
   });
 });

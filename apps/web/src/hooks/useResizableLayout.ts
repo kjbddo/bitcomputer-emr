@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import {
   DEFAULT_LAYOUTS,
@@ -48,6 +48,16 @@ export function useResizableLayout(tab: TabId) {
   }, [tab]);
 
   useEffect(() => {
+    // matchMedia 가 없으면(구형 브라우저, 임베디드 웹뷰 등) 뷰포트를 판정할
+    // 수 없다. 판정 불가를 "저장값 적용"으로 잘못 해석하면 좁은 화면을
+    // 깨뜨릴 수 있지만(§5.2), "저장값 미적용"으로 해석해도 이번 렌더에
+    // 저장값이 안 붙을 뿐이다 — 그래서 좁은 화면과 같은 편(비활성)으로
+    // 떨어뜨린다. layoutStorage.ts 의 원칙과 같다: 손상/부재를 기본값으로
+    // 조용히 흡수한다.
+    if (typeof window.matchMedia !== "function") {
+      setEnabled(false);
+      return;
+    }
     const mq = window.matchMedia(`(min-width: ${RESIZE_MIN_VIEWPORT}px)`);
     const sync = () => setEnabled(mq.matches);
     sync();
@@ -63,32 +73,45 @@ export function useResizableLayout(tab: TabId) {
     [tab]
   );
 
+  // resizeColumn/resizeRow 는 setState 를 함수형 업데이터로 부른다 — 드래그
+  // 중 pointermove 가 렌더 사이사이에 연속으로 들어올 수 있어(ResizeHandle),
+  // 클로저에 갇힌 state 를 참조하면 일부 델타가 씹힌다.
+  //
+  // 하지만 React 는 StrictMode(개발 모드)에서 이 업데이터 함수를 실제 커밋과
+  // 무관하게 두 번 부른다(순수성 검증). saveLayout 을 업데이터 안에서
+  // 부르면 그 부수효과도 두 번 일어난다 — 지금은 next.config.ts 가
+  // reactStrictMode 를 안 켜서 안 보이지만, 켜지는 날 조용히 localStorage
+  // 를 이중으로 쓰게 된다. 그래서 업데이터는 다음 state 계산만 하고,
+  // 저장은 그 state 가 실제로 커밋된 뒤 이펙트에서 한 번만 한다.
+  const pendingSaveRef = useRef(false);
+
   const resizeColumn = useCallback(
     (index: number, deltaPx: number, containerPx: number) => {
-      setState((prev) => {
-        const next = {
-          ...prev,
-          columns: applyDelta(
-            prev.columns,
-            index,
-            deltaPx,
-            MIN_COLUMN_PX,
-            usablePx(containerPx, prev.columns.length)
-          ),
-        };
-        saveLayout(tab, next);
-        return next;
-      });
+      pendingSaveRef.current = true;
+      setState((prev) => ({
+        ...prev,
+        columns: applyDelta(
+          prev.columns,
+          index,
+          deltaPx,
+          MIN_COLUMN_PX,
+          usablePx(containerPx, prev.columns.length)
+        ),
+      }));
     },
     [tab]
   );
 
   const resizeRow = useCallback(
     (columnKey: string, index: number, deltaPx: number, containerPx: number) => {
+      pendingSaveRef.current = true;
       setState((prev) => {
         const tracks = prev.rows[columnKey];
-        if (!tracks) return prev;
-        const next = {
+        if (!tracks) {
+          pendingSaveRef.current = false;
+          return prev;
+        }
+        return {
           ...prev,
           rows: {
             ...prev.rows,
@@ -101,12 +124,16 @@ export function useResizableLayout(tab: TabId) {
             ),
           },
         };
-        saveLayout(tab, next);
-        return next;
       });
     },
     [tab]
   );
+
+  useEffect(() => {
+    if (!pendingSaveRef.current) return;
+    pendingSaveRef.current = false;
+    saveLayout(tab, state);
+  }, [state, tab]);
 
   const reset = useCallback(() => {
     clearLayout(tab);
