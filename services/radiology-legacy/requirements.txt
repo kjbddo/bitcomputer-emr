@@ -1,6 +1,22 @@
+# PyTorch 는 CPU 전용 휠로 받는다.
+#
+# PyPI 기본 `torch` 는 CUDA 빌드라 nvidia 런타임 묶음을 함께 끌고 온다. 이
+# 스택은 GPU 를 쓰지 않는데(추론은 전부 CPU) 이미지 안에서 nvidia/ 만 2.7GB,
+# torch 1.2GB 를 차지했다 - pip 레이어 하나가 5.64GB 였다.
+#
+# 아래 두 줄이 하는 일: torch 계열은 PyTorch CPU 인덱스에서, 나머지는 PyPI
+# 에서 받는다. `--extra-index-url` 한 줄만 쓰면 두 인덱스의 같은 버전 중
+# 어느 쪽이 뽑힐지 결정론적이지 않아, CPU 를 의도했는데 CUDA 가 들어올 수 있다.
+#
+# GPU 로 옮기는 날에는 이 두 줄을 지우면 된다(그리고 그때 다시 5GB 를 치른다).
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
+
 Flask==3.0.0
 flask-cors==4.0.0
-# torch/torchvision은 설치되는 빌드(CPU/CUDA)와 아래 --find-links 의 torch-* 버전이 맞아야 합니다.
+# torch/torchvision 은 위 CPU 인덱스에서 받는다. 아래 --find-links 의 PyG 확장이
+# `torch-2.11.0+cpu` 를 가리키므로 둘이 반드시 같은 빌드여야 한다 - 예전에는
+# 이 주석만 있고 실제로는 PyPI 기본(CUDA)이 들어와 둘이 어긋나 있었다.
 torch>=2.11.0,<2.12
 torchvision>=0.26.0,<0.27
 # PyG 확장(torch-scatter 등): PyPI만 쓰면 소스 빌드가 되며 격리 환경에서 torch 미설치로 실패합니다.
