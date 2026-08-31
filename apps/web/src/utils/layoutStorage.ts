@@ -31,7 +31,11 @@ export type LayoutState = {
 
 export const MIN_COLUMN_PX = 200;
 export const MIN_ROW_PX = 120;
-export const MIN_GRID_HEIGHT_PX = 400;
+// page.module.css 의 .contentGrid*는 `min-height: 600px` 을 못박아 둔다.
+// min-height 는 height 를 이기므로, 저장된 높이가 이 값보다 작으면 CSS 가
+// 이겨 400~600 구간이 드래그해도 화면에 반영되지 않는 먹통 구간이 된다
+// (I2 리뷰). 두 값은 항상 같아야 한다 — CSS 쪽을 바꾸면 이 상수도 맞춰라.
+export const MIN_GRID_HEIGHT_PX = 600;
 
 /**
  * 핸들도 그리드 항목이라 트랙 하나를 차지한다. 트랙 사이마다 이 폭이 끼므로

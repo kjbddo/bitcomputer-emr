@@ -251,7 +251,7 @@ describe("applyHeightDelta", () => {
 
   it("MIN_GRID_HEIGHT_PX 아래로는 내려가지 않는다", () => {
     expect(applyHeightDelta(null, -1000, 800)).toBe(MIN_GRID_HEIGHT_PX);
-    expect(applyHeightDelta(null, -1000, 800)).toBe(400);
+    expect(applyHeightDelta(null, -1000, 800)).toBe(600);
   });
 
   it("이미 숫자면 그 값에 더한다 — viewport 는 쓰이지 않는다", () => {
