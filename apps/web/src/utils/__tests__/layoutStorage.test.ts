@@ -2,10 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_LAYOUTS,
   MIN_COLUMN_PX,
-  MIN_GRID_HEIGHT_PX,
   MIN_ROW_PX,
   applyDelta,
-  applyHeightDelta,
   clearLayout,
   loadLayout,
   saveLayout,
@@ -30,7 +28,6 @@ describe("왕복", () => {
     const state = {
       columns: [320, null, 400],
       rows: { left: [200, null], middle: [null, null, null], right: [null, null] },
-      height: null,
     };
     saveLayout("진료실", state);
     expect(loadLayout("진료실")).toEqual(state);
@@ -40,12 +37,10 @@ describe("왕복", () => {
     saveLayout("진료실", {
       columns: [320, null, 400],
       rows: { left: [null, null], middle: [null, null, null], right: [null, null] },
-      height: null,
     });
     saveLayout("진단서", {
       columns: [300, null, null],
       rows: { middle: [null, null] },
-      height: null,
     });
     clearLayout("진료실");
     expect(loadLayout("진료실")).toEqual(DEFAULT_LAYOUTS["진료실"]);
@@ -110,30 +105,6 @@ describe("손상값은 기본값으로 떨어진다", () => {
         columns: [320, null, 400],
         // 진료실의 middle 열은 패널 3개(트랙 3개)인데 2개만 저장돼 있다.
         rows: { left: [null, null], middle: [null, null], right: [null, null] },
-      })
-    );
-    expect(loadLayout("진료실")).toEqual(DEFAULT_LAYOUTS["진료실"]);
-  });
-
-  it("height 키가 없으면 — 이 필드가 생기기 전 옛 저장값이다", () => {
-    window.localStorage.setItem(
-      storageKey("진료실"),
-      JSON.stringify({
-        columns: [320, null, 400],
-        rows: { left: [null, null], middle: [null, null, null], right: [null, null] },
-        // height 없음
-      })
-    );
-    expect(loadLayout("진료실")).toEqual(DEFAULT_LAYOUTS["진료실"]);
-  });
-
-  it("height 가 숫자·null 이 아니면", () => {
-    window.localStorage.setItem(
-      storageKey("진료실"),
-      JSON.stringify({
-        columns: [320, null, 400],
-        rows: { left: [null, null], middle: [null, null, null], right: [null, null] },
-        height: "tall",
       })
     );
     expect(loadLayout("진료실")).toEqual(DEFAULT_LAYOUTS["진료실"]);
@@ -241,24 +212,5 @@ describe("applyDelta", () => {
       const result = applyDelta([null, 300, null], 0, -1000, MIN_COLUMN_PX, 784);
       expect(result).toEqual([null, 384, null]);
     });
-  });
-});
-
-describe("applyHeightDelta", () => {
-  it("null 에서 시작하면 viewport 높이를 물질화한 뒤 델타를 더한다", () => {
-    expect(applyHeightDelta(null, 150, 800)).toBe(950);
-  });
-
-  it("MIN_GRID_HEIGHT_PX 아래로는 내려가지 않는다", () => {
-    expect(applyHeightDelta(null, -1000, 800)).toBe(MIN_GRID_HEIGHT_PX);
-    expect(applyHeightDelta(null, -1000, 800)).toBe(600);
-  });
-
-  it("이미 숫자면 그 값에 더한다 — viewport 는 쓰이지 않는다", () => {
-    expect(applyHeightDelta(700, 50, 1200)).toBe(750);
-  });
-
-  it("상한은 없다 — 넘치면 바깥이 스크롤한다", () => {
-    expect(applyHeightDelta(700, 5000, 800)).toBe(5700);
   });
 });
