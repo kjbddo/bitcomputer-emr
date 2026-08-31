@@ -437,11 +437,27 @@ export default function DashboardPage() {
   // 델타를 트랙에 반영하려면 컨테이너 실제 크기가 필요하다. 1fr 트랙의
   // 상한을 계산하는 데 쓴다(layoutStorage.applyDelta 참고).
   const gridWidth = () => gridRef.current?.getBoundingClientRect().width ?? 0;
+  const gridHeight = () => gridRef.current?.getBoundingClientRect().height ?? 0;
+
+  // 그리드 전체 높이 조절 핸들 — 세 탭 모두 같은 그리드(gridRef) 를 재사용하므로
+  // 이 한 블록을 그대로 세 번 배치한다(코드를 복제하지 않는다).
+  const heightHandle = layout.enabled && (
+    <ResizeHandle
+      orientation="horizontal"
+      label="대시보드 높이 조절"
+      onDelta={(d) => layout.resizeHeight(d, gridHeight())}
+    />
+  );
 
   const renderContent = () => {
     if (activeMenu === "환자접수") {
       return (
-        <div className={styles.contentGrid} style={layout.columnStyle} ref={gridRef}>
+        <>
+        <div
+          className={styles.contentGrid}
+          style={{ ...layout.columnStyle, ...layout.gridHeightStyle }}
+          ref={gridRef}
+        >
           {/* Left Column - Special Notes & History */}
           <div className={styles.leftColumn} style={layout.rowStyle("left")}>
             <SpecialNote />
@@ -497,11 +513,17 @@ export default function DashboardPage() {
             <MedicalInfo ref={medicalInfoRef} />
           </div>
         </div>
+        {heightHandle}
+        </>
       );
     } else if (activeMenu === "진료실") {
       return (
         <MedicalSelectionProvider>
-          <div className={styles.contentGridClinic} style={layout.columnStyle} ref={gridRef}>
+          <div
+            className={styles.contentGridClinic}
+            style={{ ...layout.columnStyle, ...layout.gridHeightStyle }}
+            ref={gridRef}
+          >
             {/* Left Column - Calendar & History */}
             <div className={styles.leftColumn} style={layout.rowStyle("left")}>
               <Calender employeeId={employeeId} patientId={clinicPatientId} refreshKey={historyRefreshKey} />
@@ -595,11 +617,17 @@ export default function DashboardPage() {
               />
             </div>
           </div>
+          {heightHandle}
         </MedicalSelectionProvider>
       );
     } else if (activeMenu === "진단서") {
       return (
-        <div className={styles.contentGridCertificate} style={layout.columnStyle} ref={gridRef}>
+        <>
+        <div
+          className={styles.contentGridCertificate}
+          style={{ ...layout.columnStyle, ...layout.gridHeightStyle }}
+          ref={gridRef}
+        >
           <div className={styles.certificateLeftColumn}>
             <CertificatePatientSearch onPatientFound={setCertificatePatient} />
           </div>
@@ -646,6 +674,8 @@ export default function DashboardPage() {
             />
           </div>
         </div>
+        {heightHandle}
+        </>
       );
     }
   };

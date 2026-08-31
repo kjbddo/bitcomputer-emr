@@ -8,6 +8,7 @@ import {
   MIN_COLUMN_PX,
   MIN_ROW_PX,
   applyDelta,
+  applyHeightDelta,
   clearLayout,
   loadLayout,
   saveLayout,
@@ -129,6 +130,17 @@ export function useResizableLayout(tab: TabId) {
     [tab]
   );
 
+  const resizeHeight = useCallback(
+    (deltaPx: number, viewportPx: number) => {
+      pendingSaveRef.current = true;
+      setState((prev) => ({
+        ...prev,
+        height: applyHeightDelta(prev.height, deltaPx, viewportPx),
+      }));
+    },
+    [tab]
+  );
+
   useEffect(() => {
     if (!pendingSaveRef.current) return;
     pendingSaveRef.current = false;
@@ -153,5 +165,20 @@ export function useResizableLayout(tab: TabId) {
     [enabled, state.rows]
   );
 
-  return { enabled, columnStyle, rowStyle, resizeColumn, resizeRow, reset, commit };
+  const gridHeightStyle: CSSProperties =
+    enabled && typeof state.height === "number"
+      ? ({ "--grid-height": `${state.height}px` } as CSSProperties)
+      : {};
+
+  return {
+    enabled,
+    columnStyle,
+    rowStyle,
+    gridHeightStyle,
+    resizeColumn,
+    resizeRow,
+    resizeHeight,
+    reset,
+    commit,
+  };
 }

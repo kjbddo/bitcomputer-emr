@@ -25,10 +25,13 @@ export type LayoutState = {
   columns: Track[];
   /** 열 키(`left`/`middle`/`right`) → 그 열의 행 트랙 */
   rows: Record<string, Track[]>;
+  /** 그리드 전체 높이. `null` = 뷰포트에 맞춘다(`100%`). */
+  height: number | null;
 };
 
 export const MIN_COLUMN_PX = 200;
 export const MIN_ROW_PX = 120;
+export const MIN_GRID_HEIGHT_PX = 400;
 
 /**
  * 핸들도 그리드 항목이라 트랙 하나를 차지한다. 트랙 사이마다 이 폭이 끼므로
@@ -52,14 +55,17 @@ export const DEFAULT_LAYOUTS: Record<TabId, LayoutState> = {
   환자접수: {
     columns: [300, null, null],
     rows: { left: [null, null], right: [null, null] },
+    height: null,
   },
   진료실: {
     columns: [300, null, 350],
     rows: { left: [null, null], middle: [null, null, null], right: [null, null] },
+    height: null,
   },
   진단서: {
     columns: [280, null, null],
     rows: { middle: [null, null] },
+    height: null,
   },
 };
 
@@ -83,6 +89,12 @@ function matchesShape(value: unknown, fallback: LayoutState): value is LayoutSta
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Partial<LayoutState>;
   if (!isUsable(candidate.columns, fallback.columns.length, MIN_COLUMN_PX)) return false;
+  // height 키가 아예 없는 옛 저장값(이 필드가 생기기 전)은 형태 불일치로
+  // 기본값으로 떨어뜨린다 — height 도 다른 필드처럼 계약의 일부다.
+  if (!("height" in candidate)) return false;
+  if (candidate.height !== null && !(typeof candidate.height === "number" && Number.isFinite(candidate.height))) {
+    return false;
+  }
   if (typeof candidate.rows !== "object" || candidate.rows === null) return false;
   const rows = candidate.rows as Record<string, unknown>;
   // 키 집합이 기본값과 정확히 같아야 한다 — 안 그러면 열이 하나 빠진 채로
@@ -228,4 +240,23 @@ export function applyDelta(
   const upper = Math.max(min, containerPx - others - reserved);
   next[index + 1] = Math.max(min, Math.min(upper, (b as number) - deltaPx));
   return next;
+}
+
+/**
+ * 그리드 전체 높이에 델타를 더한다. 트랙 배열이 아니라 스칼라라 `applyDelta`
+ * 는 쓸 수 없다.
+ *
+ * `height` 가 `null` 이면(아직 뷰포트에 맞춘 상태) 실제 렌더 높이인
+ * `viewportPx` 를 시작점으로 물질화한다 — `applyDelta` 가 1fr 트랙을 다룰 때
+ * 쓰는 것과 같은 발상이다. 하한은 `MIN_GRID_HEIGHT_PX` 로 잡되, 상한은 두지
+ * 않는다 — 가로 트랙과 달리 이 축은 바깥(`.contentArea`)이 `overflow: auto`
+ * 라 넘친 만큼 스크롤이 흡수한다.
+ */
+export function applyHeightDelta(
+  height: number | null,
+  deltaPx: number,
+  viewportPx: number
+): number {
+  const base = height === null ? viewportPx : height;
+  return Math.max(MIN_GRID_HEIGHT_PX, base + deltaPx);
 }

@@ -107,6 +107,27 @@ describe("조절", () => {
   });
 });
 
+describe("높이 조절", () => {
+  it("resizeHeight 가 state.height 와 gridHeightStyle 을 바꾼다", () => {
+    const { result } = renderHook(() => useResizableLayout("진료실"));
+    expect(result.current.gridHeightStyle).toEqual({});
+
+    act(() => result.current.resizeHeight(150, 800));
+
+    expect(loadLayout("진료실").height).toBe(950);
+    expect(result.current.gridHeightStyle["--grid-height" as never]).toBe("950px");
+  });
+
+  it("reset 은 높이도 기본값(null)으로 되돌린다", () => {
+    const { result } = renderHook(() => useResizableLayout("진료실"));
+    act(() => result.current.resizeHeight(150, 800));
+    act(() => result.current.reset());
+
+    expect(loadLayout("진료실")).toEqual(DEFAULT_LAYOUTS["진료실"]);
+    expect(result.current.gridHeightStyle).toEqual({});
+  });
+});
+
 describe("matchMedia 부재", () => {
   // 리뷰 지적: window.matchMedia 가 없으면(구형 브라우저, 테스트 환경,
   // 임베디드 웹뷰 등) 훅이 TypeError 를 던지며 죽는다. layoutStorage.ts 의
