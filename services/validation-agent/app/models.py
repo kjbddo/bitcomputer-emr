@@ -38,7 +38,7 @@ class ValidationAgentResponse(BaseModel):
     # 뜻한다. 실행 순서는 이제 고정 파이프라인이라 "골랐다" 는 말 자체가 성립
     # 하지 않는다.
     # - llm: 이 스텝이 쓴 내용을 모델이 만들었다. 지금 이 값을 가질 수 있는
-    #        스텝은 PubMed 질의가 모델 번역에서 나온 `Pubmed Loader` 하나뿐이다.
+    #        이 파이프라인에는 모델이 만드는 스텝이 없다.
     # - stub: LLM_PROVIDER=stub 경로이거나, 이 스텝이 실어온 상류 데이터가
     #        스텁에서 왔다(Prescription Finder 의 recommendationLlmStatus).
     # - rule: 고정 파이프라인이 실행했고 내용도 결정론적이다. 모델이 관여할
@@ -54,7 +54,13 @@ class ValidationAgentResponse(BaseModel):
     # LLM 을 실제로 썼는지. 설정이 아니라 실행 경로에서 도출한다(spec §6.2).
     # 기본값은 "fallback" 로 fail-closed 한다 — 이 필드가 누락된 채 역직렬화되면
     # "모델이 돌았다"고 오인되는 대신 "LLM 미사용" 쪽으로만 틀리게 한다(리뷰 finding 5).
-    llmStatus: Literal["real", "stub", "fallback"] = "fallback"
+    #
+    # "rule" 은 모델을 **부르지 않았다**, "fallback" 은 **불렀는데 실패했다** 다.
+    # 이 파이프라인은 현재 모델을 부르는 자리가 없어 정상 실행이 언제나 rule 이다
+    # (gateway.resolve_llm_status 참고). 기본값을 rule 로 바꾸지 않는 이유:
+    # 필드가 누락된 응답은 "부르지 않았음이 확인됐다" 가 아니라 "모른다" 이고,
+    # 그때는 더 보수적인 fallback 쪽으로 틀려야 한다.
+    llmStatus: Literal["real", "stub", "fallback", "rule"] = "fallback"
     # 출력이 도구 관측값으로 추적되는지. llmStatus 와 다른 축이다.
     # 기본값을 두지 않는 이유는 llmStatus 와 같다 — 없는 것을 있는 것처럼
     # 보이게 하면 안 된다. 웹은 None 을 "미검증"으로 렌더한다.

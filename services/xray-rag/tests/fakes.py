@@ -51,6 +51,28 @@ class _FakeRepo(CaseRepository):
             "severity": severity,
         })
 
+    def delete_case_edges(self, case_key):
+        """실제 저장소와 같은 규칙으로 이 케이스에서 나가는 간선을 지운다.
+
+        fake 가 이것을 흉내 내지 않으면, 덮어쓰기에서 낡은 간선이 남는 결함을
+        테스트가 볼 수 없다 - fake 쪽에서만 조용히 통과한다.
+        """
+        removed = 0
+        src = f"xray_cases/{case_key}"
+        for name, edges in self.edges.items():
+            keep = [e for e in edges if e.get("_from") != src]
+            removed += len(edges) - len(keep)
+            self.edges[name] = keep
+        return removed
+
+    def reset_cases(self):
+        removed = {"xray_cases": len(self.cases)}
+        self.cases.clear()
+        for name, edges in self.edges.items():
+            removed[name] = len(edges)
+        self.edges.clear()
+        return removed
+
     # ---------- read ----------
     def get_case(self, case_key):
         return self.cases.get(case_key)

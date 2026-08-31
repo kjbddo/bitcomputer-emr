@@ -90,8 +90,20 @@ class CaseService:
         disease_tags: List[str],
         finding_tags: Optional[List[str]],
         metadata: CaseRegisterMetadata,
+        case_key: Optional[str] = None,
     ) -> Dict[str, Any]:
-        case_key = new_case_key()
+        """케이스를 등록한다.
+
+        `case_key` 를 주면 그 키로 등록한다 - 같은 키가 이미 있으면 덮어쓴다.
+        적재 스크립트가 원본 경로에서 유도한 키를 넘겨 재실행을 멱등하게 만드는
+        용도다(app.utils.id_utils.case_key_for_source). 주지 않으면 예전처럼
+        무작위 키를 만든다.
+
+        덮어쓸 때는 기존 간선을 먼저 끊는다. 간선 키가 case_key 에서 유도되므로
+        같은 태그는 덮어써지지만, 없어진 태그의 간선은 그대로 남기 때문이다.
+        """
+        replacing = case_key is not None and self.repo.get_case(case_key) is not None
+        case_key = case_key or new_case_key()
         ext = Path(original_filename or ".png").suffix.lower() or ".png"
 
         # 1) 원본 저장
@@ -146,6 +158,11 @@ class CaseService:
             if v is not None:
                 doc[k] = v
 
+        if replacing:
+            # 덮어쓰기다. 낡은 간선을 먼저 끊지 않으면 이번 등록에서 사라진
+            # 태그가 그래프에 계속 매달려 있게 된다.
+            self.repo.delete_case_edges(case_key)
+
         self.repo.insert_case(doc)
         # edges
         for d in disease_tags:
@@ -161,7 +178,9 @@ class CaseService:
                     p95_error=stats.p95Error,
                     severity=stats.severity,
                 )
-        return {"caseId": case_key, "status": "created"}
+        # 호출자가 새로 만들어진 것과 덮어쓴 것을 구별할 수 있어야 한다 -
+        # 적재 스크립트의 요약이 이 값으로 "몇 건이 갱신됐나"를 센다.
+        return {"caseId": case_key, "status": "replaced" if replacing else "created"}
 
     # ---------- inference ----------
     def infer(

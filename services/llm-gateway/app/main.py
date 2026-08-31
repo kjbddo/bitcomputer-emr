@@ -168,6 +168,7 @@ async def chat_completions(request: Request) -> JSONResponse:
                 param_notes=param_notes,
                 execution=execution,
                 upstream_status=exc.status,
+                failure_detail=exc.detail,
             )
             # 상류 응답 본문을 그대로 흘리지 않는다. 키가 섞일 여지를 남기지 않는다(GC-7).
             return JSONResponse(

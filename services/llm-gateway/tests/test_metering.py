@@ -196,6 +196,40 @@ def test_successful_record_has_null_upstream_status():
     assert record["upstreamStatus"] is None
 
 
+# 상류에 닿지도 못한 실패는 upstreamStatus 가 None 이다. 그때 failureDetail 이
+# 없으면 레코드가 "실패했다"고만 말하고 왜인지는 말하지 않는다 — 라이브에서
+# prescription-api 호출이 절반씩 실패하는데 원인이 타임아웃인지 네트워크 단절인지
+# 로그만 보고는 가릴 수 없었다.
+def test_failed_record_carries_the_reason_when_there_is_no_upstream_status():
+    record = build_record(
+        model="m", caller="c", usage=RawUsage(), latency_ms=1, attempts=3,
+        outcome="failed", param_notes=[], settings=SETTINGS,
+        execution=EXECUTION, upstream_status=None,
+        failure_detail="connection error: ReadTimeout",
+    )
+    assert record["upstreamStatus"] is None
+    assert record["failureDetail"] == "connection error: ReadTimeout"
+
+
+def test_successful_record_has_no_failure_detail():
+    """성공 레코드에 실패 사유 자리가 채워져 있으면 검색이 오염된다."""
+    record = build_record(
+        model="m", caller="c", usage=RawUsage(1, 1), latency_ms=1, attempts=1,
+        outcome="success", param_notes=[], settings=SETTINGS, execution=EXECUTION,
+    )
+    assert record["failureDetail"] is None
+
+
+def test_failure_detail_is_always_present_as_a_key():
+    """키 자체는 항상 있어야 로그를 필드로 훑을 수 있다."""
+    record = build_record(
+        model="m", caller="c", usage=RawUsage(), latency_ms=1, attempts=1,
+        outcome="failed", param_notes=[], settings=SETTINGS,
+        execution=EXECUTION, upstream_status=500,
+    )
+    assert "failureDetail" in record
+
+
 # 계측은 usage 필드 이름을 몰라야 한다. 그 지식은 제공자에 있다.
 def test_metering_module_does_not_name_usage_fields():
     import pathlib
