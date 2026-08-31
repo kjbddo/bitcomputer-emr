@@ -138,7 +138,22 @@ curl -s "http://localhost:8529/_db/bitcomputer_graph/_api/collection?excludeSyst
   | python -c "import sys,json; print(len(json.load(sys.stdin)['result']),'collections')"
 ```
 
-14가 나와야 한다.
+ETL 직후에는 **14** 다.
+
+**앱을 한 번이라도 쓴 뒤에는 17 이 정상이다.** 처방 추천 피드백 고리가 세
+컬렉션을 실행 중에 만든다 — `recommendation_histories`,
+`recommendation_prescriptions`(`services/prescription/prescription_api.py`),
+`history_recommended_prescription`(피드백 집계, `feedback_adjustment.py`).
+ETL 은 이것들을 만들지 않으므로, 14 보다 크다고 해서 적재가 잘못된 것이 아니다.
+
+**적재 여부는 개수가 아니라 내용으로 판단한다:**
+
+```bash
+curl -s -X POST "http://localhost:8529/_db/bitcomputer_graph/_api/cursor" -u "root:$PW"   -d '{"query":"RETURN {visits: LENGTH(visits), diagnoses: LENGTH(diagnoses), order_lines: LENGTH(order_lines)}"}'   | python -c "import sys,json; print(json.load(sys.stdin)['result'][0])"
+```
+
+엑셀 원본만: `visits=1070 diagnoses=9 order_lines=6809`
+4.4 의 합성 케이스까지: `visits=1190 diagnoses=19 order_lines=7001`
 
 ### 4.3 이 그래프에 실제로 들어 있는 상병코드를 확인한다
 
@@ -392,6 +407,8 @@ python -c "
 import json
 d=json.load(open('infer_out.json',encoding='utf-8'))
 print('engineStatus:', d['engineStatus'])
+print('roiStatus:', d.get('roiStatus'))
+print('roiMaskVersion:', d['queryCase'].get('roiMaskVersion'))
 print('similarCases:', len(d['similarCases']))
 print('top sim:', round(float(d['similarCases'][0]['similarity']),4))
 "
@@ -399,6 +416,14 @@ rm -f infer_out.json
 ```
 
 `similarCases` 가 0이면 인덱스 차원과 질의 벡터 차원이 어긋난 것이다(§5.3).
+
+**`roiMaskVersion` 은 저장된 케이스의 값과 같아야 한다.** 다르면 질의와 코퍼스가
+서로 다른 해부 기준 위에서 비교되고 있다는 뜻이고, 그 상태에서는 유사도 결과를
+믿을 수 없다. §5.4 의 `--reset` 으로 전량 재적재한다.
+
+`roiStatus` 는 어느 분할기가 실제로 구성됐는지다(`pspnet`/`cv`/`mock`).
+`mock` 이면 입력과 무관한 고정 타원이라 ROI 별 통계가 이 영상에 대해 아무 말도
+하지 않는다.
 
 ### 5.7 PSPNet ROI 가중치 — 호스트에서 받아 컨테이너에 마운트한다
 
@@ -517,14 +542,17 @@ cat probe_report.txt && rm -f probe.json probe_out.json probe_report.txt
 적재가 제대로 됐을 때:
 
 ```
-llmStatus=real cohort=9 top_rx=6
+llmStatus=real cohort=8 top_rx=6
 status=passed
   schema_top3          response        ok
   code_in_candidates   prescription[1] ok
   name_matches_code    prescription[1] ok
+  code_is_medication   prescription[1] ok
   confidence_in_range  prescription[1] ok
   ... prescription[2], prescription[3] 동일
 ```
+
+`cohort` 숫자는 그래프 내용에 따라 달라진다. 중요한 것은 **0 이 아니라는 것**이다.
 
 읽는 법:
 
@@ -548,7 +576,7 @@ http://localhost:3000
 
 `.env` 의 `BOOTSTRAP_SUPERUSER_PASSWORD` 로 만들어진 계정으로 로그인한 뒤:
 
-1. 진료 화면에서 상병을 §4.3 의 아홉 개 중 하나로 고른다
+1. 진료 화면에서 상병을 §4.3 의 목록 중 하나로 고른다 — 그 밖의 상병은 후보가 0건이라 추천이 비어 있는 것이 정상이다
 2. AI 처방 추천 실행
 3. 추천 표의 각 행에 검증 배지, 표 위에 요약 줄 두 개(항목 단위 / 응답 단위)가 뜬다
 4. 처방 선택기로 한 행을 다른 처방으로 바꾸면 **그 행만** 즉시 "미검증" 으로 떨어져야 한다. 배지가 그대로면 이전 처방 기준의 판정이 남아 있는 것이고, 그건 결함이다
