@@ -209,3 +209,192 @@ def test_info_level_is_enabled_without_extra_setup():
     import logging
 
     assert logging.getLogger("llm-gateway").isEnabledFor(logging.INFO)
+
+
+# ══ 제공자 교체 ═══════════════════════════════════════════════════
+
+import app.providers as providers_module  # noqa: E402
+from factories import make_bedrock_settings, make_settings  # noqa: E402
+
+
+@pytest.fixture()
+def provider_client(monkeypatch):
+    """설정을 바꿔 끼운 앱 클라이언트. 상류는 MockTransport 다."""
+
+    def _make(handler, settings):
+        def _fake_client(**_kwargs):
+            return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+        monkeypatch.setattr(main, "make_upstream_client", _fake_client)
+        monkeypatch.setattr(main, "SETTINGS", settings)
+        monkeypatch.setattr(main, "PROVIDER", providers_module.resolve_provider(settings))
+        return TestClient(main.app)
+
+    return _make
+
+
+def _bedrock_settings(**overrides):
+    return make_settings(
+        provider="bedrock",
+        api_key="openai-super-secret",
+        bedrock=make_bedrock_settings(
+            api_key="bedrock-super-secret", region="us-west-2", **overrides
+        ),
+    )
+
+
+def _records(caplog):
+    out = []
+    for rec in caplog.records:
+        try:
+            payload = json.loads(rec.getMessage())
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(payload, dict) and "outcome" in payload:
+            out.append(payload)
+    return out
+
+
+# 호출 서비스는 손대지 않는다. 같은 본문을 보내도 상류 URL·모델·인증이 바뀐다.
+def test_bedrock_configuration_changes_url_model_and_auth(provider_client):
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["auth"] = request.headers.get("authorization")
+        seen["body"] = json.loads(request.read().decode())
+        return httpx.Response(200, json={"ok": True})
+
+    with provider_client(handler, _bedrock_settings()) as c:
+        c.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-5.6-luna", "messages": [], "temperature": 0.7},
+        )
+
+    assert seen["url"] == (
+        "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/chat/completions"
+    )
+    assert seen["auth"] == "Bearer bedrock-super-secret"
+    assert seen["body"]["model"] == "global.openai.gpt-5.6-luna"
+    # OpenAI 규칙이 새어 들어오면 여기서 잡힌다.
+    assert seen["body"]["temperature"] == 0.7
+    assert "reasoning_effort" not in seen["body"]
+
+
+def test_openai_configuration_still_uses_openai_rules(provider_client):
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["auth"] = request.headers.get("authorization")
+        seen["body"] = json.loads(request.read().decode())
+        return httpx.Response(200, json={"ok": True})
+
+    settings = make_settings(
+        upstream_base_url="https://api.openai.com/v1", api_key="openai-super-secret"
+    )
+    with provider_client(handler, settings) as c:
+        c.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-5.6-luna", "messages": [], "temperature": 0.7},
+        )
+
+    assert seen["url"] == "https://api.openai.com/v1/chat/completions"
+    assert seen["auth"] == "Bearer openai-super-secret"
+    assert seen["body"]["model"] == "gpt-5.6-luna"
+    assert "temperature" not in seen["body"]
+    assert seen["body"]["reasoning_effort"] == "low"
+
+
+# ── 계측의 provider 는 실행에서 나온다 ─────────────────────────────
+
+def test_record_provider_matches_the_host_actually_called(provider_client, caplog):
+    def handler(_request):
+        return httpx.Response(
+            200, json={"usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+        )
+
+    with caplog.at_level(logging.INFO, logger="llm-gateway"):
+        with provider_client(handler, _bedrock_settings()) as c:
+            c.post("/v1/chat/completions", json={"model": "gpt-5.6-luna", "messages": []})
+
+    record = _records(caplog)[0]
+    assert record["provider"] == "bedrock"
+    assert record["upstreamHost"] == "bedrock-runtime.us-west-2.amazonaws.com"
+    assert record["authMode"] == "bearer:bedrock_api_key"
+    # 실제로 보낸 모델 ID 여야 한다 — 호출자가 보낸 것이 아니라.
+    assert record["model"] == "global.openai.gpt-5.6-luna"
+    assert record["inputTokens"] == 10
+
+
+# 설정만 bedrock 이고 실제로는 붙을 수 없는 상태. 레코드가 "bedrock" 이라고
+# 말하면, 로그만 보고 Bedrock 이 응답한 줄 알게 된다.
+def test_unresolvable_provider_is_not_reported_as_the_configured_one(
+    provider_client, caplog
+):
+    def handler(_request):  # 도달하면 안 된다
+        raise AssertionError("미해석 제공자인데 상류로 나갔다")
+
+    settings = make_settings(
+        provider="bedrock", bedrock=make_bedrock_settings(region="", base_url="")
+    )
+    with caplog.at_level(logging.INFO, logger="llm-gateway"):
+        with provider_client(handler, settings) as c:
+            response = c.post(
+                "/v1/chat/completions", json={"model": "gpt-5.6-luna", "messages": []}
+            )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "provider_unresolved"
+
+    record = _records(caplog)[0]
+    assert record["provider"] == "unresolved"
+    assert record["providerConfigured"] == "bedrock"
+    assert record["upstreamHost"] == ""
+    assert record["outcome"] == "failed"
+
+
+def test_unknown_provider_name_does_not_reach_openai(provider_client, caplog):
+    def handler(_request):
+        raise AssertionError("모르는 제공자인데 상류로 나갔다")
+
+    with caplog.at_level(logging.INFO, logger="llm-gateway"):
+        with provider_client(handler, make_settings(provider="anthropic")) as c:
+            response = c.post("/v1/chat/completions", json={"model": "m", "messages": []})
+
+    assert response.status_code == 503
+    assert _records(caplog)[0]["provider"] == "unresolved"
+
+
+# ── GC-7 ───────────────────────────────────────────────────────────
+
+def test_no_key_reaches_logs_or_error_body_on_bedrock_failure(provider_client, caplog):
+    def handler(_request):
+        return httpx.Response(403, text="expired token")
+
+    with caplog.at_level(logging.INFO, logger="llm-gateway"):
+        with provider_client(handler, _bedrock_settings()) as c:
+            response = c.post("/v1/chat/completions", json={"model": "m", "messages": []})
+
+    logged = " ".join(rec.getMessage() for rec in caplog.records)
+    assert "bedrock-super-secret" not in logged
+    assert "bedrock-super-secret" not in response.text
+    assert "openai-super-secret" not in logged
+    # 만료를 일반 장애와 구별할 수 있어야 한다.
+    assert _records(caplog)[0]["upstreamStatus"] == 403
+
+
+def test_unresolved_error_body_does_not_leak_secrets(provider_client):
+    def handler(_request):
+        raise AssertionError("도달하면 안 된다")
+
+    settings = make_settings(
+        provider="bedrock",
+        api_key="openai-super-secret",
+        bedrock=make_bedrock_settings(api_key="bedrock-super-secret", region=""),
+    )
+    with provider_client(handler, settings) as c:
+        response = c.post("/v1/chat/completions", json={"model": "m", "messages": []})
+
+    assert "bedrock-super-secret" not in response.text
+    assert "openai-super-secret" not in response.text

@@ -507,7 +507,14 @@ def evaluate_renal_gate(*, notes: Any, items: Any) -> RenalGateResult:
                     rank=_rank(item),
                     name=name,
                     prescription_code=code,
-                    outcome="clear",
+                    # `clear` 가 아니라 `unknown` 이다. evidence 가 "대조할 약이
+                    # 없습니다" 라고 말하는데 outcome 이 `clear` 면 화면에서
+                    # "확인했고 해당 없음" 으로 읽힌다. 이 부품의 원칙은 대조
+                    # 불가를 `clear` 로 내지 않는 것이고(노트를 못 읽은 경우,
+                    # 판정할 항목이 없는 경우 모두 `unknown`), 플레이스홀더만
+                    # 그 원칙 밖에 있었다. status 가 max(severity) 이므로
+                    # 후보가 0건인 응답 전체가 `clear` 로 나가고 있었다.
+                    outcome="unknown",
                     ingredient=None,
                     evidence="추천 항목이 없는 순위입니다 — 대조할 약이 없습니다.",
                 )

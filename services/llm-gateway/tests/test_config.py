@@ -1,17 +1,9 @@
 from app.config import Settings, load_settings
+from factories import make_settings
 
 
 def _settings(api_key: str = "super-secret-key") -> Settings:
-    return Settings(
-        upstream_base_url="https://upstream.test/v1",
-        api_key=api_key,
-        model="gpt-5.6-luna",
-        reasoning_effort="low",
-        timeout_seconds=120.0,
-        max_retries=2,
-        input_price_per_1m=0.20,
-        output_price_per_1m=1.20,
-    )
+    return make_settings(api_key=api_key)
 
 
 # 이 객체는 요청·재시도·에러 처리 경로로 넘겨 다닌다. 로깅 한 줄이나
@@ -82,3 +74,65 @@ def test_default_prices_match_published_rates(monkeypatch):
 
     assert settings.input_price_per_1m == 0.20
     assert settings.output_price_per_1m == 1.20
+
+
+# ── 상류 제공자 선택 ────────────────────────────────────────────────
+
+# test_default_upstream_is_openai 와 같은 이유로 제공자 기본값을 못 박는다.
+# 기본값이 바뀌면 전체 시스템이 조용히 다른 회사의 API 를 친다.
+def test_default_provider_is_openai(monkeypatch):
+    monkeypatch.delenv("LLM_UPSTREAM_PROVIDER", raising=False)
+    assert load_settings().provider == "openai"
+
+
+def test_provider_is_read_from_environment(monkeypatch):
+    monkeypatch.setenv("LLM_UPSTREAM_PROVIDER", "bedrock")
+    assert load_settings().provider == "bedrock"
+
+
+# LLM_PROVIDER 는 호출 서비스가 stub/real 을 고르는 데 이미 쓰고 있다
+# (spec §3.3, infra/.env 공유). 게이트웨이가 그 이름을 재사용하면 같은 .env 의
+# 한 값이 두 가지 뜻을 갖게 된다.
+def test_gateway_does_not_read_llm_provider(monkeypatch):
+    monkeypatch.delenv("LLM_UPSTREAM_PROVIDER", raising=False)
+    monkeypatch.setenv("LLM_PROVIDER", "stub")
+    assert load_settings().provider == "openai"
+
+
+def test_bedrock_defaults(monkeypatch):
+    for key in (
+        "LLM_BEDROCK_REGION", "LLM_BEDROCK_ENDPOINT",
+        "LLM_BEDROCK_MODEL", "LLM_BEDROCK_BASE_URL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    bedrock = load_settings().bedrock
+
+    assert bedrock.endpoint == "bedrock-runtime"
+    # bedrock-runtime 에서 luna 는 In-Region 이 없다. 교차 리전 추론 프로파일
+    # ID 를 써야 하며 베어 ID 로는 호출되지 않는다(2026-08-31 모델 카드 확인).
+    assert bedrock.model == "global.openai.gpt-5.6-luna"
+    # 리전은 계정마다 다르므로 기본값을 주지 않는다. 비어 있으면 제공자가
+    # 구성 불가로 떨어지고, 그 사실이 계측에 드러난다.
+    assert bedrock.region == ""
+    assert bedrock.base_url == ""
+
+
+def test_bedrock_settings_read_from_environment(monkeypatch):
+    monkeypatch.setenv("LLM_BEDROCK_REGION", "ap-northeast-2")
+    monkeypatch.setenv("LLM_BEDROCK_ENDPOINT", "bedrock-mantle")
+    monkeypatch.setenv("LLM_BEDROCK_MODEL", "openai.gpt-5.6-luna")
+    bedrock = load_settings().bedrock
+
+    assert bedrock.region == "ap-northeast-2"
+    assert bedrock.endpoint == "bedrock-mantle"
+    assert bedrock.model == "openai.gpt-5.6-luna"
+
+
+# GC-7. Bedrock 키도 OpenAI 키와 같은 취급을 받아야 한다. 중첩 dataclass 는
+# 바깥 repr 에 그대로 펼쳐지므로 안쪽에도 repr=False 가 필요하다.
+def test_bedrock_api_key_absent_from_settings_repr(monkeypatch):
+    monkeypatch.setenv("LLM_BEDROCK_API_KEY", "bedrock-super-secret")
+    settings = load_settings()
+    assert "bedrock-super-secret" not in repr(settings)
+    assert "bedrock-super-secret" not in str(settings)
+    assert settings.bedrock.api_key == "bedrock-super-secret"

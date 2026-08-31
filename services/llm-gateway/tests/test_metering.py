@@ -1,15 +1,16 @@
+import app.metering as metering_module
 from app.config import Settings
 from app.metering import build_record
+from app.providers.base import ExecutionFacts, RawUsage
+from factories import make_settings
 
-SETTINGS = Settings(
-    upstream_base_url="https://upstream.test/v1",
-    api_key="secret",
-    model="gpt-5.6-luna",
-    reasoning_effort="low",
-    timeout_seconds=120.0,
-    max_retries=2,
-    input_price_per_1m=0.20,
-    output_price_per_1m=1.20,
+SETTINGS = make_settings(api_key="secret")
+
+EXECUTION = ExecutionFacts(
+    provider="openai",
+    provider_configured="openai",
+    upstream_host="api.openai.com",
+    auth_mode="bearer:openai_api_key",
 )
 
 
@@ -17,12 +18,12 @@ def test_record_contains_required_fields():
     record = build_record(
         model="gpt-5.6-luna",
         caller="validation-agent",
-        usage={"prompt_tokens": 1000, "completion_tokens": 500},
+        usage=RawUsage(1000, 500),
         latency_ms=1234,
         attempts=1,
         outcome="success",
         param_notes=["dropped:temperature"],
-        settings=SETTINGS,
+        settings=SETTINGS, execution=EXECUTION,
     )
     for key in (
         "model", "caller", "inputTokens", "outputTokens",
@@ -35,12 +36,12 @@ def test_cost_is_computed_from_tokens_and_price():
     record = build_record(
         model="m",
         caller="c",
-        usage={"prompt_tokens": 1_000_000, "completion_tokens": 1_000_000},
+        usage=RawUsage(1_000_000, 1_000_000),
         latency_ms=1,
         attempts=1,
         outcome="success",
         param_notes=[],
-        settings=SETTINGS,
+        settings=SETTINGS, execution=EXECUTION,
     )
     # 입력 1M × $0.20 + 출력 1M × $1.20
     assert record["estimatedCostUsd"] == 1.40
@@ -48,8 +49,8 @@ def test_cost_is_computed_from_tokens_and_price():
 
 def test_missing_usage_yields_zero_tokens_not_crash():
     record = build_record(
-        model="m", caller="c", usage=None, latency_ms=1, attempts=1,
-        outcome="failed", param_notes=[], settings=SETTINGS,
+        model="m", caller="c", usage=RawUsage(), latency_ms=1, attempts=1,
+        outcome="failed", param_notes=[], settings=SETTINGS, execution=EXECUTION,
     )
     assert record["inputTokens"] == 0
     assert record["outputTokens"] == 0
@@ -58,8 +59,8 @@ def test_missing_usage_yields_zero_tokens_not_crash():
 
 def test_api_key_never_appears_in_record():
     record = build_record(
-        model="m", caller="c", usage={"prompt_tokens": 1, "completion_tokens": 1},
-        latency_ms=1, attempts=1, outcome="success", param_notes=[], settings=SETTINGS,
+        model="m", caller="c", usage=RawUsage(1, 1),
+        latency_ms=1, attempts=1, outcome="success", param_notes=[], settings=SETTINGS, execution=EXECUTION,
     )
     assert "secret" not in str(record)
 
@@ -71,20 +72,23 @@ def test_api_key_never_appears_in_record():
 # 상류의 repr=False 를 검증할 뿐이다. 레코드가 애초에 객체를 안 들고 있다는 구조를 고정한다.
 def test_record_holds_only_json_primitives():
     record = build_record(
-        model="m", caller="c", usage={"prompt_tokens": 1, "completion_tokens": 1},
+        model="m", caller="c", usage=RawUsage(1, 1),
         latency_ms=1, attempts=1, outcome="success", param_notes=["dropped:temperature"],
-        settings=SETTINGS,
+        settings=SETTINGS, execution=EXECUTION,
     )
     for key, value in record.items():
-        assert isinstance(value, (str, int, float, list)), f"{key} 가 원시값이 아니다"
+        # None 허용: upstreamStatus 는 성공 시 null 이다. JSON 으로는 여전히
+        # 원시값이며, 객체가 실려 들어오는 것을 막는다는 이 테스트의 목적은
+        # 그대로다.
+        assert isinstance(value, (str, int, float, list, type(None))), f"{key} 가 원시값이 아니다"
         if isinstance(value, list):
             assert all(isinstance(item, str) for item in value), f"{key} 에 비문자열 항목"
 
 
 def test_record_does_not_carry_settings_object():
     record = build_record(
-        model="m", caller="c", usage=None, latency_ms=1, attempts=1,
-        outcome="failed", param_notes=[], settings=SETTINGS,
+        model="m", caller="c", usage=RawUsage(), latency_ms=1, attempts=1,
+        outcome="failed", param_notes=[], settings=SETTINGS, execution=EXECUTION,
     )
     assert "settings" not in record
     assert not any(isinstance(v, Settings) for v in record.values())
@@ -93,8 +97,8 @@ def test_record_does_not_carry_settings_object():
 def test_small_request_cost_survives_rounding():
     """6자리 반올림이 실제로 일한다. round(cost, 2) 였다면 0.0 으로 뭉개진다."""
     record = build_record(
-        model="m", caller="c", usage={"prompt_tokens": 1200, "completion_tokens": 300},
-        latency_ms=1, attempts=1, outcome="success", param_notes=[], settings=SETTINGS,
+        model="m", caller="c", usage=RawUsage(1200, 300),
+        latency_ms=1, attempts=1, outcome="success", param_notes=[], settings=SETTINGS, execution=EXECUTION,
     )
     assert record["estimatedCostUsd"] > 0.0
 
@@ -102,8 +106,8 @@ def test_small_request_cost_survives_rounding():
 def test_malformed_token_value_does_not_crash():
     """상류가 이상한 usage 를 줘도 계측이 응답을 깨뜨리면 안 된다."""
     record = build_record(
-        model="m", caller="c", usage={"prompt_tokens": "unknown", "completion_tokens": None},
-        latency_ms=1, attempts=1, outcome="success", param_notes=[], settings=SETTINGS,
+        model="m", caller="c", usage=RawUsage("unknown", None),
+        latency_ms=1, attempts=1, outcome="success", param_notes=[], settings=SETTINGS, execution=EXECUTION,
     )
     assert record["inputTokens"] == 0
     assert record["outputTokens"] == 0
@@ -111,8 +115,91 @@ def test_malformed_token_value_does_not_crash():
 
 def test_negative_token_count_clamped():
     record = build_record(
-        model="m", caller="c", usage={"prompt_tokens": -5, "completion_tokens": -5},
-        latency_ms=1, attempts=1, outcome="success", param_notes=[], settings=SETTINGS,
+        model="m", caller="c", usage=RawUsage(-5, -5),
+        latency_ms=1, attempts=1, outcome="success", param_notes=[], settings=SETTINGS, execution=EXECUTION,
     )
     assert record["inputTokens"] == 0
     assert record["estimatedCostUsd"] >= 0.0
+
+
+# ── 어느 제공자가 실제로 처리했는가 ────────────────────────────────
+#
+# 이 저장소가 llmStatus·engineStatus·embeddingVersion 에서 세 번 틀린 규칙이다.
+# 결과를 어떻게 만들었는지는 **설정이 아니라 실행 경로**에서 나와야 한다.
+
+def test_record_reports_the_provider_that_ran():
+    record = build_record(
+        model="m", caller="c", usage=RawUsage(1, 1), latency_ms=1, attempts=1,
+        outcome="success", param_notes=[], settings=SETTINGS,
+        execution=ExecutionFacts(
+            provider="bedrock",
+            provider_configured="bedrock",
+            upstream_host="bedrock-runtime.us-west-2.amazonaws.com",
+            auth_mode="bearer:bedrock_api_key",
+        ),
+    )
+    assert record["provider"] == "bedrock"
+    assert record["upstreamHost"] == "bedrock-runtime.us-west-2.amazonaws.com"
+    assert record["authMode"] == "bearer:bedrock_api_key"
+
+
+# 설정은 bedrock 인데 실제로 돈 것은 openai 인 상황. 레코드는 실행 쪽을 말해야
+# 한다. settings.provider 를 그대로 찍는 구현이면 여기서 잡힌다.
+def test_record_does_not_echo_configured_provider():
+    settings = make_settings(provider="bedrock")
+    record = build_record(
+        model="m", caller="c", usage=RawUsage(), latency_ms=1, attempts=1,
+        outcome="success", param_notes=[], settings=settings,
+        execution=ExecutionFacts(
+            provider="openai",
+            provider_configured="bedrock",
+            upstream_host="api.openai.com",
+            auth_mode="bearer:openai_api_key",
+        ),
+    )
+    assert record["provider"] == "openai"
+    assert record["providerConfigured"] == "bedrock"
+
+
+def test_record_reports_unresolved_provider_as_unresolved():
+    settings = make_settings(provider="bedrock")
+    record = build_record(
+        model="m", caller="c", usage=RawUsage(), latency_ms=1, attempts=0,
+        outcome="failed", param_notes=[], settings=settings,
+        execution=ExecutionFacts(
+            provider="unresolved",
+            provider_configured="bedrock",
+            upstream_host="",
+            auth_mode="none",
+        ),
+    )
+    assert record["provider"] == "unresolved"
+    assert record["provider"] != settings.provider
+
+
+# 상류 상태코드는 실패의 성격을 가른다. Bedrock API 키 만료는 401/403 으로
+# 나타나며, 그 구분이 레코드에 없으면 만료를 일반 장애와 구별할 수 없다.
+def test_failed_record_carries_upstream_status():
+    record = build_record(
+        model="m", caller="c", usage=RawUsage(), latency_ms=1, attempts=1,
+        outcome="failed", param_notes=[], settings=SETTINGS,
+        execution=EXECUTION, upstream_status=403,
+    )
+    assert record["upstreamStatus"] == 403
+
+
+def test_successful_record_has_null_upstream_status():
+    record = build_record(
+        model="m", caller="c", usage=RawUsage(1, 1), latency_ms=1, attempts=1,
+        outcome="success", param_notes=[], settings=SETTINGS, execution=EXECUTION,
+    )
+    assert record["upstreamStatus"] is None
+
+
+# 계측은 usage 필드 이름을 몰라야 한다. 그 지식은 제공자에 있다.
+def test_metering_module_does_not_name_usage_fields():
+    import pathlib
+
+    source = pathlib.Path(metering_module.__file__).read_text(encoding="utf-8")
+    assert "prompt_tokens" not in source
+    assert "completion_tokens" not in source
