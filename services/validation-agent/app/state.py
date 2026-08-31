@@ -40,6 +40,11 @@ class ValidationState(TypedDict, total=False):
     # 단계를 아예 돌지 않았으면 키가 없고, 그 "확인 못 함" 은 "0건" 과 다른
     # 상태로 응답까지 그대로 간다(GC-3).
     graph_lookup: Optional[Dict[str, Any]]
+    # prescription_api 의 신기능 금기 관문 결과 원본. prescription_verification
+    # 과 같은 이유로 별도 키다 — 다른 서비스의 판정이라 이 에이전트의 판정과
+    # 섞지 않는다. 후보 조회를 안 했으면 키가 없고, 그 "확인 못 함" 은 관문의
+    # clear(표 범위 밖) 와 다른 상태다(GC-3).
+    renal_gate: Optional[Dict[str, Any]]
 
 
 def compact_state(state: ValidationState) -> Dict[str, Any]:

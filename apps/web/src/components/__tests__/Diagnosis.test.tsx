@@ -1111,3 +1111,163 @@ describe("처방 패널 모델 배지는 prescription-api 의 llmStatus 를 읽�
     expect(badge).toHaveAttribute("data-tone", "warning");
   });
 });
+
+describe("신기능 금기 관문 표시", () => {
+  const clinicVisit = { patientId: 1, deptId: 1 };
+
+  function renderDiagnosis() {
+    return render(
+      <MedicalSelectionProvider>
+        <Diagnosis clinicVisit={clinicVisit} ensureHistory={async () => 10} employeeId={1} />
+      </MedicalSelectionProvider>
+    );
+  }
+
+  function mockJobWithRenalGate(jobId: string, prescriptionRenalGate: unknown) {
+    mockedRecommend.mockResolvedValue({ jobId, historyId: 10, status: "RUNNING" });
+    mockedGetJob.mockResolvedValue({
+      jobId,
+      historyId: 10,
+      status: "DONE",
+      result: {
+        overallStatus: "PASS",
+        summary: "이상 없음",
+        llmStatus: "real",
+        prescriptionLlmStatus: "real",
+        prescriptionVerification: {
+          status: "passed",
+          checks: [
+            { id: "code_in_candidates", target: "prescription[1]", outcome: "ok", evidence: "" },
+            { id: "name_matches_code", target: "prescription[1]", outcome: "ok", evidence: "" },
+          ],
+        },
+        prescriptionRenalGate,
+        recommendedPrescriptions: [
+          {
+            id: 1,
+            rank: 1,
+            prescription_code: "641600390",
+            prescription_name: "다이아벡스정500mg",
+            reason: "",
+            confidence_score: 0.9,
+            dose: 1,
+            time: 1,
+            days: 1,
+          },
+        ],
+      },
+    } as unknown as ValidationJobResponse);
+  }
+
+  const WARN_GATE = {
+    status: "warn",
+    renalStatus: "impaired",
+    renalEvidence: "GFR 13",
+    undeterminedReason: null,
+    items: [
+      {
+        rank: 1,
+        name: "다이아벡스정500mg",
+        prescriptionCode: "641600390",
+        outcome: "warn",
+        ingredient: "메트포르민",
+        evidence: "메트포르민: 젖산산증 위험. 특이사항에서 확인된 신기능 지표: GFR 13",
+      },
+    ],
+  };
+
+  it("warn 이면 배너와 행 배지가 함께 뜬다", async () => {
+    mockJobWithRenalGate("job-r-1", WARN_GATE);
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    expect(await screen.findByText("신배설 금기 경고")).toBeInTheDocument();
+    // 환자 축이 판정과 별도로 보여야 한다.
+    expect(screen.getByText(/신기능 저하 확인/)).toBeInTheDocument();
+    // 항목 evidence 가 표의 범위를 들고 다닌다 — 요약해서 버리면 안 된다.
+    expect(screen.getByText(/젖산산증/)).toBeInTheDocument();
+
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText("신배설 금기")).toBeInTheDocument();
+  });
+
+  it("clear 라도 신기능 미확정이면 배너가 사라지지 않는다", async () => {
+    mockJobWithRenalGate("job-r-2", {
+      status: "clear",
+      renalStatus: "undetermined",
+      renalEvidence: "",
+      undeterminedReason: "노트에 신기능 지표가 없습니다",
+      items: [
+        {
+          rank: 1,
+          name: "다이아벡스정500mg",
+          prescriptionCode: "641600390",
+          outcome: "clear",
+          ingredient: null,
+          evidence: "신배설 금기 표(11개 성분)에 없는 성분입니다 — 이 표의 범위 안에서 해당 없음.",
+        },
+      ],
+    });
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    expect(await screen.findByText("신배설 금기 표 범위 밖")).toBeInTheDocument();
+    expect(screen.getByText(/신기능 미확정/)).toBeInTheDocument();
+    expect(screen.getByText(/노트에 신기능 지표가 없습니다/)).toBeInTheDocument();
+    // clear 항목에는 행 배지를 붙이지 않는다 — 범위 한정은 배너가 들고 있다.
+    const table = await screen.findByRole("table");
+    expect(within(table).queryByText("신배설 금기")).not.toBeInTheDocument();
+  });
+
+  it("관문 결과가 없으면 '해당 없음'이 아니라 미확인으로 표시한다", async () => {
+    mockJobWithRenalGate("job-r-3", undefined);
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    expect(await screen.findByText("신기능 관문 미확인")).toBeInTheDocument();
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText("신기능 미확인")).toBeInTheDocument();
+  });
+
+  it("처방을 스왑하면 그 행의 관문 판정이 무효가 된다", async () => {
+    // 관문은 스왑되기 전 약을 대조했다. 스왑 후에도 옛 warn/clear 가 남으면
+    // 금기 약으로 바꿔 넣어도 화면이 옛 판정을 그대로 보여준다.
+    mockJobWithRenalGate("job-r-4", {
+      ...WARN_GATE,
+      status: "clear",
+      items: [{ ...WARN_GATE.items[0], outcome: "clear", evidence: "표 밖 성분입니다." }],
+    });
+    mockedSearch.mockResolvedValue({
+      items: [{ id: 99, code: "999999999", name: "다른약", dose: 1, time: 1, days: 1 }],
+      total: 1,
+      page: 0,
+      pageSize: 20,
+    });
+
+    renderDiagnosis();
+    fireEvent.click(screen.getByRole("button", { name: "AI 처방 추천" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "검증 완료" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "확인" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "검증 완료" })).not.toBeInTheDocument()
+    );
+
+    // 스왑 전: clear 라 행 배지가 없다.
+    expect(screen.queryByText("신기능 미확인")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "처방 상세 선택" })[0]);
+    const picker = await screen.findByRole("dialog", { name: "처방 상세 선택" });
+    fireEvent.click(await within(picker).findByRole("button", { name: "선택" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "처방 상세 선택" })).not.toBeInTheDocument()
+    );
+
+    // 스왑 후: 그 행의 관문 판정은 무효다.
+    expect(screen.getByText(/다른약/)).toBeInTheDocument();
+    expect(await screen.findByText("신기능 미확인")).toBeInTheDocument();
+  });
+});

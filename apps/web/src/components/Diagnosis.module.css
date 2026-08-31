@@ -136,6 +136,50 @@
   margin-top: var(--space-1);
 }
 
+.renalBanner {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-canvas);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+}
+
+.renalBanner[data-tone="danger"] {
+  border-color: var(--danger-text);
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.renalBanner[data-tone="warning"] {
+  border-color: var(--warning-text);
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.renalBannerHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.renalBannerPatient {
+  margin: 0 0 var(--space-2);
+  font-weight: 600;
+}
+
+.renalBanner ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.renalBanner li + li {
+  margin-top: var(--space-1);
+}
+
 .modalGraphNotice {
   margin: 0;
   padding: var(--space-3);

@@ -61,6 +61,23 @@ public class ValidationAgentResponse {
      */
     private String prescriptionLlmStatus;
 
+    /**
+     * prescription_api 의 신기능 금기 관문
+     * (services/prescription/renal_gate.py): {status, renalStatus, renalEvidence,
+     * items[], undeterminedReason}.
+     *
+     * <p>{@code status} 는 {@code warn} / {@code clear} / {@code unknown} 셋이고
+     * 이 셋은 서로 무너지지 않는다. {@code clear} 는 "이 표의 범위 안에서 해당
+     * 없음" 이지 "안전함" 이 아니다 — 표는 좁고 부분적이며, 그 범위를 문장으로
+     * 들고 다니는 것은 {@code items[].evidence} 다. 화면이 evidence 를 버리고
+     * outcome 만 쓰면 범위가 사라진다.
+     *
+     * <p>기본값을 두지 않는다. 관문을 돌리지 못한 것은 {@code clear} 가 아니라
+     * "확인 못 함" 이고, 그 둘이 같은 값으로 나가면 이 관문이 있는 이유가
+     * 사라진다(GC-3, 설계 §3.3).
+     */
+    private Map<String, Object> prescriptionRenalGate;
+
     @JsonProperty("shouldNotifyDoctor")
     private Boolean shouldNotifyDoctor;
 

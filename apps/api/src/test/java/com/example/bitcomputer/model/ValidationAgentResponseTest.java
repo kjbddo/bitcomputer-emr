@@ -166,4 +166,53 @@ class ValidationAgentResponseTest {
 
         assertThat(parsed.getPrescriptionLlmStatus()).isNull();
     }
+
+    /**
+     * 설계 §3.3: 신기능 금기 관문의 warn / clear / unknown 셋은 서로 무너지지
+     * 않는다. 그 구분과 항목별 evidence 가 이 DTO 를 거치며 사라지면 화면은
+     * outcome 만 남은 상태로 렌더하게 되고, {@code clear} 가 뜻하는 "이 표의
+     * 범위 안에서 해당 없음" 이 "안전함" 으로 바뀐다.
+     *
+     * <p>실측 사례를 그대로 쓴다: CKD 환자(GFR 13)에게 메트포르민이 1순위로
+     * 나간 VISIT_530472595.
+     */
+    @Test
+    void roundTripPreservesPrescriptionRenalGate() throws Exception {
+        String upstream = "{"
+                + "\"overallStatus\":\"PASS\",\"summary\":\"ok\","
+                + "\"prescriptionRenalGate\":{\"status\":\"warn\","
+                + "\"renalStatus\":\"impaired\",\"renalEvidence\":\"GFR 13\","
+                + "\"items\":[{\"rank\":1,\"name\":\"다이아벡스정500mg\","
+                + "\"prescriptionCode\":\"641600390\",\"outcome\":\"warn\","
+                + "\"ingredient\":\"메트포르민\","
+                + "\"evidence\":\"신기능 저하(GFR 13)에서 젖산산증 위험\"}],"
+                + "\"undeterminedReason\":null}"
+                + "}";
+
+        ValidationAgentResponse parsed =
+                objectMapper.readValue(upstream, ValidationAgentResponse.class);
+        String roundTripped = objectMapper.writeValueAsString(parsed);
+
+        assertThat(parsed.getPrescriptionRenalGate()).isNotNull();
+        assertThat(roundTripped).contains("\"status\":\"warn\"");
+        assertThat(roundTripped).contains("\"renalStatus\":\"impaired\"");
+        assertThat(roundTripped).contains("GFR 13");
+        // 항목별 evidence 가 관문 표의 좁은 범위를 문장으로 들고 다닌다. 이것이
+        // 사라지면 화면은 범위 없이 outcome 만 보여주게 된다.
+        assertThat(roundTripped).contains("메트포르민");
+        assertThat(roundTripped).contains("젖산산증");
+        assertThat(roundTripped).contains("\"prescriptionCode\":\"641600390\"");
+    }
+
+    /**
+     * 관문을 돌리지 못한 것은 {@code clear} 가 아니다. 기본값을 넣으면
+     * "확인 못 함" 이 "확인해 보니 해당 없음" 으로 바뀐다(GC-3, 설계 §3.3).
+     */
+    @Test
+    void missingPrescriptionRenalGateIsNullNotClear() throws Exception {
+        ValidationAgentResponse parsed = objectMapper.readValue(
+                "{\"overallStatus\":\"PASS\",\"summary\":\"s\"}", ValidationAgentResponse.class);
+
+        assertThat(parsed.getPrescriptionRenalGate()).isNull();
+    }
 }
