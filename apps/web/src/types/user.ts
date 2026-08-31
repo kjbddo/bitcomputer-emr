@@ -12,5 +12,4 @@ export interface User {
   deptId?: number | string;
   role: Role;
   username: string;
-  password?: string;
 }

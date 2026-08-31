@@ -1,7 +1,7 @@
 .actionBar {
-  padding: 16px 24px;
-  background: #2F2F2F;
-  border-bottom: 1px solid #e2e8f0;
+  padding: var(--space-4) var(--space-6);
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--border);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -10,38 +10,15 @@
 .leftSection {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .date {
-  font-size: 16px;
+  font-size: var(--font-size-lg);
   font-weight: 500;
 }
 
 .rightSection {
   display: flex;
-  gap: 8px;
-}
-
-.button {
-  border: none;
-  padding: 8px 16px;
-  border-radius: 6px;
-  font-size: 14px;
-  cursor: pointer;
-  transition: opacity 0.2s;
-}
-
-.button:hover {
-  opacity: 0.9;
-}
-
-.registerButton {
-  background: #10b981;
-  color: white;
-}
-
-.searchButton {
-  background: #3b82f6;
-  color: white;
+  gap: var(--space-2);
 }

@@ -1,6 +1,8 @@
 import { get, post, put } from "./http/client";
 import type { PaginatedResponse } from "@/types/api";
 import type { HistoryEntry } from "@/types/history";
+import type { Verification } from "@/utils/verificationNotice";
+import type { RenalGate } from "@/utils/renalGateNotice";
 
 export interface HistoryPayload {
   employeeId: number;
@@ -97,12 +99,35 @@ export interface ValidationJobResponse {
     overallStatus?: string;
     summary?: string;
     reason?: string;
+    // Java DTO 는 이 필드를 그대로 왕복시킬 뿐 값을 검증하지 않는다(null 이나
+    // "real"|"stub"|"fallback" 밖의 문자열도 그대로 저장·전달된다). 유니온 타입은
+    // "이 셋 중 하나만 온다"는 보장을 실제로는 없는데 있는 것처럼 표시한다.
+    llmStatus?: string | null;
     recommendedPrescriptions?: RecommendedPrescriptionItem[];
     candidatePrescriptions?: RecommendedPrescriptionItem[];
     checks?: Array<Record<string, unknown>>;
     suspectedIssues?: Array<Record<string, unknown>>;
     reasoningTrace?: Array<Record<string, unknown>>;
     validation?: Record<string, unknown>;
+    // validation-agent 자기 자신의 검증. checks[].target 은 항상 "response" 다 —
+    // "prescription[N]" 은 절대 만들지 않는다(services/validation-agent/app/verification.py).
+    // 처방 항목 배지는 이 필드가 아니라 아래 prescriptionVerification 을 읽어야
+    // 한다(최종 리뷰 C1).
+    verification?: Verification | null;
+    // prescription_api 자신의 항목 단위 검증. checks[].target 이 "prescription[N]"
+    // 인 유일한 출처다(services/prescription/verification.py). 위 verification
+    // 과는 다른 서비스, 다른 판정이므로 병합하지 않는다.
+    prescriptionVerification?: Verification | null;
+    // prescription_api 자신의 llmStatus. 위 llmStatus(validation-agent 가 자기
+    // 결정을 어떻게 냈는지)와는 다른 서비스, 다른 축이다 — 처방 표의 모델 출처
+    // 배지는 이 값을 읽어야 한다(F-H3). 값이 없으면 "미확인"으로 렌더한다.
+    prescriptionLlmStatus?: string | null;
+    // prescription_api 의 신기능 금기 관문(services/prescription/renal_gate.py).
+    // status(warn|clear|unknown) 는 판정 축이고 renalStatus(impaired|suspected|
+    // undetermined) 는 환자 축이다 — 둘을 합치면 "신기능 저하인데 이 약들은 표
+    // 밖" 과 "신기능을 못 읽어서 판정 불가" 가 같아 보인다. 값이 없으면
+    // "관문 미확인" 으로 렌더한다(GC-3).
+    prescriptionRenalGate?: RenalGate | null;
     [key: string]: unknown;
   } | null;
   lastError?: string | null;

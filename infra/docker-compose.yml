@@ -112,11 +112,17 @@ services:
     container_name: bit-certificate-api
     command: ["python", "-m", "uvicorn", "certificate_api:app", "--host", "0.0.0.0", "--port", "5001"]
     environment:
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      LLM_GATEWAY_BASE_URL: http://llm-gateway:8003/v1
+      LLM_GATEWAY_TIMEOUT_SECONDS: ${LLM_GATEWAY_TIMEOUT_SECONDS:-180}
+      LLM_MODEL: ${LLM_MODEL:-gpt-5.6-luna}
       LLM_PROVIDER: ${LLM_PROVIDER:-real}
+      LLM_VERIFICATION_NLI: ${LLM_VERIFICATION_NLI:-off}
+      LLM_VERIFICATION_NLI_TIMEOUT_SECONDS: ${LLM_VERIFICATION_NLI_TIMEOUT_SECONDS:-30}
     ports:
       - "5001:5001"
+    depends_on:
+      llm-gateway:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5001/health', timeout=5)\""]
       interval: 15s
@@ -129,9 +135,9 @@ services:
     container_name: bit-prescription-api
     command: ["python", "-m", "uvicorn", "prescription_api:app", "--host", "0.0.0.0", "--port", "8001"]
     environment:
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      LLM_GATEWAY_BASE_URL: http://llm-gateway:8003/v1
+      LLM_GATEWAY_TIMEOUT_SECONDS: ${LLM_GATEWAY_TIMEOUT_SECONDS:-180}
+      LLM_MODEL: ${LLM_MODEL:-gpt-5.6-luna}
       ARANGO_HOST: arangodb
       ARANGO_PORT: 8529
       ARANGO_USER: root
@@ -145,8 +151,34 @@ services:
         condition: service_healthy
       arango-init:
         condition: service_completed_successfully
+      llm-gateway:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=5)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+
+  llm-gateway:
+    build:
+      context: ../services/llm-gateway
+    container_name: bit-llm-gateway
+    environment:
+      # 자격증명은 이 서비스에만 존재한다(spec §3.1).
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_UPSTREAM_BASE_URL: ${LLM_UPSTREAM_BASE_URL:-https://api.openai.com/v1}
+      LLM_MODEL: ${LLM_MODEL:-gpt-5.6-luna}
+      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-low}
+      # 1회 시도당 타임아웃. infra/.env.example 의 LLM_GATEWAY_TIMEOUT_SECONDS
+      # 주석에 적힌 순서(게이트웨이 총 예산 < 호출자 타임아웃)를 어기지 않아야 한다.
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-45}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
+      LLM_INPUT_PRICE_PER_1M: ${LLM_INPUT_PRICE_PER_1M:-0.20}
+      LLM_OUTPUT_PRICE_PER_1M: ${LLM_OUTPUT_PRICE_PER_1M:-1.20}
+    ports:
+      - "8003:8003"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8003/health', timeout=5)\""]
       interval: 15s
       timeout: 10s
       retries: 20
@@ -156,10 +188,14 @@ services:
       context: ../services/validation-agent
     container_name: bit-validation-agent
     environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-nano}
+      LLM_GATEWAY_BASE_URL: http://llm-gateway:8003/v1
+      VALIDATION_LLM_TIMEOUT_SECONDS: ${VALIDATION_LLM_TIMEOUT_SECONDS:-180}
+      VALIDATION_JOB_BUDGET_SECONDS: ${VALIDATION_JOB_BUDGET_SECONDS:-110}
+      VALIDATION_PUBMED_MAX_QUERY_ATTEMPTS: ${VALIDATION_PUBMED_MAX_QUERY_ATTEMPTS:-4}
+      LLM_MODEL: ${LLM_MODEL:-gpt-5.6-luna}
       PRESCRIPTION_AGENT_BASE_URL: http://prescription-api:8001
       PRESCRIPTION_AGENT_PATH: /api/agent/prescription/recommend
+      PRESCRIPTION_AGENT_TIMEOUT_SECONDS: ${PRESCRIPTION_AGENT_TIMEOUT_SECONDS:-180}
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672
       RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-guest}
@@ -174,6 +210,8 @@ services:
         condition: service_healthy
       prescription-api:
         condition: service_started
+      llm-gateway:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=5)\""]
       interval: 15s
@@ -191,17 +229,35 @@ services:
       ARANGO_USERNAME: root
       ARANGO_PASSWORD: ${ARANGO_PASSWORD}
       STORAGE_DIR: /app/storage
-      EMBEDDING_DIM: 768
+      # 벡터 인덱스 차원과 반드시 같아야 한다. DenseNet121 pooled feature 가
+      # 1024 다. 이 값을 바꾸면 저장된 벡터가 전부 무효가 된다.
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
       MODEL_VERSION: ae_squid_v1
       MASK_VERSION: lung_heart_mask_v1
-      EMBEDDING_VERSION: mock_pca_v1
-      USE_TORCH_ANOMALY: "false"
+      # 비워 둔다. 값이 있으면 그것으로 고정되지만, 비어 있으면 실제로 구성된
+      # 임베딩 모델이 스스로 답한다. 예전에 여기 박혀 있던 mock_pca_v1 은
+      # DenseNet 벡터에도 그대로 기록됐다.
+      EMBEDDING_VERSION: ${EMBEDDING_VERSION:-}
+      USE_TORCH_ANOMALY: ${USE_TORCH_ANOMALY:-true}
       USE_TORCH_ROI: "false"
-      USE_TORCH_EMBEDDING: "false"
+      USE_TORCH_EMBEDDING: ${USE_TORCH_EMBEDDING:-true}
+      # 가중치는 빌드 컨텍스트(services/xray-rag) 밖에 있어 이미지에 없다.
+      # 아래 마운트로 넣어준다. 없으면 factory 가 mock 으로 fallback 하고
+      # engineStatus 가 mock 이 된다 - 조용히 real 인 척하지는 않는다.
+      # 로더가 model_dir 의 *부모* 를 AI_BackEnd 루트로 보고 거기서 config.py /
+      # model_loader.py 를 강제로 로드한다. 그래서 가중치 디렉터리만 마운트하면
+      # "AI_BackEnd/config.py not found" 로 깨진다 - 부모까지 통째로 넣는다.
+      SQUID_MODEL_DIR: /app/weights/squid_exp1_256_mask
     ports:
       - "8000:8000"
     volumes:
       - xray-storage:/app/storage
+      # SQUID 가중치와 그 로더(config.py / model_loader.py). read-only.
+      - ../services/radiology-legacy:/app/weights:ro
+      # torchvision 사전학습 가중치 캐시. 컨테이너에 egress 가 없어 런타임
+      # 다운로드가 불가능하므로 호스트 캐시를 그대로 쓴다. 없으면 임베딩이
+      # mock 으로 fallback 한다.
+      - ${TORCH_CACHE_DIR:-~/.cache/torch}:/root/.cache/torch:ro
     depends_on:
       arangodb:
         condition: service_healthy
@@ -218,6 +274,9 @@ services:
       context: ../apps/api
     container_name: bit-spring-boot
     environment:
+      # 감사 로그는 LocalDateTime(UTC-naive)으로 저장되고 변환은 클라이언트가 한다.
+      # 여기를 Asia/Seoul 로 바꾸면 화면의 시각이 조용히 +9h 로 뒤집힌다.
+      TZ: UTC
       SPRING_PROFILES_ACTIVE: docker
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306

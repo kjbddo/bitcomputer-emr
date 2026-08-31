@@ -231,12 +231,15 @@ def run_agent_direct(scenario: Dict[str, Any], disable_agent_llm: bool = False) 
     from app.models import ValidationAgentRequest
 
     request = ValidationAgentRequest(**scenario["request"])
-    openai_api_key = os.environ.pop("OPENAI_API_KEY", None) if disable_agent_llm else None
+    # 에이전트는 더 이상 OPENAI_API_KEY 를 읽지 않는다 — 게이트웨이 경유로
+    # 바뀐 뒤 실제로 폴백 경로를 타게 하려면 LLM_GATEWAY_BASE_URL 을 꺼야 한다
+    # (리뷰 finding 4: 이전 구현은 무관한 변수를 지워 이 플래그가 조용한 no-op 이었다).
+    gateway_base_url = os.environ.pop("LLM_GATEWAY_BASE_URL", None) if disable_agent_llm else None
     try:
         response = run_validation_agent(request)
     finally:
-        if disable_agent_llm and openai_api_key:
-            os.environ["OPENAI_API_KEY"] = openai_api_key
+        if disable_agent_llm and gateway_base_url:
+            os.environ["LLM_GATEWAY_BASE_URL"] = gateway_base_url
     return response.model_dump(mode="json")
 
 
@@ -614,7 +617,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--disable-agent-llm",
         action="store_true",
-        help="Temporarily disable OPENAI_API_KEY only while running the agent, so fallback tool rules can be smoke-tested without LLM calls.",
+        help="Temporarily disable LLM_GATEWAY_BASE_URL only while running the agent, so fallback tool rules can be smoke-tested without LLM calls.",
     )
     parser.add_argument(
         "--limit",

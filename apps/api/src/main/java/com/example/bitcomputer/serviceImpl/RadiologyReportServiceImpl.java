@@ -187,6 +187,9 @@ public class RadiologyReportServiceImpl implements RadiologyReportService {
         out.setHeatmapUrl(flask.getImageUrl());
         out.setPredictedDiseases(new ArrayList<>());
         out.setWarning("기존 Flask 영상판독 엔진은 이상 유무와 heatmap만 제공합니다.");
+        // engineStatus / uncertainty 는 일부러 비워 둔다. 이 엔진은 그 두 축을
+        // 계산하지 않으므로 여기서 값을 만들면 없는 근거를 지어내는 것이 된다
+        // (GC-2). null 은 웹에서 "미확인"으로 렌더된다(GC-3).
         return new AnalysisResult(out, flask.isResult());
     }
 

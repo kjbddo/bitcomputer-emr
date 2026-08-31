@@ -25,9 +25,10 @@ docker compose --env-file .env.docker up -d frontend
 | Front-End | `bit-frontend` | 3000 | Next.js UI |
 | Spring Boot | `bit-spring-boot` | 8080 | WAS / API |
 | Flask 영상판독 | `bit-flask-radiology` | 5000 | 기존 영상판독 엔진 |
-| 진단서 의사소견 | `bit-certificate-api` | 5001 | Gemini 기반 진단서 문장 생성 |
-| 처방 추천 | `bit-prescription-api` | 8001 | ArangoDB + Gemini 처방 추천 |
-| 진료 데이터 검증 | `bit-validation-agent` | 8002 | LangGraph 기반 처방 추천/검증 ReAct worker |
+| LLM 게이트웨이 | `bit-llm-gateway` | 8003 | 모든 서비스의 단일 LLM 진입점 (OpenAI API) |
+| 진단서 의사소견 | `bit-certificate-api` | 5001 | LLM 게이트웨이 경유 진단서 문장 생성 |
+| 처방 추천 | `bit-prescription-api` | 8001 | ArangoDB + LLM 게이트웨이 경유 처방 추천 |
+| 진료 데이터 검증 | `bit-validation-agent` | 8002 | 처방 추천/검증 파이프라인 worker |
 | XrayGraphRAG | `bit-xraygraph` | 8000 | X-ray 유사 사례 검색 / 상병 추론 |
 | MySQL | `bit-mysql` | 3307 | Spring 업무 DB |
 | Redis | `bit-redis` | 6379 | 캐시 |
@@ -236,12 +237,15 @@ Spring/처방 추천 서비스가 사용할 DB는 `.env.docker`와 `docker-compo
 
 ## 6. 진단서 의사소견 데이터 준비
 
-진단서 의사소견은 ArangoDB가 아니라 MySQL + Gemini 기반이다.
+진단서 의사소견은 ArangoDB가 아니라 MySQL + LLM 게이트웨이(`services/llm-gateway`) 기반이다.
 
 필요한 것:
 
 - MySQL에 환자, 진료, 상병, 처방 데이터가 있어야 한다.
-- `.env.docker`에 `GOOGLE_API_KEY` 또는 `GEMINI_API_KEY`를 넣어야 한다.
+- certificate-api의 `LLM_GATEWAY_BASE_URL`은 `infra/docker-compose.yml`에 `http://llm-gateway:8003/v1`로
+  고정되어 있어 env 파일로 바꿀 수 없다. env로 조정 가능한 값은 `LLM_MODEL`뿐이다 — 필요하면
+  `infra/.env`에 넣는다. certificate-api는 Gemini를 직접 호출하지 않고 `services/llm-gateway`를
+  경유한다.
 
 확인:
 
@@ -249,11 +253,11 @@ Spring/처방 추천 서비스가 사용할 DB는 `.env.docker`와 `docker-compo
 curl http://localhost:5001/health
 ```
 
-`google_api_key_set`이 `true`여야 실제 Gemini 호출이 가능하다.
+`llm_gateway_configured`가 `true`여야 실제 게이트웨이 호출이 가능하다.
 
 ## 7. 처방 추천 / 진료 데이터 검증 에이전트
 
-검증 에이전트는 프론트의 `AI 처방 추천` 버튼을 트리거로 동작한다. Spring Boot가 `validation_job`을 만들고 RabbitMQ request queue에 메시지를 발행하면, `validation-agent`가 메시지를 소비해 LangGraph/ReAct 기반 추천·검증 루프를 수행한 뒤 result queue로 결과를 반환한다.
+검증 에이전트는 프론트의 `AI 처방 추천` 버튼을 트리거로 동작한다. Spring Boot가 `validation_job`을 만들고 RabbitMQ request queue에 메시지를 발행하면, `validation-agent`가 메시지를 소비해 고정 순서 추천·검증 파이프라인을 수행한 뒤 result queue로 결과를 반환한다.
 
 동작 흐름:
 
@@ -261,7 +265,7 @@ curl http://localhost:5001/health
 2. Spring이 `validation_job`을 `PENDING`으로 생성
 3. Spring이 RabbitMQ `validation.prescription.request` queue에 job 메시지 발행
 4. `validation-agent`가 메시지를 소비하고 `RUNNING` 상태 이벤트 발행
-5. ValidationAgent가 `Prescription Finder`, `X-ray Result Loader`, `Disease Validator`, `Prescription Validator`, `Pubmed Loader`를 사용해 ReAct 루프 수행
+5. ValidationAgent가 `X-ray Result Loader` → `Disease Validator` → `Prescription Validator` → `Pubmed Loader` → `Prescription Finder` 순서로 고정 파이프라인 수행 (모델은 PubMed 질의 생성과 근거 요약에만 쓴다)
 6. `PASS` 또는 최대 반복 횟수 도달 시 structured JSON result 생성
 7. ValidationAgent가 RabbitMQ `validation.prescription.result` queue에 결과 발행
 8. Spring consumer가 `validation_result`에 결과 JSON을 저장하고 `validation_job`을 `DONE` 또는 `FAILED`로 갱신
@@ -331,8 +335,8 @@ curl "http://localhost:8080/api/validation-jobs/{jobId}"
 | `RABBITMQ_PASSWORD` | `guest` | RabbitMQ 비밀번호 |
 | `VALIDATION_RABBITMQ_REQUEST_QUEUE` | `validation.prescription.request` | 추천/검증 요청 queue |
 | `VALIDATION_RABBITMQ_RESULT_QUEUE` | `validation.prescription.result` | 추천/검증 결과 queue |
-| `OPENAI_API_KEY` | 없음 | ValidationAgent LLM 호출용 OpenAI API 키 |
-| `OPENAI_MODEL` | `gpt-5-nano` | ValidationAgent tool decider/PubMed 요약용 모델. 속도와 비용을 우선한 기본값 |
+| `LLM_GATEWAY_BASE_URL` | `http://llm-gateway:8003/v1` | ValidationAgent 가 게이트웨이 경유로 LLM 을 호출하는 base URL. 자격증명은 게이트웨이가 가짐 |
+| `LLM_MODEL` | `openai.gpt-5.6-luna` | ValidationAgent tool decider/PubMed 요약용 모델 |
 
 검증 에이전트는 DB를 직접 수정하지 않는다. 상병/처방 자동 변경도 하지 않고, 의료진 검토용 결과만 `validation_result`에 저장한다.
 

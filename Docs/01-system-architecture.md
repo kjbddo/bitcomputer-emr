@@ -16,7 +16,7 @@ BitComputer는 병원 진료 업무 UI, Spring Boot 업무 API, 여러 Python AI
 | Flask Radiology | `bit-flask-radiology` | 5000 | 기존 X-ray 이상 탐지 엔진 |
 | Certificate API | `bit-certificate-api` | 5001 | Gemini 기반 진단서 소견 문장 생성 |
 | Prescription API | `bit-prescription-api` | 8001 | ArangoDB + Gemini 기반 처방 추천 |
-| ValidationAgent | `bit-validation-agent` | 8002 | OpenAI + ReAct 기반 상병/처방/X-ray/PubMed 검증 |
+| ValidationAgent | `bit-validation-agent` | 8002 | 고정 파이프라인 기반 상병/처방/X-ray/PubMed 검증 (모델 호출은 PubMed 질의 생성·요약 2회) |
 
 ## 2. 컨텍스트 다이어그램
 
@@ -35,7 +35,7 @@ flowchart TB
     Flask["Flask Radiology<br/>기존 영상판독"]
     Cert["Certificate API<br/>진단서 소견 생성"]
     Rx["Prescription API<br/>처방 추천"]
-    Val["ValidationAgent<br/>검증 ReAct Agent"]
+    Val["ValidationAgent<br/>검증 파이프라인"]
   end
 
   subgraph Infra["Data / Messaging"]
@@ -106,7 +106,7 @@ flowchart LR
 | `Front-End` | Next.js UI, 대시보드, 진료실, 진단서 화면, API 클라이언트 |
 | `Back-End` | Spring Boot 업무 API, JPA 엔티티/리포지토리/서비스/컨트롤러 |
 | `GraphDB/langchain_graph_qa` | 처방 추천 API, 진단서 소견 생성 API, ArangoDB 질의 코드 |
-| `ValidationAgent` | RabbitMQ consumer + ReAct 검증 에이전트 |
+| `ValidationAgent` | RabbitMQ consumer + 고정 순서 검증 파이프라인 |
 | `XrayGraphRAG` | X-ray 그래프 RAG, ArangoDB 벡터/그래프 기반 추론 |
 | `AI_BackEnd` | 기존 Flask 기반 X-ray 이상 탐지 |
 | `Docs` | 프로젝트 구조 및 설계 문서 |

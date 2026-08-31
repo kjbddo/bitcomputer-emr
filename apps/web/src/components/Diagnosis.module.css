@@ -1,470 +1,239 @@
 .container {
-  background: #444444;
-  border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  margin-bottom: 16px;
-  border: 1px solid #e2e8f0;
-  /* 진료실 중앙 열이 세로 flex라 shrink 되면 배경만 짧아지고 표가 박스 밖으로 나감 → 줄어들지 않음 */
+  margin-bottom: var(--space-4);
   flex: 0 0 auto;
   min-height: 220px;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.header {
-  padding: 16px 20px;
-  background-color: #333336;
-  border-radius: 8px 8px 0 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.header h3 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  color: #f3f4f6;
-}
-
-.controls {
-  display: flex;
-  gap: 8px;
-}
-
-.controlButton,
-.controlButtonAI,
-.controlButtonSecondary {
-  padding: 6px 12px;
-  font-size: 13px;
-  border-radius: 6px;
-  border: none;
-  cursor: pointer;
-  transition: background-color 0.2s ease, opacity 0.2s ease;
-}
-
-.controlButton {
-  background: #2563eb;
-  color: white;
-}
-
-.controlButton:hover {
-  background: #1d4ed8;
-}
-
-.controlButtonAI {
-  background: #7c3aed;
-  color: white;
-}
-
-.controlButtonAI:hover {
-  background: #6d28d9;
-}
-
-.controlButtonSecondary {
-  background: #4b5563;
-  color: #f3f4f6;
-}
-
-.controlButtonSecondary:hover {
-  background: #374151;
-}
-
-.controlButton:disabled,
-.controlButtonAI:disabled,
-.controlButtonSecondary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.content {
-  padding: 20px;
-  overflow: visible;
 }
 
 .aiPanel {
-  margin-bottom: 12px;
-  background: #2f2f2f;
-  border: 1px solid #374151;
-  border-radius: 8px;
-  padding: 10px 12px;
+  margin-bottom: var(--space-3);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
 }
 
 .aiPanelHeader {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: var(--space-2);
 }
 
-.aiList {
-  display: grid;
-  gap: 6px;
-}
-
-.aiItem {
+.aiPanelTitle {
   display: flex;
-  gap: 8px;
   align-items: center;
-  justify-content: space-between;
-  font-size: 13px;
-  color: #e5e7eb;
+  gap: var(--space-2);
 }
 
-.aiCheckLabel {
+.llmStatusGroup {
   display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  min-width: 0;
-}
-
-.detailSelectButton {
-  flex: 0 0 auto;
-  padding: 4px 8px;
-  border: 1px solid #4b5563;
-  border-radius: 6px;
-  background: #1f2937;
-  color: #dbeafe;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.detailSelectButton:hover {
-  background: #374151;
-}
-
-
-/* 테이블 스타일 */
-.tableContainer {
-  overflow-x: auto;
-  border-radius: 8px;
-  border: 1px solid #374151;
-}
-
-.diseaseTable {
-  width: 100%;
-  border-collapse: collapse;
-  background: #2f2f2f;
   align-items: center;
+  gap: var(--space-1);
 }
 
-.tableHeader {
-  background: #1f2937;
+.llmStatusGroupLabel {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
 }
 
-.tableHeader th {
-  padding: 12px 8px;
-  text-align: center;
-  font-weight: 600;
-  font-size: 12px;
-  color: #e5e7eb;
-  border-bottom: 2px solid #374151;
-  border-right: 1px solid #374151;
-}
-
-.tableHeader th:last-child {
-  border-right: none;
-}
-
-.tableRow {
-  transition: background-color 0.2s;
-}
-
-.tableRow:hover {
-  background: #374151;
-}
-
-.tableRow:nth-child(even) {
-  background: #262626;
-}
-
-.tableRow:nth-child(even):hover {
-  background: #374151;
-}
-
-.tableRow td {
-  padding: 10px 8px;
-  font-size: 11px;
-  color: #e5e7eb;
-  text-align: center;
-  border-bottom: 1px solid #374151;
-  border-right: 1px solid #374151;
-}
-
-.tableRow td:last-child {
-  border-right: none;
-}
-
-.sequence {
-  font-weight: 600;
-  color: #60a5fa;
-  width: 60px;
-}
-
-.identifier {
-  color: #cbd5f5;
-  width: 80px;
+.verificationSummary {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  margin-left: var(--space-2);
 }
 
 .code {
-  color: #f9d14c;
+  color: var(--warning-text);
   font-weight: 500;
-  width: 110px;
-}
-
-.name {
-  text-align: left;
-  padding-left: 16px;
-  color: #f3f4f6;
-}
-
-.dose,
-.time,
-.days {
-  color: #d1d5db;
-  width: 80px;
-}
-
-.actionCell {
-  width: 80px;
 }
 
 .reasonRow td {
-  background: #202833;
-  border-right: none !important;
+  background: var(--surface-sunken);
 }
 
 .reasonCell {
   text-align: left !important;
-  padding: 10px 14px !important;
+  padding: var(--space-2) var(--space-3) !important;
 }
 
 .reasonText {
-  margin: 6px 0 0;
-  color: #d1d5db;
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
   line-height: 1.5;
   white-space: normal;
   word-break: keep-all;
 }
 
-.removeButton {
-  padding: 4px 8px;
-  font-size: 12px;
-  border-radius: 4px;
-  background: #ef4444;
-  color: white;
-  border: none;
-  cursor: pointer;
-  transition: background-color 0.2s ease, opacity 0.2s ease;
-}
-
-.removeButton:hover {
-  background: #dc2626;
-}
-
-.emptyRow {
-  text-align: center;
-  padding: 24px 16px;
-  color: #9ca3af;
-}
-
-.modalBackdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 1200;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.55);
-  padding: 16px;
-}
-
-.modalPanel {
-  width: min(560px, 100%);
-  max-height: min(90vh, 640px);
-  overflow: auto;
-  background: #2f2f2f;
-  border: 1px solid #4b5563;
-  border-radius: 12px;
-  padding: 20px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
-}
-
-.modalTitle {
-  margin: 0 0 16px;
-  font-size: 16px;
-  font-weight: 600;
-  color: #f3f4f6;
-}
-
-.modalList {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.modalCard {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-}
-
-.modalCard {
-  background: #1f2937;
-  border: 1px solid #374151;
-  border-radius: 8px;
-  padding: 12px 14px;
+  gap: var(--space-2);
 }
 
 .modalCardHead {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.modalRank {
-  font-weight: 700;
-  color: #a78bfa;
-  font-size: 14px;
-}
-
-.modalScore {
-  font-size: 12px;
-  color: #9ca3af;
 }
 
 .modalCode {
-  font-family: ui-monospace, monospace;
-  font-size: 13px;
-  color: #f9d14c;
-  margin-bottom: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  color: var(--warning-text);
+  margin-bottom: var(--space-1);
 }
 
 .modalName {
-  font-size: 14px;
-  color: #f3f4f6;
-  margin-bottom: 6px;
+  font-size: var(--font-size-base);
+  color: var(--text-primary);
 }
 
 .modalReason {
-  margin: 0 0 10px;
-  font-size: 12px;
+  margin: 0;
+  font-size: var(--font-size-sm);
   line-height: 1.45;
-  color: #d1d5db;
+  color: var(--text-secondary);
+}
+
+.modalVerification {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.modalVerificationLabel {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
 }
 
 .modalReasons {
-  margin: 10px 0;
-  padding: 10px;
-  border: 1px solid #374151;
-  border-radius: 8px;
-  background: #111827;
-  color: #d1d5db;
-  font-size: 12px;
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-canvas);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
   line-height: 1.45;
 }
 
 .modalReasons strong {
   display: block;
-  margin-bottom: 6px;
-  color: #f3f4f6;
+  margin-bottom: var(--space-2);
+  color: var(--text-primary);
 }
 
-.modalReasons ul {
-  margin: 0;
-  padding-left: 18px;
-}
-
-.modalReasons li + li {
-  margin-top: 4px;
-}
-
-.modalReferences {
-  margin: 10px 0;
-  padding: 10px;
-  border: 1px solid #365314;
-  border-radius: 8px;
-  background: #17200f;
-  color: #d9f99d;
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.modalReferences strong {
-  display: block;
-  margin-bottom: 6px;
-  color: #ecfccb;
-}
-
+.modalReasons ul,
 .modalReferences ul {
   margin: 0;
   padding-left: 18px;
 }
 
+.modalReasons li + li,
 .modalReferences li + li {
-  margin-top: 4px;
+  margin-top: var(--space-1);
 }
 
-.modalSelectBtn {
-  width: 100%;
-  padding: 8px 12px;
-  border: none;
-  border-radius: 6px;
-  background: #7c3aed;
-  color: #fff;
-  font-size: 13px;
+.renalBanner {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-canvas);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+}
+
+.renalBanner[data-tone="danger"] {
+  border-color: var(--danger-text);
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.renalBanner[data-tone="warning"] {
+  border-color: var(--warning-text);
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.renalBannerHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.renalBannerPatient {
+  margin: 0 0 var(--space-2);
   font-weight: 600;
-  cursor: pointer;
 }
 
-.modalSelectBtn:hover {
-  background: #6d28d9;
+.renalBanner ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.renalBanner li + li {
+  margin-top: var(--space-1);
+}
+
+.modalGraphNotice {
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--warning-text);
+  border-radius: var(--radius-md);
+  background: var(--warning-bg);
+  color: var(--warning-text);
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+}
+
+.modalGraphNoticeHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.modalGraphNotice ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.modalGraphNotice li + li {
+  margin-top: var(--space-1);
+}
+
+.modalReferences {
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--success-text);
+  border-radius: var(--radius-md);
+  background: var(--success-bg);
+  color: var(--success-text);
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+}
+
+.modalReferences strong {
+  display: block;
+  margin-bottom: var(--space-2);
+  color: var(--success-text);
 }
 
 .prescriptionSearchRow {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 8px;
-  margin: 10px 0 12px;
-}
-
-.prescriptionSearchInput {
-  min-width: 0;
-  padding: 8px 10px;
-  border: 1px solid #4b5563;
-  border-radius: 6px;
-  background: #111827;
-  color: #f3f4f6;
-  font-size: 13px;
-}
-
-.prescriptionSearchInput::placeholder {
-  color: #9ca3af;
-}
-
-.prescriptionSearchButton {
-  padding: 8px 12px;
-  border: none;
-  border-radius: 6px;
-  background: #7c3aed;
-  color: #fff;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.prescriptionSearchButton:hover {
-  background: #6d28d9;
-}
-
-.prescriptionSearchButton:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
+  gap: var(--space-2);
 }
 
 .prescriptionResultList {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
   max-height: 320px;
   overflow: auto;
 }
@@ -473,47 +242,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 10px;
-  border: 1px solid #374151;
-  border-radius: 8px;
-  background: #111827;
-}
-
-.prescriptionPickButton {
-  flex: 0 0 auto;
-  padding: 6px 10px;
-  border: none;
-  border-radius: 6px;
-  background: #2563eb;
-  color: #fff;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.prescriptionPickButton:hover {
-  background: #1d4ed8;
-}
-
-.prescriptionSearchMessage {
-  padding: 14px 10px;
-  text-align: center;
-  color: #d1d5db;
-  font-size: 13px;
-}
-
-.modalCloseBtn {
-  margin-top: 16px;
-  width: 100%;
-  padding: 8px;
-  border-radius: 6px;
-  border: 1px solid #4b5563;
-  background: transparent;
-  color: #e5e7eb;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.modalCloseBtn:hover {
-  background: #374151;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-canvas);
 }

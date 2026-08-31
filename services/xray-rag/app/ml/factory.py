@@ -1,7 +1,7 @@
 """ML factory. 환경변수 토글에 따라 mock 또는 torch adapter를 만든다."""
 from __future__ import annotations
 
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 from app.config import Settings
 from app.ml.base import AnomalyModel, EmbeddingModel, ROIMaskModel
@@ -20,9 +20,35 @@ class BuildResult(NamedTuple):
     fallback 한다). anomaly_is_real / embedding_is_real 은 그 "결과"를 담아,
     engineStatus 가 토글이 아니라 실제로 만들어진 모델을 근거로 판정되도록 한다.
 
-    roi_is_real 필드는 없다: 실제 ROI 어댑터(HybridGNet 등)가 아직 구현되지
-    않아 USE_TORCH_ROI 는 no-op 이고 factory 는 항상 MockROIModel 을 반환한다.
-    따라서 ROI 는 engineStatus 판정에서 제외한다.
+    roi_source 도 같은 규칙이다. 예전에는 이런 필드가 없었다 - 실 ROI 어댑터가
+    없어 USE_TORCH_ROI 가 no-op 이었고 factory 가 항상 MockROIModel 을 돌려줬기
+    때문이다. 이제 ROI 어댑터가 셋이므로(pspnet > cv > mock) 어느 것이 실제로
+    구성됐는지 문자열로 기록한다. roi_is_real 은 그 값에서 파생된다 - 두 곳에
+    따로 두면 서로 어긋날 수 있다.
+
+    **우선순위 pspnet > cv > mock 의 근거.**
+
+    1. pspnet(`app.ml.pspnet_roi_model`)만이 학습된 해부학 분할 모델이다
+       (ChestX-Det). 나머지 둘은 그것을 흉내 낸 휴리스틱이다. 대신 273MB 가중치가
+       있어야 해서 항상 쓸 수 있지는 않다.
+    2. cv(`app.ml.cv_roi_model`)는 외부 파일 없이 numpy/scipy 만으로 돌고, 영상에
+       실제로 적응한다. pspnet 을 못 올린 환경에서 고정 타원보다 낫다.
+    3. mock 은 입력과 무관한 고정 타원이다. 마지막 수단이다.
+
+    품질 순서와 가용성 순서가 정확히 반대이므로 "가장 좋은 것부터 시도하고 실패하면
+    한 칸 내려간다"가 성립한다. **내려간 사실은 감추지 않는다** - 각 단계가 WARNING
+    을 남기고 최종 결과가 roi_status 에 남는다.
+
+    다만 **engine_status 판정에는 여전히 ROI 를 넣지 않는다.** 이유는 두 가지다:
+
+    1. 검색의 기본 경로(globalErrorEmbedding)는 ROI 마스크를 전혀 쓰지 않는다.
+       SQUID 와 DenseNet 이 둘 다 실제로 올라온 엔진을 ROI 가 mock 이라는 이유로
+       "mock" 으로 표시하면, 실제로 동작 중인 real 엔진을 거짓으로 깎아내린다.
+    2. cv_roi_model 은 학습된 모델이 아니라 고전 CV 휴리스틱이다. 이것을 real 의
+       필요조건으로 승격시키면 engineStatus 가 뜻하는 바("실제 학습 모델이
+       올라왔는가")가 흐려진다.
+
+    대신 roi_status 로 따로 보고한다 - 감추지 않되, 다른 것과 섞지도 않는다.
     """
 
     anomaly: AnomalyModel
@@ -30,6 +56,8 @@ class BuildResult(NamedTuple):
     embedder: EmbeddingModel
     anomaly_is_real: bool
     embedding_is_real: bool
+    roi_source: str = "mock"
+    settings_embedding_version: Optional[str] = None
 
     @property
     def engine_status(self) -> str:
@@ -40,6 +68,52 @@ class BuildResult(NamedTuple):
         이 값이 engineStatus 의 유일한 산출 경로여야 한다.
         """
         return "real" if (self.anomaly_is_real and self.embedding_is_real) else "mock"
+
+    @property
+    def roi_is_real(self) -> bool:
+        """ROI 마스크가 입력 영상에 실제로 반응하는 분할에서 나왔는가.
+
+        roi_source 에서 파생된다 - 별도 필드로 두면 둘이 어긋날 수 있다.
+        """
+        return self.roi_source != "mock"
+
+    @property
+    def roi_status(self) -> str:
+        """어느 ROI 분할기가 실제로 구성됐는지: "pspnet" / "cv" / "mock".
+
+        engine_status 와 달리 별도로 보고된다(위 독스트링 참고). roiStats 와
+        ROI별 임베딩의 의미가 이 값에 달려 있다.
+        """
+        return self.roi_source
+
+    @property
+    def mask_version(self) -> str:
+        """저장된 ROI 마스크/임베딩이 어느 분할기에서 나왔는지.
+
+        embedding_version 과 같은 규칙이다 - 실제로 구성된 모델이 답한다.
+        """
+        return getattr(self.roi, "version", "unknown")
+
+    @property
+    def embedding_version(self) -> str:
+        """저장된 벡터가 어느 인코더에서 나왔는지.
+
+        engine_status 와 같은 규칙이다 — 토글이 아니라 실제로 구성된 모델이
+        답한다. 토글이 켜져 있어도 로드에 실패해 mock 으로 fallback 했으면
+        mock 의 버전이 기록돼야 한다.
+
+        이 값은 케이스 문서마다 저장되며(case_service), 인코더를 바꿨을 때
+        재색인이 필요한지 판단하는 유일한 단서다. 설정 기본값으로 두면 어떤
+        모델이 돌든 같은 문자열이 박혀 그 판단이 불가능해진다.
+
+        운영에서 문자열을 손으로 고정해야 하는 경우를 위해 Settings.
+        EMBEDDING_VERSION 이 설정돼 있으면 그것이 이긴다. 다만 기본값은
+        None 이어야 한다 — 기본값이 있으면 아무도 설정하지 않은 환경에서
+        그 값이 모델과 무관하게 기록된다.
+        """
+        if self.settings_embedding_version:
+            return self.settings_embedding_version
+        return getattr(self.embedder, "version", "unknown")
 
 
 def build_models(settings: Settings) -> BuildResult:
@@ -53,8 +127,27 @@ def build_models(settings: Settings) -> BuildResult:
             anomaly = m
             anomaly_is_real = True
 
+    # ROI 어댑터: pspnet > cv > mock. 각 단계는 "시도"이고, 실패하면 한 칸
+    # 내려간다. 근거는 BuildResult 독스트링 참고.
     roi: ROIMaskModel = MockROIModel()
-    # 실제 ROI(HybridGNet 등)는 향후 어댑터 추가 위치. 그때까지는 항상 mock.
+    roi_source = "mock"
+    if settings.USE_PSPNET_ROI:
+        from app.ml import pspnet_roi_model
+
+        p = pspnet_roi_model.build_pspnet_roi_model(
+            cache_dir=settings.PSPNET_CACHE_DIR,
+            allow_download=settings.PSPNET_ALLOW_DOWNLOAD,
+        )
+        if p is not None:
+            roi = p
+            roi_source = "pspnet"
+    if roi_source == "mock" and settings.USE_CV_ROI:
+        from app.ml import cv_roi_model
+
+        r = cv_roi_model.build_cv_roi_model()
+        if r is not None:
+            roi = r
+            roi_source = "cv"
 
     embedder: EmbeddingModel = MockEmbeddingModel(dim=settings.EMBEDDING_DIM)
     embedding_is_real = False
@@ -72,4 +165,6 @@ def build_models(settings: Settings) -> BuildResult:
         embedder=embedder,
         anomaly_is_real=anomaly_is_real,
         embedding_is_real=embedding_is_real,
+        roi_source=roi_source,
+        settings_embedding_version=settings.EMBEDDING_VERSION,
     )

@@ -1,0 +1,65 @@
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.headerSubtitle {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
+.headerSubtitle strong {
+  font-weight: 600;
+}
+
+.errorMessage {
+  font-size: var(--font-size-sm);
+  color: var(--danger-text);
+}
+
+.successMessage {
+  font-size: var(--font-size-sm);
+  color: var(--success-text);
+}
+
+.createForm {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--space-3);
+  align-items: end;
+}
+
+.createButton {
+  height: var(--control-height);
+}
+
+@media (max-width: 980px) {
+  .createForm {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.tableCellId,
+.tableCellName {
+  font-weight: 600;
+}
+
+.deptEmpty {
+  color: var(--text-muted);
+}
+
+.deptLoadError {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  font-size: var(--font-size-sm);
+  color: var(--danger-text);
+}

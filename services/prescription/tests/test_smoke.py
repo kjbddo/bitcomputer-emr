@@ -1,9 +1,9 @@
 """서비스가 뜨고 헬스/스키마 응답이 계약대로인지 확인한다.
 
 prescription_api 는 import 시점에 env_check.require_env(["ARANGO_PASSWORD", ...])
-를 호출하고, LLM_PROVIDER != "stub" 이면 GOOGLE_API_KEY 도 요구한다. smoke test 는
-실제 Arango/Gemini 연결 없이 앱 기동/스키마만 확인하므로, import 전에 stub 모드로
-고정한다.
+를 호출하고, LLM_PROVIDER != "stub" 이면 LLM_GATEWAY_BASE_URL 도 요구한다(Task 7,
+게이트웨이 경유로 전환). smoke test 는 실제 Arango/게이트웨이 연결 없이 앱 기동/스키마만
+확인하므로, import 전에 stub 모드로 고정한다.
 """
 import os
 

@@ -24,7 +24,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException
@@ -40,20 +40,32 @@ try:
 except ImportError:
     load_dotenv = None
 
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
-
 from llm_provider import resolve_provider, stub_prescription_response
+
+from verification import verify_prescriptions
+
+from renal_gate import evaluate_renal_gate
 
 from prescription_agent import (
     build_prescription_agent_prompt,
     parse_prescriptions_llm_response,
 )
+from ranking import (
+    NO_CANDIDATE_CODE,
+    NO_CANDIDATE_DOSAGE,
+    NO_CANDIDATE_NAME,
+    NO_CANDIDATE_REASON,
+    SLATE_SIZE,
+    build_ranked_slate,
+    describe_ranking_strategy,
+)
+from feedback_adjustment import DEFAULT_FEEDBACK_SMOOTHING
 from run_prescription_agent import (
     SYSTEM_PRESCRIPTION,
     cohort_stat_rows_to_top_rx_lines,
     fetch_cohort_prescriptions_by_diagnosis_codes,
     fetch_confidence_scores_by_diagnosis_codes,
+    fetch_special_notes_from_arango,
     fetch_top_rx_from_arango,
     format_cohort_similar_outcomes_summary,
 )
@@ -70,15 +82,42 @@ def _load_dotenv_if_present() -> None:
         return
     env_file = SCRIPT_DIR / ".env"
     if env_file.is_file():
-        # 개발 환경에서 이미 export 된 GOOGLE_API_KEY(구키)가 남아 있으면 .env 값이 무시되는 혼선이 잦다.
-        # .env 를 "로컬 단일 진실"로 취급하기 위해 override=True 로 로드한다.
+        # 개발 환경에서 이미 export 된 예전 값(예: LLM_GATEWAY_BASE_URL)이 남아 있으면
+        # .env 값이 무시되는 혼선이 잦다. .env 를 "로컬 단일 진실"로 취급하기 위해
+        # override=True 로 로드한다 — certificate_api.py 와 동일한 정책(최종 리뷰).
         load_dotenv(env_file, override=True)
 
 
 _load_dotenv_if_present()
 
-DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-DEFAULT_TEMPERATURE = float(os.environ.get("GEMINI_TEMPERATURE", "0.0"))
+
+_ZERO_WIDTH_CHARS = "​‌‍﻿"
+
+
+def _strip_zero_width(text: str) -> str:
+    """블랭크 판정 전에 폭이 0인 문자를 제거한다.
+
+    certificate_api.py 의 동일 함수와 같은 이유: U+200B(zero-width space)
+    하나만 있는 content 는 str.strip() 을 통과해 llmStatus="real" 인 "진짜"
+    처방 추천으로 새어나간다. blank 판정에만 쓰고 반환값 자체는 건드리지
+    않는다(최종 리뷰 IMPORTANT 2 — 이 가드는 Task 8 에서 certificate_api.py 에만
+    들어가고 이 파일에는 이관되지 않았다).
+    """
+    for ch in _ZERO_WIDTH_CHARS:
+        text = text.replace(ch, "")
+    return text
+
+
+def _default_llm_model() -> str:
+    """LLM_MODEL 환경변수를 매 호출 시점에 읽는다.
+
+    certificate_api.py 의 동일 함수와 같은 이유: import 시점 상수(구 DEFAULT_MODEL)와
+    호출 시점 재조회가 각각 따로 os.environ.get() 을 부르면, import 시점 값은
+    프로세스가 뜬 이후 환경변수가 바뀌어도 갱신되지 않아 /health 가 보고하는
+    default_model 이 실제로 게이트웨이에 실리는 model 과 어긋날 수 있다(최종 리뷰
+    IMPORTANT 2). 단일 함수로 합쳐 두 지점이 항상 같은 값을 보게 한다.
+    """
+    return os.environ.get("LLM_MODEL", "openai.gpt-5.6-luna")
 
 
 class PrescriptionRecommendRequest(BaseModel):
@@ -134,6 +173,27 @@ class PrescriptionRecommendResponse(BaseModel):
     cohort_rx_count: int = 0
     toolTrace: List[Dict[str, Any]] = Field(default_factory=list)
     engineStatus: str = "real"
+    # LLM 을 실제로 썼는지. engineStatus 와 달리 실행 경로에서 도출한다(spec §6.2).
+    # 기본값을 두지 않는다 — 생성 시 값을 빠뜨리면 "모델이 실제로 판단했다"는
+    # 거짓 신호를 조용히 내보내게 된다(MINOR 5).
+    llmStatus: Literal["real", "stub"]
+    # 출력이 조회 결과로 추적되는지. llmStatus 와 다른 축이다 —
+    # llmStatus 는 "모델이 돌았나", 이건 "돈 결과에 근거가 있나"다(spec §7.1).
+    verification: Optional[Dict[str, Any]] = None
+    # 추천이 이 환자의 신기능에 금기인가. verification 과 **다른 축이다** —
+    # verification 은 "조회 결과로 추적되나", 이건 "추적되는 그것이 이 환자에게
+    # 위험한가"다(설계 §1.3: 근거 있음 ≠ 옳음).
+    #
+    # 검증 체크로 넣지 않은 이유(설계 §3.3, GC-2). 검증의 status 는 추적
+    # 가능성 한 축의 집계다. 신기능 판정을 그 안에 넣으면 (a) `flagged` 가
+    # "근거가 없다"와 "임상적으로 위험하다"를 동시에 뜻하게 되어 화면이 둘을
+    # 구분할 수 없고, (b) 근거 검사로 집계하면 조회가 전부 실패한 응답도
+    # 신기능 `clear` 하나로 passed 가 나가 GC-2 가 뚫린다(candidates_from_finder·
+    # code_is_medication 이 STRUCTURAL_CHECK_IDS 로 간 것과 같은 이유), (c)
+    # STRUCTURAL_CHECK_IDS 는 validation-agent 와 apps/web 에 사본이 있어
+    # structuralCheckIds.sync.test.ts 가 고정한다 — 이 관문 하나 때문에 그
+    # 세 곳을 함께 움직일 이유가 없다. 축이 다르면 필드도 다른 것이 옳다.
+    renalGate: Optional[Dict[str, Any]] = None
 
 
 class PrescriptionFeedbackItem(BaseModel):
@@ -161,13 +221,13 @@ from env_check import require_env
 
 _required = ["ARANGO_PASSWORD"]
 if os.environ.get("LLM_PROVIDER", "real") != "stub":
-    _required.append("GOOGLE_API_KEY")
+    _required.append("LLM_GATEWAY_BASE_URL")
 require_env(_required)
 
 app = FastAPI(
     title="BitComputer Prescription Agent",
     version="0.1.0",
-    description="ArangoDB 그래프 + Gemini 기반 처방 추천 에이전트 (Spring Boot 연동용).",
+    description="ArangoDB 그래프 + LLM 게이트웨이 기반 처방 추천 에이전트 (Spring Boot 연동용).",
 )
 
 _ARANGO_HISTORY_VTX = "recommendation_histories"
@@ -196,10 +256,8 @@ def favicon() -> Response:
 def health() -> Dict[str, Any]:
     return {
         "status": "ok",
-        "google_api_key_set": bool(os.environ.get("GOOGLE_API_KEY")),
-        # 환경변수가 있어도 Google 에서 거절(API_KEY_INVALID)할 수 있음 — 유효성은 /health 로 판단 불가
-        "google_api_key_note": "non_empty env only; validity is checked on first /recommend (Gemini)",
-        "default_model": DEFAULT_MODEL,
+        "llm_gateway_configured": bool(os.environ.get("LLM_GATEWAY_BASE_URL")),
+        "default_model": _default_llm_model(),
         "arangodb_expected": (
             f"{os.environ.get('ARANGO_HOST', '127.0.0.1')}:"
             f"{os.environ.get('ARANGO_PORT', '8529')} "
@@ -279,57 +337,94 @@ def _get_arango_db():
     return connect_arango(cfg)
 
 
-def _is_openai_model(model_id: str) -> bool:
-    normalized = model_id.strip().lower()
-    return normalized.startswith("openai:") or normalized.startswith("gpt-")
+def _invoke_gateway_json(system_prompt: str, user_prompt: str, model: str) -> str:
+    """게이트웨이를 통해 JSON 응답을 받는다.
 
-
-def _openai_model_id(model_id: str) -> str:
-    return model_id.split(":", 1)[1] if model_id.lower().startswith("openai:") else model_id
-
-
-def _invoke_openai_json(
-    model_id: str,
-    temperature: float,
-    system_prompt: str,
-    user_prompt: str,
-) -> str:
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
+    자격증명은 게이트웨이가 갖는다(spec §3.1). temperature 는 보내지 않는다 —
+    luna 계약이며 게이트웨이가 어차피 제거한다(spec §5). ``model`` 은 호출자가
+    실제로 payload 에 실릴 값을 명시적으로 넘긴다 — 여기서 다시 환경변수를
+    읽으면 호출자의 trace 가 기록한 모델과 실제로 보낸 모델이 어긋날 수 있다.
+    """
+    base_url = os.environ.get("LLM_GATEWAY_BASE_URL")
+    if not base_url:
         raise HTTPException(
-            status_code=500,
-            detail="OPENAI_API_KEY 가 설정되지 않았습니다. 서버 환경변수 또는 .env 를 확인하세요.",
+            status_code=503,
+            detail="LLM_GATEWAY_BASE_URL 이 설정되지 않았습니다.",
         )
-
     payload = {
-        "model": _openai_model_id(model_id),
-        "temperature": temperature,
+        "model": model,
         "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
     }
-    timeout = float(os.environ.get("OPENAI_LLM_TIMEOUT", "180"))
+    # LLM_TIMEOUT_SECONDS 가 아니다 — 그 이름은 게이트웨이의 1회 시도당 타임아웃
+    # (services/llm-gateway/app/config.py) 이 이미 쓰고 있다. infra/.env 는 한
+    # 파일을 공유하고 이 파일은 override=True 로 로드하므로, 이름이 같으면
+    # 운영자가 "게이트웨이 타임아웃"을 의도해 값을 바꿔도 이 호출자의 총
+    # 대기시간까지 함께 바뀌어 재시도가 전부 무의미해진다(최종 리뷰 IMPORTANT).
+    timeout_raw = os.environ.get("LLM_GATEWAY_TIMEOUT_SECONDS", "180")
+    try:
+        timeout = float(timeout_raw)
+    except ValueError as exc:
+        # 최종 리뷰 IMPORTANT 2: try 밖에서 ValueError 가 그대로 터지면
+        # 트레이스백이 노출된 500 이 나간다. certificate_api.py 는 Task 8 에서
+        # 이 가드를 받았지만 이 파일은 복사 당시(같은 디렉터리, 같은 빌드
+        # 컨텍스트) 받지 못했다. 잘못된 설정값도 "실패 계약" 안에서 다뤄져야
+        # 한다(GC-2).
+        logger.exception("LLM_GATEWAY_TIMEOUT_SECONDS 파싱 실패: %r", timeout_raw)
+        raise HTTPException(
+            status_code=503,
+            detail=f"LLM_GATEWAY_TIMEOUT_SECONDS 설정이 올바르지 않습니다: {timeout_raw!r}",
+        ) from exc
     try:
         with httpx.Client(timeout=timeout) as client:
             response = client.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
+                f"{base_url.rstrip('/')}/chat/completions",
+                headers={"X-LLM-Caller": "prescription-api"},
                 json=payload,
             )
             response.raise_for_status()
-            return str(response.json()["choices"][0]["message"]["content"]).strip()
+            content = response.json()["choices"][0]["message"]["content"]
+            # 최종 리뷰 IMPORTANT 2: 200 이지만 형식이 깨진 본문(content: null/""/
+            # 비문자열)을 str() 로 뭉개서 반환하면 "None" 같은 지어낸 문자열이
+            # llmStatus="real" 인 진짜 처방 추천으로 통과한다(GC-2). certificate_api.py
+            # 는 Task 8 에서 이 가드를 받았다 — 여기서도 같은 검사를 적용한다.
+            # zero-width 문자만 있는 content 도 blank 판정 전에 걸러낸다.
+            if not isinstance(content, str) or not _strip_zero_width(content).strip():
+                raise ValueError(
+                    f"게이트웨이가 빈 본문을 돌려주었습니다: content={repr(content)[:200]}"
+                )
+            return content.strip()
     except httpx.HTTPStatusError as exc:
-        body = exc.response.text[:500] if exc.response is not None else ""
-        logger.exception("OpenAI 호출 실패: status=%s body=%s", exc.response.status_code, body)
-        raise HTTPException(
-            status_code=502,
-            detail=f"OpenAI 호출 실패: status={exc.response.status_code}",
-        ) from exc
+        # exc.response.text 는 게이트웨이가 GC-7 에 맞춰 이미 상류 응답을 걷어낸
+        # 구조화된 본문(예: {"error":{"type":"upstream_error","upstreamStatus":N,
+        # "attempts":N}})이므로 로그·detail 에 그대로 실어도 안전하다. 요청 헤더나
+        # Authorization 값은 여기서 절대 로그하지 않는다.
+        body = exc.response.text[:500]
+        logger.exception(
+            "게이트웨이 호출 실패: status=%s body=%s", exc.response.status_code, body
+        )
+        detail = f"LLM 게이트웨이 호출 실패: status={exc.response.status_code}"
+        try:
+            error_body = exc.response.json()
+        except ValueError:
+            error_body = None
+        upstream_info = error_body.get("error") if isinstance(error_body, dict) else None
+        if isinstance(upstream_info, dict) and (
+            "upstreamStatus" in upstream_info or "attempts" in upstream_info
+        ):
+            detail += (
+                f" upstreamStatus={upstream_info.get('upstreamStatus')}"
+                f" attempts={upstream_info.get('attempts')}"
+            )
+        else:
+            detail += f" body={body}"
+        raise HTTPException(status_code=502, detail=detail) from exc
     except Exception as exc:
-        logger.exception("OpenAI 호출 실패")
-        raise HTTPException(status_code=502, detail=f"OpenAI 호출 실패: {exc}") from exc
+        logger.exception("게이트웨이 호출 실패")
+        raise HTTPException(status_code=502, detail=f"LLM 게이트웨이 호출 실패: {exc}") from exc
 
 
 def _ensure_feedback_graph_collections(db: Any) -> None:
@@ -341,6 +436,43 @@ def _ensure_feedback_graph_collections(db: Any) -> None:
         db.create_collection(_ARANGO_RECOMMENDED_EDGE, edge=True)
 
 
+def _safe_verify(*, candidates: Any, items: Any) -> Dict[str, Any]:
+    """검증을 돌리되 절대 본 응답을 실패시키지 않는다(GC-4).
+
+    검증기에서 예외가 나면 skipped 로 흡수한다. 검증이 실패했는데 passed 로
+    떨어지면 검증층이 있는 이유가 사라지므로, 실패는 반드시 skipped 다.
+    """
+    try:
+        return verify_prescriptions(candidates=candidates, items=items).to_dict()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("처방 검증 실패, skipped 로 처리")
+        return {
+            "status": "skipped",
+            "checks": [],
+            "skippedReason": f"검증기 예외: {type(exc).__name__}",
+        }
+
+
+def _safe_renal_gate(*, notes: Any, items: Any) -> Dict[str, Any]:
+    """신기능 관문을 돌리되 절대 본 응답을 실패시키지 않는다(GC-4).
+
+    예외는 `unknown` 으로 흡수한다 — **`clear` 가 아니다.** 관문이 터진 것은
+    "확인해 보니 해당 없음"이 아니라 "확인하지 못함"이고, 이 둘이 같은 값으로
+    나가는 순간 이 부품이 있는 이유가 사라진다(GC-3, 설계 §3.3).
+    """
+    try:
+        return evaluate_renal_gate(notes=notes, items=items).to_dict()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("신기능 관문 실패, unknown 으로 처리")
+        return {
+            "status": "unknown",
+            "renalStatus": "undetermined",
+            "renalEvidence": "",
+            "items": [],
+            "undeterminedReason": f"관문 예외: {type(exc).__name__}",
+        }
+
+
 @app.post(
     "/api/agent/prescription/recommend",
     response_model=PrescriptionRecommendResponse,
@@ -349,17 +481,6 @@ def recommend(
     req: PrescriptionRecommendRequest,
     x_prescription_eval_trace: Optional[str] = Header(default=None),
 ) -> PrescriptionRecommendResponse:
-    requested_model = req.model or DEFAULT_MODEL
-    if (
-        resolve_provider() != "stub"
-        and not _is_openai_model(requested_model)
-        and not os.environ.get("GOOGLE_API_KEY")
-    ):
-        raise HTTPException(
-            status_code=500,
-            detail="GOOGLE_API_KEY 가 설정되지 않았습니다. 서버 환경변수 또는 .env 를 확인하세요.",
-        )
-
     effective_top_rx: Any = req.top_rx
     used_arango = False
     arango_count = 0
@@ -395,7 +516,9 @@ def recommend(
     accepted_boost = float(os.environ.get("CONFIDENCE_ACCEPTED_BOOST", "0.15"))
     rejected_penalty = float(os.environ.get("CONFIDENCE_REJECTED_PENALTY", "0.20"))
     missed_boost = float(os.environ.get("CONFIDENCE_MISSED_BOOST", "0.05"))
-    feedback_smoothing = float(os.environ.get("CONFIDENCE_FEEDBACK_SMOOTHING", "5.0"))
+    feedback_smoothing = float(
+        os.environ.get("CONFIDENCE_FEEDBACK_SMOOTHING", str(DEFAULT_FEEDBACK_SMOOTHING))
+    )
     confidence_by_code: dict[str, float] = {}
     if dx_codes:
         try:
@@ -559,12 +682,40 @@ def recommend(
     if _is_empty_top_rx(effective_top_rx):
         effective_top_rx = [{"note": "데이터 부족: top_rx 비어 있음"}]
 
+    # 순위를 여기서 확정한다 — 모델 호출 **전에**(spec §3.1). 모델은 이 표를
+    # 받아서 각 항목의 reason 만 쓴다. 순서·처방명·코드는 아래에서 이 slate 로
+    # 덮어쓰므로 모델이 무엇을 내든 응답의 순위는 바뀌지 않는다.
+    ranked_slate = build_ranked_slate(effective_top_rx, confidence_by_code)
+    ranking_strategy = describe_ranking_strategy(ranked_slate)
+    scored_count = sum(1 for c in ranked_slate if c.confidence_score is not None)
+    if ranking_strategy != "confidence":
+        # 조용히 넘어가지 않는다. "후보는 있는데 점수가 없다"(호출자 top_rx,
+        # disease_codes 없음, confidence AQL 실패)와 "후보 자체가 없다"(E78)를
+        # 구분해 남긴다. 응답 쪽 진실은 각 항목의 confidence_score=None 이다.
+        logger.warning(
+            "순위가 confidence 로 뒷받침되지 않음: strategy=%s slate=%d disease_codes=%s "
+            "— 순서는 조회 후보 순서이며 빈도 근거가 아니다",
+            ranking_strategy,
+            len(ranked_slate),
+            dx_codes,
+        )
+    trace_tool(
+        "prescription_ranking",
+        True,
+        status="success",
+        strategy=ranking_strategy,
+        slateSize=len(ranked_slate),
+        scoredCandidates=scored_count,
+        confidenceRowCount=len(confidence_by_code),
+    )
+
     user_msg = build_prescription_agent_prompt(
         patient_id=req.patient_id,
         symptoms=req.symptoms,
         history=req.history,
         top_rx=effective_top_rx,
         similar_outcomes=similar_for_prompt,
+        ranked_slate=[c.to_prompt_row() for c in ranked_slate],
         clinician_question=req.clinician_question,
         mention_links=req.mention_links,
     )
@@ -579,57 +730,39 @@ def recommend(
         },
     )
 
-    model_id = requested_model
-    temperature = (
-        req.temperature if req.temperature is not None else DEFAULT_TEMPERATURE
-    )
-
-    try:
-        if resolve_provider() == "stub":
-            raw = stub_prescription_response(effective_top_rx)
-            trace_tool("llm_generate", True, status="success", model="stub", temperature=0.0)
-        else:
-            if _is_openai_model(model_id):
-                raw = _invoke_openai_json(model_id, temperature, SYSTEM_PRESCRIPTION, user_msg)
-            else:
-                llm = ChatGoogleGenerativeAI(model=model_id, temperature=temperature)
-                resp = llm.invoke(
-                    [
-                        ("system", SYSTEM_PRESCRIPTION),
-                        ("human", user_msg),
-                    ]
-                )
-                raw = (resp.content or "").strip() if hasattr(resp, "content") else str(resp).strip()
-            trace_tool(
-                "llm_generate",
-                True,
-                status="success",
-                model=model_id,
-                temperature=temperature,
-            )
-    except ChatGoogleGenerativeAIError as exc:
-        logger.exception("Gemini 호출 실패")
-        trace_tool(
-            "llm_generate",
-            True,
-            status="failed",
-            model=model_id,
-            temperature=temperature,
-            error=str(exc),
+    # 게이트웨이에 실제로 실릴 모델. req.model 은 게이트웨이 payload 에 실리지
+    # 않는다(luna 계약 — 서비스가 하나의 고정 모델만 사용). GC-2: req.model /
+    # req.temperature 가 채워져 있는데도 조용히 버려지면 안 되므로 흔적을 남긴다.
+    # 최종 리뷰 IMPORTANT 2: os.environ.get() 을 여기서 또 부르지 않는다 —
+    # /health(_default_llm_model()) 와 서로 다른 시점에 읽으면 두 값이 어긋날
+    # 수 있다. 단일 함수로 합쳐 항상 같은 값을 보게 한다.
+    wire_model = _default_llm_model()
+    ignored_kwargs: Dict[str, Any] = {}
+    if req.model and req.model != wire_model:
+        logger.warning(
+            "req.model=%r 은(는) 무시됩니다 — 게이트웨이에는 항상 LLM_MODEL=%r 로 전송됩니다.",
+            req.model,
+            wire_model,
         )
-        msg = str(exc)
-        if "PERMISSION_DENIED" in msg or "403" in msg:
-            # 키 유출(leaked) 신고로 차단되는 케이스가 실제로 자주 발생한다.
-            # 사용자에게 "키 재발급/교체"가 필요하다는 힌트를 주기 위해 상태코드를 구분한다.
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "Gemini 권한 오류(PERMISSION_DENIED)로 호출이 차단되었습니다. "
-                    "대부분 API 키가 만료/비활성화되었거나 '유출(leaked)로 신고'되어 폐기된 경우입니다. "
-                    "새 GOOGLE_API_KEY 로 교체한 뒤 다시 시도하세요."
-                ),
-            ) from exc
-        raise HTTPException(status_code=502, detail=f"Gemini 호출 실패: {exc}") from exc
+        ignored_kwargs["ignoredRequestModel"] = req.model
+    if req.temperature is not None:
+        logger.warning(
+            "req.temperature=%r 은(는) 무시됩니다 — 게이트웨이는 temperature 를 받지 않습니다(luna 계약).",
+            req.temperature,
+        )
+        ignored_kwargs["ignoredTemperature"] = req.temperature
+
+    provider = resolve_provider()
+    if provider == "stub":
+        raw = stub_prescription_response(effective_top_rx)
+        llm_status = "stub"
+        trace_tool(
+            "llm_generate", True, status="success", model="stub", temperature=0.0, **ignored_kwargs
+        )
+    else:
+        raw = _invoke_gateway_json(SYSTEM_PRESCRIPTION, user_msg, wire_model)
+        llm_status = "real"
+        trace_tool("llm_generate", True, status="success", model=wire_model, **ignored_kwargs)
 
     try:
         data = parse_prescriptions_llm_response(raw)
@@ -650,18 +783,69 @@ def recommend(
         )
         raise HTTPException(status_code=502, detail=f"LLM JSON 파싱 실패: {exc}") from exc
 
-    items = [PrescriptionItem(**item) for item in data["prescriptions"]]
+    # 응답 항목은 **조회가 확정한 slate** 로 조립한다. 모델 출력에서 가져오는
+    # 것은 rank 별 reason 과 dosage 뿐이다(spec §3.1 "모델에게 남는 일").
+    #
+    # 이 조립이 §11.5 의 코드중복을 구조적으로 없앤다 — slate 는 처방코드로
+    # 이미 접혀 있으므로 서로 다른 두 순위가 같은 실제 코드를 가질 수 없다.
+    #
+    # confidence_score 주입 방식이 바뀌었다. 이전에는
+    # `confidence_by_code.get(code, 0.0)` 로 조회에 없는 코드에도 0.0 을 넣어
+    # "조회된 0.0"과 "폴백된 0.0"이 구분되지 않았다(M-4 로 기록된 한계). 순위가
+    # 이 값에 걸리는 지금 그것은 한계가 아니라 결함이다 — 근거 없는 항목이
+    # 근거 있는 0.0 처럼 보이면 GC-2 가 뚫린다. 조회에 실제로 있을 때만
+    # 숫자를 싣고, 없으면 None 으로 남긴다(verification 의 confidence_in_range
+    # 는 None 을 skipped 로 판정한다 — 근거 없으면 통과가 아니다).
+    model_rows = list(data["prescriptions"])
+    items: List[PrescriptionItem] = []
+    for position in range(SLATE_SIZE):
+        model_row = model_rows[position] if position < len(model_rows) else {}
+        picked = ranked_slate[position] if position < len(ranked_slate) else None
+        if picked is None:
+            # 이 순위에 올릴 조회 후보가 없다. reason 까지 조회층이 쓴다 —
+            # 모델이 지시를 무시하고 약을 제안했더라도 그 문장이 빈 순위의
+            # 설명으로 새어 나가면 안 된다(GC-3 fail-closed).
+            items.append(
+                PrescriptionItem(
+                    rank=position + 1,
+                    name=NO_CANDIDATE_NAME,
+                    prescription_code=NO_CANDIDATE_CODE,
+                    dosage=NO_CANDIDATE_DOSAGE,
+                    reason=NO_CANDIDATE_REASON,
+                    confidence_score=None,
+                )
+            )
+            continue
+        items.append(
+            PrescriptionItem(
+                rank=picked.rank,
+                name=picked.name,
+                prescription_code=picked.prescription_code,
+                dosage=str(model_row.get("dosage") or NO_CANDIDATE_DOSAGE),
+                reason=str(model_row.get("reason") or ""),
+                confidence_score=picked.confidence_score,
+            )
+        )
 
-    # confidence_by_code는 Arango co-occurrence 기반 계산 결과.
-    # LLM 출력에는 confidence_score가 없으므로 처방코드로 매칭해서 주입한다.
-    for it in items:
-        if not it.prescription_code:
-            continue
-        code = str(it.prescription_code).strip()
-        if not code or code == "미기재":
-            continue
-        if confidence_by_code:
-            it.confidence_score = confidence_by_code.get(code, 0.0)
+    # 신기능 관문(설계 §3.3). 요청 플래그로 끄지 않는다 — 안전 검사는 옵션이
+    # 아니다. 조회가 실패하면 노트가 빈 리스트가 되고, 관문은 그것을
+    # "금기 없음"이 아니라 "확인 못 함"으로 읽는다(GC-3).
+    renal_notes = fetch_special_notes_from_arango(req.patient_id)
+    trace_tool(
+        "special_notes",
+        True,
+        status="success" if renal_notes else "empty",
+        input={"patient_id": req.patient_id},
+        rowCount=len(renal_notes),
+    )
+    renal_gate = _safe_renal_gate(notes=renal_notes, items=items)
+    if renal_gate.get("status") == "warn":
+        logger.warning(
+            "신기능 관문 경고 (patient_id=%r): renalStatus=%s evidence=%s",
+            req.patient_id,
+            renal_gate.get("renalStatus"),
+            renal_gate.get("renalEvidence"),
+        )
 
     return PrescriptionRecommendResponse(
         prescriptions=items,
@@ -670,7 +854,15 @@ def recommend(
         used_cohort_rx=used_cohort,
         cohort_rx_count=cohort_count,
         toolTrace=tool_trace if eval_trace_enabled else [],
-        engineStatus=resolve_provider(),
+        # MINOR 6: 같은 요청 안에서 resolve_provider() 를 두 번 읽지 않는다 — 스레드풀에서
+        # LLM_PROVIDER(프로세스 전역)가 요청 도중 바뀌면 engineStatus 와 llmStatus 가
+        # 서로 다른 시점의 값을 가리켜 응답이 자기모순에 빠질 수 있다. 위에서 이미 읽은
+        # provider 를 그대로 재사용한다 — GC-5: engineStatus 의 관측 가능한 동작(값)은
+        # 바뀌지 않는다, resolve_provider() 를 몇 번 호출하는지만 바뀐다.
+        engineStatus=provider,
+        llmStatus=llm_status,
+        verification=_safe_verify(candidates=effective_top_rx, items=items),
+        renalGate=renal_gate,
     )
 
 

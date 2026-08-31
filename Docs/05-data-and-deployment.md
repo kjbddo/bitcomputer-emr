@@ -117,10 +117,16 @@ flowchart LR
 | `ARANGO_PASSWORD` | ArangoDB, Spring, Python AI | ArangoDB root 비밀번호 |
 | `ARANGO_DATABASE` | Spring, Prescription API | 처방 그래프 DB |
 | `XRAY_ARANGO_DATABASE` | XrayGraphRAG | X-ray 그래프 DB |
-| `GOOGLE_API_KEY` | Certificate API, Prescription API | Gemini 호출 |
-| `GEMINI_MODEL` | Certificate API, Prescription API | Gemini 모델 |
-| `OPENAI_API_KEY` | ValidationAgent | OpenAI tool decider/요약 |
-| `OPENAI_MODEL` | ValidationAgent | 기본 `gpt-5-nano` |
+| `LLM_GATEWAY_BASE_URL` | Certificate API, Prescription API, ValidationAgent | 게이트웨이 경유 LLM base URL, 기본 `http://llm-gateway:8003/v1` |
+| `LLM_MODEL` | Certificate API, Prescription API, ValidationAgent, LLM Gateway | 게이트웨이에 실릴 모델, 기본 `openai.gpt-5.6-luna` |
+| `LLM_API_KEY` | LLM Gateway | OpenAI API 키. 이 서비스에만 존재한다 |
+| `LLM_TIMEOUT_SECONDS` | LLM Gateway | 상류(OpenAI) 호출 1회 시도당 타임아웃(초), 기본 45 |
+| `LLM_GATEWAY_TIMEOUT_SECONDS` | Certificate API, Prescription API | 게이트웨이 응답을 기다리는 총 시간(초), 기본 180. `LLM_TIMEOUT_SECONDS`(게이트웨이 1회 시도당)와 이름이 다르다 |
+| `VALIDATION_LLM_TIMEOUT_SECONDS` | ValidationAgent | 게이트웨이 호출 타임아웃(초), 기본 180. RabbitMQ 컨슈머 스레드가 무기한 멈추지 않도록 명시한다 |
+| `VALIDATION_JOB_BUDGET_SECONDS` | ValidationAgent | 검증 작업 하나의 전역 예산(초), 기본 110. RabbitMQ 하트비트 주기의 두 배(=브로커가 연결을 닫는 120초)보다 작아야 한다. 초과하면 남은 단계를 건너뛰고 규칙 기반 판정으로 마감하며, 건너뛴 단계를 `reasoningTrace` 에 남긴다 |
+| `VALIDATION_PUBMED_MAX_QUERY_ATTEMPTS` | ValidationAgent | PubMed 검색 재시도 상한, 기본 4 |
+| `PRESCRIPTION_AGENT_TIMEOUT_SECONDS` | ValidationAgent | Prescription API 호출(처방 RAG 조회) 타임아웃(초), 기본 180 |
+| `GEMINI_API_KEY` | Spring | 진단서 NLI 평가(`CertificateEvaluationServiceImpl`, `/api/agent/document/evaluate`)에 쓰는 자격증명. 아직 Gemini |
 | `NEXT_PUBLIC_API_BASE_URL` | Front-End | Spring API base URL |
 | `XRAY_API_DEFAULT_VIEW` | Spring | 기본 X-ray 촬영 방향 |
 
@@ -208,40 +214,30 @@ docker logs -f bit-flask-radiology
 
 ## 9. 데이터 적재 순서
 
+절차 전문은 **[07-runbook-data-loading.md](07-runbook-data-loading.md)** 에 있다. 여기에는 의존 순서만 남긴다.
+
 ```mermaid
 flowchart TD
-  A[Docker 인프라 실행] --> B[MySQL 상병/처방 마스터 적재]
+  A[docker compose up -d] --> B[MySQL 마스터 코드]
   A --> C[ArangoDB 준비]
   C --> D[처방 추천 그래프 적재]
-  C --> E[XrayGraphRAG init_db.py]
+  C --> E[xray-rag init_db.py]
   E --> F[CheXpert seed]
-  F --> G[XrayGraphRAG init_db.py 재실행]
-  B --> H[프론트 업무 기능 사용]
+  F --> G[init_db.py 재실행]
+  B --> H[화면 사용]
   D --> H
   G --> H
 ```
 
-MySQL 마스터 적재:
+| 단계 | 위치 | 없으면 |
+|---|---|---|
+| MySQL 마스터 코드 | `apps/api/scripts/import_master_codes.py` | 상병을 고를 수 없다 |
+| 처방 추천 그래프 | `packages/graph-etl/import_to_arango.py` | AI 추천의 검증이 전부 `skipped` |
+| X-ray 그래프 | `services/xray-rag/scripts/` | 유사 사례 검색이 0건 |
 
-```powershell
-python .\Back-End\scripts\import_master_codes.py
-```
+`docker compose up` 은 데이터를 만들지 않는다. 스택이 전부 healthy 여도 DB 는 비어 있을 수 있고, 그때 화면은 에러가 아니라 빈 목록으로 조용히 실패한다.
 
-처방 그래프 적재:
-
-```powershell
-cd "C:\Users\kjbdd\OneDrive\바탕 화면\Project\BitComputer\GraphDB\data_normalize"
-python import_to_arango.py --database bitcomputer_graph --batch 1000
-```
-
-XrayGraphRAG 초기화/seed:
-
-```powershell
-cd "C:\Users\kjbdd\OneDrive\바탕 화면\Project\BitComputer\XrayGraphRAG"
-python scripts\init_db.py
-python scripts\seed_chexpert.py --archive "C:\Users\kjbdd\Downloads\archive" --split train --frontal-only --uncertainty ones --batch 100
-python scripts\init_db.py
-```
+처방 그래프의 상병코드 집합은 MySQL 마스터보다 훨씬 좁다(현재 아홉 개). 그 밖의 상병으로 추천을 돌리면 후보가 없어 검증이 `skipped` 로 떨어지므로, 화면 확인 전에 런북 §4.3 으로 실제 코드를 확인한다.
 
 ## 10. 운영상 주의점
 

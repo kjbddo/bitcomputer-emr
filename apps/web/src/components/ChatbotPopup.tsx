@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { Button, Modal } from "@/components/ui";
 import styles from "./ChatbotPopup.module.css";
 
 interface Message {
@@ -66,29 +67,12 @@ export default function ChatbotPopup({ onClose }: ChatbotPopupProps) {
   };
 
   return (
-    <div className={styles.overlay} onClick={onClose}>
-      <div className={styles.popup} onClick={(e) => e.stopPropagation()}>
-        <div className={styles.header}>
-          <span className={styles.headerTitle}>AI 챗봇</span>
-          <button className={styles.closeBtn} onClick={onClose}>✕</button>
-        </div>
-
-        <div className={styles.messages}>
-          {messages.map((msg) => (
-            <div key={msg.id} className={`${styles.message} ${styles[msg.role]}`}>
-              <div className={styles.bubble}>{msg.content}</div>
-            </div>
-          ))}
-          {isLoading && (
-            <div className={`${styles.message} ${styles.assistant}`}>
-              <div className={styles.bubble}>
-                <span className={styles.typing}>···</span>
-              </div>
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-
+    <Modal
+      open
+      onClose={onClose}
+      title="AI 챗봇"
+      size="sm"
+      footer={
         <div className={styles.inputArea}>
           <input
             className={styles.input}
@@ -99,15 +83,27 @@ export default function ChatbotPopup({ onClose }: ChatbotPopupProps) {
             onKeyDown={handleKeyDown}
             disabled={isLoading}
           />
-          <button
-            className={styles.sendBtn}
-            onClick={handleSend}
-            disabled={isLoading || !input.trim()}
-          >
+          <Button type="button" variant="secondary" size="sm" onClick={handleSend} disabled={isLoading || !input.trim()}>
             전송
-          </button>
+          </Button>
         </div>
+      }
+    >
+      <div className={styles.messages}>
+        {messages.map((msg) => (
+          <div key={msg.id} className={`${styles.message} ${styles[msg.role]}`}>
+            <div className={styles.bubble}>{msg.content}</div>
+          </div>
+        ))}
+        {isLoading && (
+          <div className={`${styles.message} ${styles.assistant}`}>
+            <div className={styles.bubble}>
+              <span className={styles.typing}>···</span>
+            </div>
+          </div>
+        )}
+        <div ref={messagesEndRef} />
       </div>
-    </div>
+    </Modal>
   );
 }

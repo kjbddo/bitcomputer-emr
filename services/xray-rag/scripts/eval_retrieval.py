@@ -32,7 +32,7 @@ import sys
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 
 def _setup_io() -> None:
@@ -61,6 +61,61 @@ def _l2_normalize(x: np.ndarray, axis: int = 1, eps: float = 1e-8) -> np.ndarray
 
 def _ks() -> List[int]:
     return [1, 3, 5, 10, 20]
+
+
+def _rank_diseases(
+    votes: Sequence[Tuple[int, Set[str], float]],
+) -> List[Tuple[str, float]]:
+    """이웃 투표를 **결정론적** 질환 순위로 바꾼다.
+
+    votes 는 (이웃 순위, 그 이웃의 라벨 집합, 그 이웃의 가중치) 목록이고, 순위는
+    0부터 시작해 가까울수록 작다.
+
+    왜 이 함수가 따로 있나
+    ---------------------
+    예전에는 호출부가 `scores = defaultdict(float)` 에 `for d in labels[j]` 로
+    쌓은 뒤 `sorted(..., key=lambda kv: kv[1], reverse=True)` 로 정렬했다.
+    파이썬의 정렬은 stable 이므로 **점수가 정확히 같은 질환들의 최종 순위는
+    dict 삽입 순서**, 즉 set 순회 순서로 결정됐고, 문자열 set 의 순회 순서는
+    `PYTHONHASHSEED` 에 따라 프로세스마다 달라진다. 그래서 같은 DB·같은
+    임베딩인데 top-1 any-match 가 146건 중 1건씩 흔들렸다(EVALUATION.md §9.4).
+
+    동점 파기 규칙 (셋을 순서대로 적용)
+    ----------------------------------
+    1. 득표 총합이 큰 질환이 앞선다. (기존 의미 그대로)
+    2. 총합이 **정확히** 같으면, **더 가까운 이웃에서 처음 지지받은** 질환이
+       앞선다.
+    3. 1·2 로도 갈리지 않으면 질환 이름의 사전순.
+
+    2번을 고른 이유. 후보는 셋이었다.
+
+    - 사전순만으로 깨기(`key=(-score, name)`)는 가장 짧지만 규칙이 **우연**이다.
+      순위가 라벨의 철자에 걸린다 — `atelectasis` 가 `edema` 를 이기는 데
+      의학적·검색적 근거가 하나도 없다.
+    - 코퍼스 빈도로 깨기는 최악이다. 이 평가의 존재 이유가 "다수 라벨 기준선을
+      넘는가" 인데, 동점을 빈도로 깨면 시스템이 그 기준선을 **공짜로** 얻어간다.
+      측정하려는 대상을 측정 도구에 집어넣는 셈이다.
+    - "동점이면 더 비슷한 케이스가 지지한 쪽" 은 검색 신호 자체에서 나온다.
+      득표 총합이 같다면 그 표를 더 가까운 이웃에게서 받은 질환이 더 나은 답이라는
+      것은 k-NN 투표의 통상적인 동점 처리이고, 라벨 철자에도 라벨 분포에도
+      의존하지 않는다.
+
+    3번은 잔여 동점(같은 이웃이 두 라벨을 동시에 지지)을 위한 것이다. 여기서는
+    검색 신호가 둘을 구분할 정보를 주지 않으므로, 임의여도 좋고 **전순서**이기만
+    하면 된다. 라벨 이름은 유일하므로 사전순이 전순서를 보장한다.
+
+    총합은 라벨별로 이웃 순위대로 누적되므로 set 순회 순서와 무관하게 비트 단위로
+    같은 값이 된다 — 부동소수 덧셈의 순서 의존성도 여기서 닫힌다.
+    """
+    total: Dict[str, float] = defaultdict(float)
+    first_rank: Dict[str, int] = {}
+    for rank, lbls, weight in votes:
+        for d in lbls:
+            total[d] += weight
+            prev = first_rank.get(d)
+            if prev is None or rank < prev:
+                first_rank[d] = rank
+    return sorted(total.items(), key=lambda kv: (-kv[1], first_rank[kv[0]], kv[0]))
 
 
 def _build_similarity(
@@ -166,16 +221,16 @@ def _evaluate(
                     ap += seen / r
             ap_sum += ap / n_rel
 
-        # weighted voting
+        # weighted voting. 동점 파기는 _rank_diseases 가 전담한다 - 여기서
+        # dict 에 쌓고 정렬하면 set 순회 순서(= PYTHONHASHSEED)가 순위에 샌다.
         top_k_idx = valid_order[:vote_top_k]
-        scores: Dict[str, float] = defaultdict(float)
-        for j in top_k_idx:
+        votes: List[Tuple[int, Set[str], float]] = []
+        for rank, j in enumerate(top_k_idx):
             s = float(sim[i, j])
             if s <= 0:
                 continue
-            for d in labels[j]:
-                scores[d] += s
-        ranking = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+            votes.append((rank, labels[j], s))
+        ranking = _rank_diseases(votes)
         pred_top1 = {ranking[0][0]} if ranking else set()
         pred_top3 = {d for d, _ in ranking[:3]}
 
@@ -211,7 +266,9 @@ def _evaluate(
                 "top1": v["top1"] / max(v["n"], 1),
                 "top3": v["top3"] / max(v["n"], 1),
             }
-            for d, v in sorted(per_disease.items(), key=lambda kv: -kv[1]["n"])
+            # n 이 같은 라벨끼리도 순서가 고정되도록 이름을 2차 키로 둔다 -
+            # 그러지 않으면 산출물 파일의 행 순서가 삽입 순서(해시 순서)를 탄다.
+            for d, v in sorted(per_disease.items(), key=lambda kv: (-kv[1]["n"], kv[0]))
         },
     }
     return metrics
@@ -343,6 +400,26 @@ def _md_report(meta: Dict[str, Any], metrics: Dict[str, Any], pop: Dict[str, Any
     return "\n".join(L)
 
 
+def _build_meta(settings, embedding_version: Optional[str], weights: Dict[str, float],
+                 view: Optional[str]) -> Dict[str, Any]:
+    """리포트 메타데이터를 조립한다.
+
+    embedding_version 은 호출자가 넘긴다 — settings.EMBEDDING_VERSION 을 여기서
+    직접 읽지 않는다. 7bf1439 이 그 설정 기본값을 없앤 이유가 "config 기본값이
+    아니라 실제로 구성된 모델(app.ml.factory.BuildResult.embedding_version)에서
+    값이 나와야 한다"였고, 이 함수가 그 값을 직접 읽으면 같은 실수가 리포트에서
+    반복된다. 호출자(main)가 `container.embedding_version` 을 넘긴다.
+    """
+    return {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "model_version": settings.MODEL_VERSION,
+        "embedding_version": embedding_version,
+        "embedding_dim": settings.EMBEDDING_DIM,
+        "similarity_weights": json.dumps(weights),
+        "view_filter": view or "(all)",
+    }
+
+
 # ---------- 메인 ----------
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -406,14 +483,7 @@ def main() -> int:
     )
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    meta = {
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "model_version": settings.MODEL_VERSION,
-        "embedding_version": settings.EMBEDDING_VERSION,
-        "embedding_dim": settings.EMBEDDING_DIM,
-        "similarity_weights": json.dumps(weights),
-        "view_filter": args.view or "(all)",
-    }
+    meta = _build_meta(settings, container.embedding_version, weights, args.view)
 
     (out_dir / "metrics.json").write_text(
         json.dumps({"meta": meta, "metrics": metrics, "population": pop}, ensure_ascii=False, indent=2),

@@ -93,7 +93,11 @@ class Settings:
     ARANGO_GRAPH_NAME: str = os.environ.get("ARANGO_GRAPH_NAME", "xray_graph")
 
     # Vector index. ArangoDB 3.12+에서 vector type 인덱스 지원.
-    EMBEDDING_DIM: int = _int(os.environ.get("EMBEDDING_DIM"), 768)
+    # 기본값 1024는 app.ml.torch_embedding_model 의 DenseNet121(ImageNet 사전학습)
+    # backbone이 만드는 pooled feature의 네이티브 차원과 맞춘 것이다(투영 없이
+    # 그대로 저장). xray_cases 컬렉션이 비어 있는 동안 이 기본값을 바꿨다 -
+    # 데이터가 쌓인 뒤 바꾸면 기존 벡터 인덱스와 차원이 어긋난다.
+    EMBEDDING_DIM: int = _int(os.environ.get("EMBEDDING_DIM"), 1024)
     VECTOR_METRIC: str = os.environ.get("VECTOR_METRIC", "cosine")
     VECTOR_NLISTS: int = _int(os.environ.get("VECTOR_NLISTS"), 100)
     VECTOR_NPROBE: int = _int(os.environ.get("VECTOR_NPROBE"), 20)
@@ -108,12 +112,38 @@ class Settings:
     # Model versioning(같은 modelVersion / maskVersion끼리만 비교하도록 필터에 사용)
     MODEL_VERSION: str = os.environ.get("MODEL_VERSION", "ae_squid_v1")
     MASK_VERSION: str = os.environ.get("MASK_VERSION", "lung_heart_mask_v1")
-    EMBEDDING_VERSION: str = os.environ.get("EMBEDDING_VERSION", "mock_pca_v1")
+    # 기본값을 두지 않는다. 값이 있으면 embeddingVersion 을 그것으로 고정하지만,
+    # 비어 있으면 실제로 구성된 임베딩 모델이 스스로 답한다
+    # (factory.BuildResult.embedding_version). 예전 기본값 "mock_pca_v1" 은
+    # DenseNet 벡터에도 그대로 박혀, 저장된 벡터의 출처를 알 수 없게 만들었다.
+    EMBEDDING_VERSION: Optional[str] = os.environ.get("EMBEDDING_VERSION") or None
 
     # ML toggles
     USE_TORCH_ANOMALY: bool = _bool(os.environ.get("USE_TORCH_ANOMALY"), False)
-    USE_TORCH_ROI: bool = _bool(os.environ.get("USE_TORCH_ROI"), False)
     USE_TORCH_EMBEDDING: bool = _bool(os.environ.get("USE_TORCH_EMBEDDING"), False)
+    # 영상 적응형 ROI 분할(app.ml.cv_roi_model). 외부 가중치가 필요 없고 numpy/scipy
+    # 만 쓰므로 기본값이 true 다 - USE_TORCH_* 와 달리 "받아와야 하는 파일"이 없다.
+    # false 로 두면 예전 고정 타원(MockROIModel)으로 돌아간다.
+    # 예전 USE_TORCH_ROI 는 읽는 곳이 없는 no-op 이었다
+    # (Docs/superpowers/specs/2026-08-26-phase-a-foundation-design.md 미결 항목 9번). 실
+    # 어댑터가 생긴 지금 그 이름을 살려두면 "torch ROI 모델이 있다"는 잘못된 신호가
+    # 되므로 지운다. 학습된 ROI 모델을 붙이는 날 별도 토글을 새로 만든다.
+    USE_CV_ROI: bool = _bool(os.environ.get("USE_CV_ROI"), True)
+    # 사전학습 해부학 분할(ChestX-Det PSPNet, app.ml.pspnet_roi_model). ROI 어댑터
+    # 우선순위는 pspnet > cv > mock 이고, 이 토글은 그 첫 번째를 "시도하라"는
+    # 뜻일 뿐이다 - 실제로 올라왔는지는 factory.BuildResult.roi_status 가 답한다.
+    # 기본값이 true 인 이유: 이것이 이 서비스의 ROI 분할기이고, 실패해도 mock 이
+    # 아니라 cv 로 내려가며 그 사실이 WARNING 과 roi_status 에 남는다.
+    USE_PSPNET_ROI: bool = _bool(os.environ.get("USE_PSPNET_ROI"), True)
+    # 가중치(273MB) 캐시 디렉터리. 비우면 torchxrayvision 기본값
+    # (~/.torchxrayvision/models_data/)을 쓴다. 컨테이너는 호스트 캐시를
+    # 마운트한 경로를 여기로 준다.
+    PSPNET_CACHE_DIR: Optional[str] = os.environ.get("PSPNET_CACHE_DIR") or None
+    # 가중치가 없을 때 런타임 다운로드를 허용할지. **기본은 false 다.** 운영
+    # 컨테이너에는 egress 가 없어서, 허용해두면 기동이 네트워크 타임아웃만큼
+    # 멈춘다. 호스트에서 한 번 받아두는 것은
+    # scripts/fetch_pspnet_weights.py 가 한다.
+    PSPNET_ALLOW_DOWNLOAD: bool = _bool(os.environ.get("PSPNET_ALLOW_DOWNLOAD"), False)
 
     # SQUID 모델 폴더. 가중치는 scripts/fetch-models.sh 로 내려받는다.
     # 주의: services/radiology-legacy/ 의 직계 자식이어야 한다. torch_anomaly_model.py 가

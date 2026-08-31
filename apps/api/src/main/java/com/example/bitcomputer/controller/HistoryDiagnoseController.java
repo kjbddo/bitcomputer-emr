@@ -1,6 +1,6 @@
 package com.example.bitcomputer.controller;
 
-import com.example.bitcomputer.annotation.AuditPatientAccess;
+import com.example.bitcomputer.annotation.Audited;
 import com.example.bitcomputer.model.HistoryDiagnoseDTO;
 import com.example.bitcomputer.service.HistoryDiagnoseService;
 import org.springframework.http.HttpStatus;
@@ -37,7 +37,7 @@ public class HistoryDiagnoseController {
         return ResponseEntity.ok(historyDiagnoseService.getDiagnosesForHistory(employeeId, historyId));
     }
 
-    @AuditPatientAccess(action = "PRESCRIPTION_CREATE")
+    @Audited(action = "PRESCRIPTION_CREATE")
     @PostMapping("/{historyId}/add_diagnose/{diagnoseId}")
     public ResponseEntity<HistoryDiagnoseDTO> addDiagnoseById(
             @PathVariable int historyId,

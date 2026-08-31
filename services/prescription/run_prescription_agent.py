@@ -45,11 +45,22 @@ except ImportError:
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 
+from feedback_adjustment import (
+    DEFAULT_FEEDBACK_SMOOTHING,
+    apply_feedback_adjustment,
+    compute_feedback_adjustment,
+)
+from medication_codes import (
+    MEDICATION_CODE_AQL_PREDICATE,
+    MEDICATION_CODE_BIND_KEY,
+    MEDICATION_CODE_REGEX,
+)
 from prescription_agent import (
     build_prescription_agent_prompt,
     load_prescription_context_file,
     parse_prescriptions_llm_response,
 )
+from ranking import build_ranked_slate
 
 SYSTEM_PRESCRIPTION = (
     "당신은 지시에 따르는 의료 데이터 분석 보조 도구입니다. "
@@ -68,12 +79,58 @@ def _load_dotenv_if_present() -> None:
         load_dotenv(env_file, override=True)
 
 
+# 후보 조회는 약제만 올린다(F-H1). 규칙은 medication_codes.py 가 소유하고
+# 여기서는 술어만 끼워 넣는다 — 조회에서 걸러지는 집합과 code_is_medication
+# 검사가 판정하는 집합이 갈라지지 않게 하기 위해서다.
+#
+# 필터가 `LIMIT` 앞에 있어야 한다. 뒤에 두거나 파이썬 후처리로 옮기면
+# `LIMIT 80` 이 수가·검사 라인 80행을 먼저 집어 오고 그중 약제 몇 건만
+# 남아, 후보가 조용히 말라붙는다.
+#
+# pm.prescription_code 를 읽지 않는다: prescription_masters 880건 전부 그
+# 필드가 null 이다(2026-08-30 실측, F-H2). 마스터의 _key 가 곧 처방코드이며
+# order_lines.처방코드_norm 과 6,809건 전부 일치하는 것을 확인했다. 조인
+# 자체는 남긴다 — canonical_name 은 880건 전부 채워져 있어 실제로 값을 준다.
+_TOP_RX_AQL = """
+    WITH visits, visit_has_order, order_lines, prescription_masters, order_refers_prescription
+    FOR v IN visits
+      FILTER v.`내원번호_norm` == @pid OR v.visit_id == @vid_key OR v._key == @vid_key
+      FOR vo IN visit_has_order
+        FILTER vo._from == v._id
+        LET ol = DOCUMENT(vo._to)
+        FILTER ol != null AND {medication_filter}
+        LET pm = FIRST(
+          FOR orp IN order_refers_prescription
+            FILTER orp._from == ol._id
+            RETURN DOCUMENT(orp._to)
+        )
+        SORT ol.`처방시퀀스_norm`
+        LIMIT @limit
+        RETURN {{
+          visit_id: v.visit_id,
+          "내원번호": v.`내원번호_norm`,
+          "처방시퀀스": ol.`처방시퀀스_norm`,
+          "처방코드": ol.`처방코드_norm`,
+          "처방명": ol.`처방명_norm`,
+          prescription_code: pm._key,
+          canonical_name: pm.canonical_name,
+          order_line_id: ol.order_line_id
+        }}
+""".format(medication_filter=MEDICATION_CODE_AQL_PREDICATE.format(
+    code="ol.`처방코드_norm`"))
+
+
 def fetch_top_rx_from_arango(patient_id: Any, *, limit: int = 80) -> list[dict[str, Any]]:
     """
     patient_id: 내원번호(숫자 문자열) 또는 visits.visit_id / _key 형태 (예: VISIT_530524451).
 
+    약제 처방만 후보로 올린다(F-H1). 약제가 0건이면 빈 리스트를 돌려주고
+    필터를 푼 재조회로 폴백하지 않는다 — 폴백하면 진찰료·검사 라인이 후보가
+    되고, code_in_candidates 가 그 코드에 ok 를 내어 없는 근거가 만들어진다.
+
     Returns:
-        order_lines + prescription_masters 요약 행 리스트 (비면 DB에 방문·처방 없음).
+        order_lines + prescription_masters 요약 행 리스트 (비면 이 방문에
+        약제 처방이 없거나 그래프에 방문 자체가 없음).
     """
     import logging
 
@@ -83,31 +140,7 @@ def fetch_top_rx_from_arango(patient_id: Any, *, limit: int = 80) -> list[dict[s
     if not raw:
         return []
     vid_key = raw if raw.upper().startswith("VISIT_") else f"VISIT_{raw}"
-    aql = """
-    WITH visits, visit_has_order, order_lines, prescription_masters, order_refers_prescription
-    FOR v IN visits
-      FILTER v.`내원번호_norm` == @pid OR v.visit_id == @vid_key OR v._key == @vid_key
-      FOR vo IN visit_has_order
-        FILTER vo._from == v._id
-        LET ol = DOCUMENT(vo._to)
-        LET pm = FIRST(
-          FOR orp IN order_refers_prescription
-            FILTER orp._from == ol._id
-            RETURN DOCUMENT(orp._to)
-        )
-        SORT ol.`처방시퀀스_norm`
-        LIMIT @limit
-        RETURN {
-          visit_id: v.visit_id,
-          "내원번호": v.`내원번호_norm`,
-          "처방시퀀스": ol.`처방시퀀스_norm`,
-          "처방코드": ol.`처방코드_norm`,
-          "처방명": ol.`처방명_norm`,
-          prescription_code: pm.prescription_code,
-          canonical_name: pm.canonical_name,
-          order_line_id: ol.order_line_id
-        }
-    """
+    aql = _TOP_RX_AQL
     try:
         from run_graph_qa import _aql_rows, connect_arango, load_arango_config
 
@@ -121,10 +154,19 @@ def fetch_top_rx_from_arango(patient_id: Any, *, limit: int = 80) -> list[dict[s
                 e,
             )
             return []
-        rows = _aql_rows(db, aql, {"pid": raw, "vid_key": vid_key, "limit": limit})
+        rows = _aql_rows(db, aql, {
+            "pid": raw,
+            "vid_key": vid_key,
+            "limit": limit,
+            MEDICATION_CODE_BIND_KEY: MEDICATION_CODE_REGEX,
+        })
         if not rows:
+            # 필터를 푼 재조회를 하지 않는다(F-H1). "약제 후보 0건" 은 정직한
+            # 결과이고, 상류(prescription_api)는 이것을 조회 성공으로 보고하지
+            # 않는다 — 후보가 없으면 검증도 근거 대조를 못 해 skipped 다(GC-2).
             _log.info(
-                "Arango top_rx 0건 (patient_id=%r, pid=%r, vid_key=%r) — 그래프에 방문·처방 없거나 내원번호 불일치",
+                "Arango top_rx 0건 (patient_id=%r, pid=%r, vid_key=%r) — "
+                "약제 후보 없음(수가·검사 라인은 후보에서 제외됨) 또는 그래프에 방문 없음",
                 patient_id,
                 raw,
                 vid_key,
@@ -135,6 +177,75 @@ def fetch_top_rx_from_arango(patient_id: Any, *, limit: int = 80) -> list[dict[s
         return []
 
 
+# 신기능 관문(설계 §3.3)이 읽을 특이사항 노트. 도달 경로는
+# patient_id -> visits(`내원번호_norm` 또는 `_key`) -> visit_has_note -> special_notes.
+#
+# `v.visit_id` 를 조건에 넣지 않는다: visits 문서에는 그 필드가 없다(2026-08-31
+# 실측 — 1,070행 전부 `_key` 와 `내원번호_norm` 둘뿐이다). _TOP_RX_AQL 은
+# 그 조건을 갖고 있지만 항상 null 이라 실질적으로 `_key` 절이 일한다.
+# 반대로 special_notes 쪽에는 `visit_id` 가 있고 그것이 visits._key 와 같다 —
+# 그래도 문자열 비교 대신 visit_has_note 간선을 탄다. 간선이 1,025행 전부에
+# 존재하고, 나중에 노트가 방문에 다르게 붙어도 간선이 진실이기 때문이다.
+_SPECIAL_NOTES_AQL = """
+    WITH visits, visit_has_note, special_notes
+    FOR v IN visits
+      FILTER v.`내원번호_norm` == @pid OR v._key == @vid_key
+      FOR e IN visit_has_note
+        FILTER e._from == v._id
+        LET n = DOCUMENT(e._to)
+        FILTER n != null
+        RETURN { note: TO_STRING(n.`특이사항_norm`) }
+"""
+# 스칼라가 아니라 객체를 RETURN 한다. `_aql_rows` 가 커서를 `[dict(x) ...]` 로
+# 접기 때문에 문자열 행은 ValueError 로 터진다 — 그리고 그 예외는 ArangoError
+# 가 아니라서 `_aql_rows` 의 except 를 통과해 이 함수의 광범위 except 까지
+# 올라가 조용히 빈 리스트가 된다. 실측에서 실제로 그렇게 됐다(2026-08-31).
+_SPECIAL_NOTE_ROW_KEY = "note"
+
+
+def fetch_special_notes_from_arango(patient_id: Any) -> list[str]:
+    """이 환자의 특이사항 노트 원문을 그대로 돌려준다.
+
+    파싱하지 않는다 — 해석은 renal_gate 가 소유한다. 여기는 도달만 한다.
+
+    **실패는 빈 리스트다. 그리고 빈 리스트는 "신기능 정상"이 아니다.** 상류의
+    renal_gate.evaluate_renal_gate 가 빈 입력을 `undetermined` 로 읽고, 표 안의
+    약에 대해 `clear` 가 아니라 `unknown` 을 낸다(GC-3 fail-closed). 이 함수가
+    예외를 삼키는 것이 안전한 이유는 그 계약 하나뿐이므로, 상류에서 빈 노트를
+    "금기 없음"으로 바꿔 읽는 변경이 들어오면 여기도 함께 다시 봐야 한다.
+    """
+    import logging
+
+    _log = logging.getLogger("run_prescription_agent")
+
+    raw = str(patient_id).strip()
+    if not raw:
+        return []
+    vid_key = raw if raw.upper().startswith("VISIT_") else f"VISIT_{raw}"
+    try:
+        from run_graph_qa import _aql_rows, connect_arango, load_arango_config
+
+        cfg = load_arango_config()
+        try:
+            db = connect_arango(cfg)
+        except SystemExit as e:
+            _log.warning("ArangoDB 연결 실패 — 특이사항 노트 조회 생략. SystemExit: %s", e)
+            return []
+        rows = _aql_rows(db, _SPECIAL_NOTES_AQL, {"pid": raw, "vid_key": vid_key})
+        notes = []
+        for row in rows or []:
+            value = row.get(_SPECIAL_NOTE_ROW_KEY) if isinstance(row, dict) else row
+            if value is not None and str(value).strip():
+                notes.append(str(value))
+        return notes
+    except Exception as exc:
+        _log.warning("Arango 특이사항 노트 조회 예외: %s", exc, exc_info=True)
+        return []
+
+
+# 상병 코호트 후보도 약제만 올린다(F-H1). 상세는 _TOP_RX_AQL 위 주석 참조.
+# 여기서도 필터는 COLLECT/LIMIT 앞에 있어야 한다 — 뒤에 두면 상위 N개 집계가
+# 진찰료·검사 라인으로 채워지고 약제가 밀려난다.
 _COHORT_AQL = """
 WITH visits, diagnoses, visit_has_diagnosis, visit_has_order, order_lines,
      prescription_masters, order_refers_prescription
@@ -150,33 +261,31 @@ LET pairs = (
     FOR vo IN visit_has_order
       FILTER vo._from == v._id
       LET ol = DOCUMENT(vo._to)
-      FILTER ol != null
+      FILTER ol != null AND {medication_filter}
       LET pm = FIRST(
         FOR orp IN order_refers_prescription
           FILTER orp._from == ol._id
           RETURN DOCUMENT(orp._to)
       )
-      LET pcode = (
-        pm != null AND pm.prescription_code != null
-        AND LENGTH(TRIM(TO_STRING(pm.prescription_code))) > 0
-      ) ? pm.prescription_code : ol.`처방코드_norm`
+      LET pcode = ol.`처방코드_norm`
       LET pname = (
         pm != null AND pm.canonical_name != null
         AND LENGTH(TRIM(TO_STRING(pm.canonical_name))) > 0
       ) ? pm.canonical_name : ol.`처방명_norm`
       FILTER pcode != null OR pname != null
-      RETURN { pc: pcode, pn: pname }
+      RETURN {{ pc: pcode, pn: pname }}
 )
 FOR p IN pairs
   COLLECT pc = p.pc, pn = p.pn WITH COUNT INTO cnt
   SORT cnt DESC
   LIMIT @limit
-  RETURN {
+  RETURN {{
     prescription_code: pc,
     canonical_name: pn,
     cohort_prescription_count: cnt
-  }
-"""
+  }}
+""".format(medication_filter=MEDICATION_CODE_AQL_PREDICATE.format(
+    code="ol.`처방코드_norm`"))
 
 
 def fetch_cohort_prescriptions_by_diagnosis_codes(
@@ -218,10 +327,18 @@ def fetch_cohort_prescriptions_by_diagnosis_codes(
                 e,
             )
             return []
-        rows = _aql_rows(db, _COHORT_AQL, {"codes": codes, "limit": int(limit)})
+        rows = _aql_rows(db, _COHORT_AQL, {
+            "codes": codes,
+            "limit": int(limit),
+            MEDICATION_CODE_BIND_KEY: MEDICATION_CODE_REGEX,
+        })
         if not rows:
+            # 필터를 푼 재조회를 하지 않는다(F-H1). E78(고지혈증)이 라이브에서
+            # 실제로 이 경우다 — 연결된 order_line 14행 전부가 수가·검사라
+            # 약제는 0건이다. 여기서 폴백하면 "AI 추천 처방" 이 진찰료가 된다.
             _log.info(
-                "상병 코호트 처방 0건 (codes=%r) — 그래프에 해당 상병·처방 경로 없음",
+                "상병 코호트 약제 처방 0건 (codes=%r) — 해당 상병에 연결된 "
+                "order_line 이 전부 수가·검사이거나 그래프에 경로 없음",
                 codes,
             )
         return list(rows) if rows else []
@@ -239,7 +356,7 @@ def fetch_confidence_scores_by_diagnosis_codes(
     accepted_boost: float = 0.15,
     rejected_penalty: float = 0.2,
     missed_boost: float = 0.05,
-    feedback_smoothing: float = 5.0,
+    feedback_smoothing: float = DEFAULT_FEEDBACK_SMOOTHING,
 ) -> list[dict[str, Any]]:
     """
     confidence_score = w_freq * S_freq + w_sim * S_similarity + feedback_adjustment
@@ -477,24 +594,29 @@ def fetch_confidence_scores_by_diagnosis_codes(
             s_sim = sim_by_code.get(code_s, 0.0)
             base_score = (w_freq * s_freq) + (w_sim * s_sim)
 
+            # fb 는 이 후보 코드로 매칭됐을 때만 값을 갖는다. history_recommended_prescription
+            # 의 prescription_code 가 이 후보 목록(order_lines 파생)에 없는 코드면 여기서
+            # 절대 매칭되지 않고 조용히 빠진다 — feedback_adjustment.py 모듈 docstring
+            # "지금 쌓인 데이터는 이 조정에 효과가 없다" 참고.
             fb = feedback_by_code.get(code_s)
-            feedback_adjustment = 0.0
-            feedback_total = 0.0
-            if fb:
-                feedback_total = float(fb.get("total") or 0.0)
-                if feedback_total > 0:
-                    accepted_rate = float(fb.get("accepted") or 0.0) / feedback_total
-                    rejected_rate = float(fb.get("rejected") or 0.0) / feedback_total
-                    missed_rate = float(fb.get("missed") or 0.0) / feedback_total
-                    raw_adj = (
-                        (accepted_boost * accepted_rate)
-                        - (rejected_penalty * rejected_rate)
-                        + (missed_boost * missed_rate)
-                    )
-                    shrink = feedback_total / (feedback_total + max(feedback_smoothing, 1e-9))
-                    feedback_adjustment = raw_adj * shrink
+            feedback_total = float(fb.get("total") or 0.0) if fb else 0.0
+            feedback_accepted = float(fb.get("accepted") or 0.0) if fb else 0.0
+            feedback_rejected = float(fb.get("rejected") or 0.0) if fb else 0.0
+            feedback_missed = float(fb.get("missed") or 0.0) if fb else 0.0
+            feedback_adjustment = compute_feedback_adjustment(
+                total=feedback_total,
+                accepted=feedback_accepted,
+                rejected=feedback_rejected,
+                missed=feedback_missed,
+                accepted_boost=accepted_boost,
+                rejected_penalty=rejected_penalty,
+                missed_boost=missed_boost,
+                feedback_smoothing=feedback_smoothing,
+            )
 
-            score_total = min(1.0, max(0.0, base_score + feedback_adjustment))
+            score_total = apply_feedback_adjustment(
+                base_score=base_score, feedback_adjustment=feedback_adjustment
+            )
             out.append(
                 {
                     "prescription_code": code_s,
@@ -663,12 +785,17 @@ def main() -> None:
             )
 
     cq = (args.query or "").strip() or None
+    # 이 CLI 는 상병코드를 받지 않으므로 confidence 조회가 없다 — spec §3.1 의
+    # "confidence 없음, 후보는 있음" 경우다. 순위를 모델에게 되돌려주지 않고
+    # 조회(여기서는 컨텍스트 JSON)가 준 후보 순서를 그대로 확정 순위로 쓴다.
+    ranked_slate = build_ranked_slate(ctx["top_rx"], {})
     user_msg = build_prescription_agent_prompt(
         patient_id=ctx["patient_id"],
         symptoms=ctx["symptoms"],
         history=ctx["history"],
         top_rx=ctx["top_rx"],
         similar_outcomes=ctx["similar_outcomes"],
+        ranked_slate=[c.to_prompt_row() for c in ranked_slate],
         clinician_question=cq,
         mention_links=ctx.get("mention_links"),
     )

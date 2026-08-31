@@ -14,6 +14,11 @@ import numpy as np
 
 
 class MockROIModel:
+    # 이 마스크가 어디서 나왔는지 케이스 문서에 남기기 위한 식별자.
+    # 실제 분할(cv_lung_heart_v1)과 같은 문자열을 쓰면 두 세대의 벡터가 섞여도
+    # 구분할 수 없다.
+    version = "mock_ellipse_mask_v1"
+
     def generate_masks(self, image: np.ndarray) -> Dict[str, np.ndarray]:
         if image.ndim != 2:
             raise ValueError(f"image must be [H,W], got {image.shape}")

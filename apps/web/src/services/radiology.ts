@@ -17,6 +17,16 @@ export interface RadiologyReportResponse {
   predictedDiseases: PredictedDisease[];
   warning: string | null;
   engineStatus?: string;
+  // xray-rag 자신이 계산한 확신도와 사유(services/xray-rag 의 Uncertainty).
+  // engineStatus 와 다른 축이다 — engineStatus 는 "실제 모델이 돌았나",
+  // 이건 "돈 결과를 얼마나 믿을 수 있나"다. 둘 다 Java DTO 가 선언하지 않아
+  // 화면에 도달하지 못하고 있었다(F-H4).
+  uncertainty?: XrayUncertainty | null;
+}
+
+export interface XrayUncertainty {
+  level?: string | null;
+  reasons?: string[] | null;
 }
 
 export interface PredictedDisease {

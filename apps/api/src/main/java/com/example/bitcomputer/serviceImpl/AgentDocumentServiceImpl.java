@@ -4,6 +4,7 @@ import com.example.bitcomputer.Repository.*;
 import com.example.bitcomputer.entity.*;
 import com.example.bitcomputer.jwt.JwtTokenProvider;
 import com.example.bitcomputer.model.CertificateAgentRequest;
+import com.example.bitcomputer.model.CertificateAgentResponse;
 import com.example.bitcomputer.model.CertificateFormDTO;
 import com.example.bitcomputer.model.CertificateHistoryDTO;
 import com.example.bitcomputer.model.GenerateCertificateResponseDTO;
@@ -25,6 +26,7 @@ import java.time.LocalTime;
 import java.time.Period;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -40,6 +42,20 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
     private final MedicalCertificateRepository medicalCertificateRepository;
     private final JwtTokenProvider jwtTokenProvider;
     private final CertificateAgentClient certificateAgentClient;
+
+    /**
+     * historyId → 그 historyId 로 가장 최근에 실행된 generateCertificate/
+     * generateTestCertificate 가 실제로 채택한 llmStatus.
+     *
+     * <p>saveCertificate 가 저장할 llmStatus 의 출처는 이 캐시이지, 저장 요청의
+     * 파라미터가 아니다 — 저장 요청은 브라우저가 보내는 값이라 위조될 수 있고,
+     * "이 소견이 모델에서 나왔는가"를 브라우저 자기 신고로 결정하면 이 필드가
+     * 존재할 이유가 사라진다(§4.1 과 같은 원칙: 요청이 아니라 실행 결과에서 판정).
+     * 텍스트를 실제로 채택하지 않은 라운드(agentTextUsed=false)는 항목을 지워
+     * 이전 라운드의 값이 새 라운드로 새지 않게 한다. saveCertificate 는 소비 후
+     * 항목을 제거해 같은 값이 여러 저장에 재사용되지 않게 한다.
+     */
+    private final Map<Integer, String> lastAgentLlmStatusByHistoryId = new ConcurrentHashMap<>();
 
     @Value("${medical.certificate.storage-path:certificates}")
     private String certificateStoragePath;
@@ -306,12 +322,24 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
                 .build();
 
         // Python 진단서 에이전트 호출 → 실패 시 기본 템플릿으로 폴백
-        String medicalCertificate = certificateAgentClient.generate(agentRequest)
-                .map(r -> r.getMedicalCertificate())
+        Optional<CertificateAgentResponse> agentResponse = certificateAgentClient.generate(agentRequest);
+        String agentText = agentResponse
+                .map(CertificateAgentResponse::getMedicalCertificate)
                 .filter(s -> s != null && !s.isBlank())
-                .orElseGet(() -> buildDefaultCertificateTemplate(agentRequest));
+                .orElse(null);
+        boolean agentTextUsed = agentText != null;
+        String medicalCertificate = agentTextUsed
+                ? agentText
+                : buildDefaultCertificateTemplate(agentRequest);
+        String llmStatus = resolveCertificateLlmStatus(
+                agentResponse.map(CertificateAgentResponse::getLlmStatus).orElse(null),
+                agentTextUsed);
+        Map<String, Object> verification = agentTextUsed
+                ? agentResponse.map(CertificateAgentResponse::getVerification).orElse(null)
+                : null;
+        rememberLlmStatusForSave(historyId, agentTextUsed, llmStatus);
 
-        return buildGenerateResponse(username, medicalCertificate);
+        return buildGenerateResponse(username, medicalCertificate, llmStatus, verification);
     }
 
     @Override
@@ -356,12 +384,38 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
                         .build()))
                 .build();
 
-        String medicalCertificate = certificateAgentClient.generate(agentRequest)
-                .map(r -> r.getMedicalCertificate())
+        Optional<CertificateAgentResponse> agentResponse = certificateAgentClient.generate(agentRequest);
+        String agentText = agentResponse
+                .map(CertificateAgentResponse::getMedicalCertificate)
                 .filter(s -> s != null && !s.isBlank())
-                .orElseGet(() -> buildDefaultCertificateTemplate(agentRequest));
+                .orElse(null);
+        boolean agentTextUsed = agentText != null;
+        String medicalCertificate = agentTextUsed
+                ? agentText
+                : buildDefaultCertificateTemplate(agentRequest);
+        String llmStatus = resolveCertificateLlmStatus(
+                agentResponse.map(CertificateAgentResponse::getLlmStatus).orElse(null),
+                agentTextUsed);
+        Map<String, Object> verification = agentTextUsed
+                ? agentResponse.map(CertificateAgentResponse::getVerification).orElse(null)
+                : null;
+        rememberLlmStatusForSave(agentRequest.getHistoryId(), agentTextUsed, llmStatus);
 
-        return buildGenerateResponse(username, medicalCertificate);
+        return buildGenerateResponse(username, medicalCertificate, llmStatus, verification);
+    }
+
+    /**
+     * generateCertificate/generateTestCertificate 가 채택한 llmStatus 를 이후의
+     * saveCertificate 호출이 소비할 수 있도록 historyId 로 남긴다. 실제로 에이전트
+     * 문장을 채택하지 않은 라운드는 이전 값이 새 저장으로 새지 않도록 항목을 지운다.
+     */
+    private void rememberLlmStatusForSave(Integer historyId, boolean agentTextUsed, String llmStatus) {
+        if (historyId == null) return;
+        if (agentTextUsed) {
+            lastAgentLlmStatusByHistoryId.put(historyId, llmStatus);
+        } else {
+            lastAgentLlmStatusByHistoryId.remove(historyId);
+        }
     }
 
     @Override
@@ -379,10 +433,18 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
             pdfFilePath = savePdfFile(historyId, pdfFile);
         }
 
+        // llmStatus 는 저장 요청 파라미터가 아니라 같은 historyId 로 직전에 실행된
+        // generate 호출이 백엔드에 남긴 값에서 가져온다(agentUsed 는 브라우저가 보내는
+        // 값이라 위조될 수 있다). agentUsed=false 이거나 캐시에 대응하는 값이 없으면
+        // (예: 서버 재기동, generate 를 거치지 않은 저장 시도) null 이다 — "검증 안 됨"
+        // 을 "real" 로 기본값 처리하지 않는다.
+        String llmStatus = agentUsed ? lastAgentLlmStatusByHistoryId.remove(historyId) : null;
+
         MedicalCertificateRecord record = new MedicalCertificateRecord();
         record.setHistoryId(historyId);
         record.setPdfFilePath(pdfFilePath);
         record.setAgentUsed(agentUsed);
+        record.setLlmStatus(llmStatus);
         record.setOriginalMedicalCertificate(originalMedicalCertificate != null ? originalMedicalCertificate : "");
         record.setSavedMedicalCertificate(savedMedicalCertificate != null ? savedMedicalCertificate : "");
         record.setFeedbackType(feedbackType != null ? feedbackType : "NONE");
@@ -439,7 +501,32 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
         return purpose == null ? "" : purpose.trim();
     }
 
-    private GenerateCertificateResponseDTO buildGenerateResponse(String username, String medicalCertificate) {
+    /** {@link #resolveCertificateLlmStatus} 가 상류 값을 그대로 통과시켜도 되는 계약값(GC-2). */
+    private static final Set<String> KNOWN_LLM_STATUS_VALUES = Set.of("real", "stub", "fallback");
+
+    /**
+     * 진단서 소견의 출처를 실행 경로에서 판정한다(GC-3).
+     *
+     * @param upstreamStatus 파이썬 certificate_api 가 보고한 값
+     * @param agentTextUsed  실제로 에이전트 문장을 썼는지. false 면 기본 템플릿이다.
+     */
+    static String resolveCertificateLlmStatus(String upstreamStatus, boolean agentTextUsed) {
+        if (!agentTextUsed) return "fallback";
+        if (upstreamStatus == null || upstreamStatus.isBlank()) return "fallback";
+        if (!KNOWN_LLM_STATUS_VALUES.contains(upstreamStatus)) {
+            // 오늘의 웹 소비자는 "real" 과 정확히 일치하는지만 보므로 계약 밖 값도
+            // fail-closed 로 안전하게 처리되지만, 조용히 넘기면 상류 계약 위반이
+            // 아무 흔적 없이 지나간다(GC-2).
+            log.warn("certificate_api 가 계약 밖 llmStatus 값을 보고했습니다: {}", upstreamStatus);
+        }
+        return upstreamStatus;
+    }
+
+    private GenerateCertificateResponseDTO buildGenerateResponse(
+            String username,
+            String medicalCertificate,
+            String llmStatus,
+            Map<String, Object> verification) {
         Employee employee = employeeRepository.findByUsername(username);
         Role role = employee != null ? employee.getRole() : Role.DEFAULT;
         String accessToken = jwtTokenProvider.generateAccessToken(username, role);
@@ -450,6 +537,8 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
         response.setAccessToken(accessToken);
         response.setRefreshToken(refreshToken);
         response.setMedicalCertificate(medicalCertificate);
+        response.setLlmStatus(llmStatus);
+        response.setVerification(verification);
         return response;
     }
 

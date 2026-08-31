@@ -10,7 +10,7 @@ BitComputer의 AI 기능은 하나의 모델에 몰려 있지 않고, 기능별 
 | `AI_BackEnd` | Flask, PyTorch | 기존 X-ray 이상 탐지 | 없음 |
 | `certificate-api` | FastAPI, LangChain | 진단서 의사소견 생성 | Gemini |
 | `prescription-api` | FastAPI, ArangoDB, LangChain | 그래프 기반 처방 추천 | Gemini |
-| `validation-agent` | FastAPI, RabbitMQ, ReAct loop | 상병/처방/X-ray/PubMed 검증 및 추천 후보 조합 | OpenAI |
+| `validation-agent` | FastAPI, RabbitMQ, 고정 파이프라인 + 모델 호출 2회 | 상병/처방/X-ray/PubMed 검증 및 추천 후보 조합 | OpenAI |
 
 ## 2. XrayGraphRAG
 
@@ -94,6 +94,111 @@ flowchart TD
 
 추천 결과에 대해 프론트에서 `accepted`, `rejected`, `missed` 피드백을 보낼 수 있다. Spring은 MySQL에 저장하고, Prescription API는 ArangoDB 피드백 그래프에 반영한다.
 
+### 4.3 호출 주체 (2026-08-30 결정)
+
+`POST /api/agent/prescription/recommend` 를 호출하는 주체는 **validation-agent 하나뿐이다**
+(`services/validation-agent/app/tools.py` 의 `prescription_finder`).
+
+Spring 에도 같은 엔드포인트를 부르는 동기 경로(`AgentServiceImpl.callAgentAndMap` →
+`PrescriptionAgentClient.recommend`)가 있었으나, 웹이 실제로 쓰는 경로가
+`recommendPrescription` → RabbitMQ validation job → `ValidationAgentResponse` 로 옮겨 간 뒤로
+호출자가 하나도 남지 않은 죽은 코드였다. 되살리는 대신 **삭제**했다.
+
+- 근거: 동기 경로를 되살리면 검증 루프를 거치지 않는 두 번째 추천 경로가 생겨
+  "AI 추천은 검증 루프를 반드시 거친다"는 현재 설계와 충돌한다. Python → Python 직통
+  호출이 한 홉 더 짧기도 하다.
+- 같이 삭제된 것: `PrescriptionAgentRequest`, `PrescriptionAgentResponse`,
+  `PrescriptionRecommendResponseDTO`, `RecommendedPrescriptionItemDTO`,
+  `AgentServiceImpl` 의 프롬프트 조립 헬퍼(`buildAgentRequest`, `buildTopRx`,
+  `buildHistoryText`, `applyExampleContextIfRequested`, `findDiagnoseMaster` 등),
+  `ai.prescription-agent.path` / `.fetch-top-rx-from-arango` / `.arango-top-rx-limit` /
+  `.fetch-cohort-rx-from-arango` / `.arango-cohort-rx-limit` / `.example-context-path` 설정.
+- 같이 삭제된 테스트: `PrescriptionAgentResponseTest`(대상 DTO 가 사라졌다),
+  `PythonProvenanceFieldsSurviveJavaDtoTest` 의 `prescription_api.py` 경계 한 쌍.
+  그 경계의 출처·검증 신호는 이제 `ValidationAgentResponse` 의
+  `prescriptionLlmStatus` / `prescriptionVerification` 로 건너오므로 같은 목록의 첫 경계가 덮는다.
+- 남긴 것: `PrescriptionAgentClient.saveFeedbackToGraph` 와 `ai.prescription-agent.base-url` /
+  `.feedback-path` — 피드백 적재는 여전히 Spring 이 담당한다.
+- 부수 효과: `PrescriptionRecommendRequestDTO` 의 `use_example_context` / `arango_patient_id` 는
+  이제 읽는 코드가 없다. 필드는 요청 호환성을 위해 남겼지만 **무시된다**.
+
+### 4.4 그래프 조회 결과 노출 (F-M6)
+
+`used_arango_top_rx` / `arango_top_rx_count` / `used_cohort_rx` / `cohort_rx_count` 는
+예전에는 Spring 로그 한 줄로만 남고 사라졌다. 그래프가 빈손이면 추천은 모델의 일반지식에만
+기대게 되는데, 화면에서는 그 차이가 보이지 않았다. E78(고지혈증)은 PR #9 의 약제 코드 필터
+이후 실제로 약제 후보가 0건이라 가정이 아니라 실재하는 상태다.
+
+```
+prescription_api /recommend   used_arango_top_rx, arango_top_rx_count, ...
+  → prescription_finder       graphLookup {status, usedArangoTopRx, arangoTopRxCount,
+                                           usedCohortRx, cohortRxCount, foundNothing, evidence[]}
+  → run_validation_agent      validation.graphLookup + checks[] 의 GRAPH_LOOKUP 한 줄
+  → RabbitMQ result           ValidationJob.result (Map 그대로 통과, Java DTO 변경 없음)
+  → Diagnosis.tsx             검증 모달의 그래프 배지 + 근거 문장
+```
+
+**세 상태를 구분한다** (설계 문서 §3.2, GC-3 fail-closed). "확인함·0건", "확인 못 함",
+"근거 있음"은 셋 다 다르다.
+
+| 상태 | `graphLookup` | `checks` | 화면 |
+|---|---|---|---|
+| 근거 있음 | `status=LOADED`, `foundNothing=false` | 없음 | 표시 없음 |
+| 확인함·0건 | `status=LOADED`, `foundNothing=true` | `GRAPH_LOOKUP` / `NO_DATA` | "그래프 근거 0건" |
+| 조회 실패 | `status=FAILED`, `foundNothing=false` | `GRAPH_LOOKUP` / `UNKNOWN` | "그래프 근거 미확인" |
+| 단계 미실행 | `null` | 없음 | "그래프 근거 미확인" |
+
+`foundNothing` 은 **조회에 성공한 경우에만** 의미가 있다. 조회 실패나 예산 초과로 5단계를
+건너뛴 경우를 0건으로 접으면 모르는 것을 아는 것처럼 말하게 된다.
+
+- 회귀 테스트: `services/validation-agent/tests/test_graph_lookup_visibility.py`,
+  `apps/web/src/utils/__tests__/graphLookupNotice.test.ts`
+
+### 4.5 신기능 금기 관문 배선
+
+`services/prescription/renal_gate.py` 가 내는 판정을 화면까지 잇는다. 관문 자체는 PR #14 가
+만들었고, 여기서는 그 결과가 Java·웹까지 살아서 가는 경로와 표시 규칙만 정한다.
+
+```
+prescription_api /recommend   renalGate {status, renalStatus, renalEvidence,
+                                         items[], undeterminedReason}
+  → prescription_finder       recommendationRenalGate (원본 그대로, 요약하지 않음)
+  → run_validation_agent      최상위 prescriptionRenalGate
+  → ValidationAgentResponse   prescriptionRenalGate (Java DTO)
+  → Diagnosis.tsx             추천 목록 위 배너 + 행별 배지
+```
+
+`prescriptionVerification` / `prescriptionLlmStatus` 와 정확히 같은 자리, 같은 원칙이다 —
+prescription_api 자신의 판정이므로 validation-agent 자신의 판정(`verification`, `llmStatus`)과
+병합하지 않는다.
+
+**축이 둘이고, 합치면 이 관문이 무의미해진다.**
+
+| 축 | 값 | 뜻 |
+|---|---|---|
+| `renalStatus` | `impaired` / `suspected` / `undetermined` | 환자 상태. 자유텍스트 노트 파싱 결과 |
+| `status`, `items[].outcome` | `warn` / `clear` / `unknown` | 판정. 그 약이 신배설 금기 표 안에 있는가 |
+
+노트 파싱 실패는 item outcome 이 아니라 **`renalStatus="undetermined"`** 로 나타난다. 그래서
+`renalStatus=undetermined` 인데 항목이 전부 `clear` 인 조합이 실재하고, 그때의 `clear` 는
+"금기 없음"을 뜻하지 않는다. 화면이 `renalStatus` 를 빼고 outcome 만 렌더하면 정확히 그
+오독이 생긴다.
+
+- `clear` 를 환자 근거로 내는 경로는 파이썬에 없다. 자유텍스트가 "신장 정상"이라고 말해
+  주지 않기 때문이다. **완전히 깨끗한 상태가 없으므로** 관문 결과가 있으면 배너를 항상
+  띄운다 — `llmStatus`/`verification` 처럼 "정상이면 무표시" 하지 않고 tone 으로만 가른다.
+- `items[].evidence` 는 표의 좁은 범위를 문장으로 들고 다닌다(예: "신배설 금기 표(11개
+  성분)에 없는 성분입니다 — 이 표의 범위 안에서 해당 없음"). 버리고 outcome 만 렌더하면
+  그 한정이 사라져 "안전함"으로 읽힌다. 배너가 evidence 원문을 그대로 보여준다.
+- 관문 결과가 없으면(`null`) "관문 미확인"이다. `clear` 로 접지 않는다(GC-3).
+- **스왑된 rank 는 관문 판정도 무효다.** 그 판정은 지금 화면의 약이 아니라 스왑되기 전
+  약을 대조한 결과다 — 검증 축이 이미 지키는 규칙과 같고, 빠뜨리면 금기 약으로 바꿔 넣어도
+  옛 `clear` 가 그대로 남는다.
+- 회귀 테스트: `services/validation-agent/tests/test_renal_gate_relay.py`,
+  `apps/api/.../ValidationAgentResponseTest`,
+  `apps/web/src/utils/__tests__/renalGateNotice.test.ts`,
+  `apps/web/src/components/__tests__/Diagnosis.test.tsx`
+
 ## 5. Certificate API
 
 Certificate API는 Spring이 MySQL에서 모은 환자/진료/상병/처방 데이터를 받아 진단서 소견 문장을 생성한다.
@@ -119,27 +224,34 @@ flowchart TD
 
 ## 6. ValidationAgent
 
-ValidationAgent는 처방 추천 버튼을 계기로 실행되는 검증 에이전트다. Spring이 만든 job 메시지를 RabbitMQ에서 소비하고, 여러 도구를 선택적으로 호출한 뒤 검증 결과를 JSON으로 반환한다.
+ValidationAgent는 처방 추천 버튼을 계기로 실행되는 검증 에이전트다. Spring이 만든 job 메시지를 RabbitMQ에서 소비하고, 정해진 순서로 도구를 호출한 뒤 검증 결과를 JSON으로 반환한다.
 
-### 6.1 전체 루프
+### 6.1 전체 파이프라인
+
+도구 선택은 모델이 하지 않는다. 실행 순서는 도메인이 정한 고정 순서이며, 모델은
+**두 자리에서만** 쓴다: PubMed 질의 생성과 근거 요약. 이전에는 매 단계 게이트웨이에
+"다음에 어떤 도구를 부를까" 를 물었으나, 측정 결과 그 결정은 하드코딩 순서를
+재생산했을 뿐이고 관측값이 다음 행동을 바꾼 사례가 없었다(`.superpowers/sdd/agent-architecture-review.md` §5,
+`.superpowers/sdd/react-loop-removal-report.md`). 결정 호출 4회가 0회가 됐다.
 
 ```mermaid
 flowchart TD
-  A[ValidationAgentRequest] --> B[초기 State 구성]
-  B --> C{OPENAI_API_KEY 존재?}
-  C -->|예| D[OpenAI tool_decider]
-  C -->|아니오| E[Fallback 순서 결정]
-  D --> F[도구 1개 선택]
-  E --> F
-  F --> G[도구 실행]
-  G --> H[Observation 저장]
-  H --> I{PASS 또는 max iteration?}
-  I -->|아니오| C
-  I -->|예| J[규칙 기반/LLM 보조 final result]
-  J --> K[PubMed 근거 요약]
-  K --> L[Prescription 후보 보강]
-  L --> M[ValidationAgentResponse]
+  A[ValidationAgentRequest] --> B[초기 State 구성 + 전역 예산 시작]
+  B --> C[1. X-ray Result Loader]
+  C --> D[2. Disease Validator]
+  D --> E[3. Prescription Validator]
+  E --> F[4. PubMed 질의 생성 - 모델 호출 1/2]
+  F --> G[Pubmed Loader - 첫 성공까지 재시도]
+  G --> H[5. Prescription Finder]
+  H --> I[6. 규칙 기반 최종 판정]
+  I --> J[PubMed 근거 요약 - 모델 호출 2/2]
+  J --> K[verification 대조]
+  K --> L[ValidationAgentResponse]
 ```
+
+각 단계 앞에서 전역 예산(`VALIDATION_JOB_BUDGET_SECONDS`, 기본 110초)을 확인한다.
+소진되면 남은 단계를 건너뛰고 지금까지 모은 관측값으로 규칙 기반 판정을 내되,
+건너뛴 단계를 `reasoningTrace` 에 `BUDGET_EXCEEDED` 로 남긴다.
 
 ### 6.2 도구 목록
 
@@ -151,19 +263,29 @@ flowchart TD
 | `Prescription Finder` | 기존 처방 RAG에서 후보 처방 조회 | 환자 ID, 상병, 증상/검증 사유 | 후보 처방 배열 |
 | `Pubmed Loader` | PubMed 논문 검색과 초록 조회 | 검색어, max_results | 논문 제목, PMID, 초록 |
 
-### 6.3 tool_decider 설계
+### 6.3 모델 호출 두 자리
 
 ```mermaid
 flowchart LR
-  State[현재 state] --> Prompt[도구 선택 프롬프트]
-  Trace[최근 reasoningTrace] --> Prompt
-  Tools[availableTools 목록] --> Prompt
-  Prompt --> OpenAI[OpenAI gpt-5-nano]
-  OpenAI --> Decision["{ thought, action, actionInput }"]
-  Decision --> Executor[도구 실행기]
+  State[검증 컨텍스트] --> Q[PubMed 질의 생성 프롬프트]
+  Q --> Gateway[llm-gateway 경유 LLM_MODEL]
+  Gateway --> Queries["{ queries: [영어 검색어] }"]
+  Queries --> Loader[Pubmed Loader]
+  Loader --> Articles[초록]
+  Articles --> Sum[근거 요약 프롬프트]
+  Sum --> Gateway
+  Gateway --> Summary[한국어 요약문]
 ```
 
-`OPENAI_MODEL` 기본값은 `gpt-5-nano`다. 비용과 속도를 우선하면서도 도구 선택, PubMed query 생성, 초록 요약 같은 경량 reasoning에 적합하도록 설정했다.
+이 둘만 모델을 필요로 한다. 질의 생성은 한국어 임상 맥락을 영어 검색어로 번역하는
+일이고, 15항목짜리 하드코딩 사전(`app/pubmed.py` 의 `KOREAN_PUBMED_TERMS`)으로는
+할 수 없다. 두 호출 모두 실패하면 결정론적 대체물로 강등되고 그 사실이
+`llmStatus` 와 트레이스 `source` 에 남는다.
+
+`LLM_MODEL` 기본값은 `openai.gpt-5.6-luna`다. 비용과 속도를 우선하면서도 PubMed
+query 생성과 초록 요약 같은 경량 생성에 적합하도록 설정했다. 자격증명은
+`services/llm-gateway` 가 갖고 있으며, ValidationAgent 는 게이트웨이 base
+URL(`LLM_GATEWAY_BASE_URL`)만 안다.
 
 ### 6.4 결과 구조
 
@@ -175,9 +297,12 @@ flowchart LR
 - `recommendedPrescriptions`, `candidatePrescriptions`
 - `checks`: 검증 항목별 결과
 - `suspectedIssues`: 의심 문제 목록
-- `reasoningTrace`: Thought/Action/Observation 기록
+- `reasoningTrace`: 파이프라인 단계별 기록. 각 항목은 `thought`/`action`/`actionInput`/`observation`/`source` 를 갖는다. `source` 는 그 단계가 실제로 쓴 내용의 출처다 — `rule`(결정론적), `llm`(모델이 생성), `stub`, `fallback`
+- `llmStatus`: 이 실행에서 실제로 성사된 모델 호출에서만 도출한다. 게이트웨이가 설정돼 있다는 사실은 근거가 되지 않는다
 - `validation.pubmedEvidence`: PubMed 논문 근거
 - `validation.pubmedEvidenceSummary`: 초록 요약
+- `validation.graphLookup`: ArangoDB 처방 그래프 조회 결과. 후보 조회 단계를 돌지 않았으면 `null` 이고, 그 "확인 못 함"은 "0건"과 다른 상태다 (§4.4)
+- `prescriptionRenalGate`: prescription_api 의 신기능 금기 관문. 최상위 별도 필드다 — `verification`(이 에이전트 자신의 판정)과 병합하지 않는다 (§4.5)
 
 ## 7. AI 서비스 간 관계
 
@@ -185,10 +310,10 @@ flowchart LR
 flowchart LR
   Spring[Spring Boot] --> Xray[XrayGraphRAG]
   Spring --> Cert[Certificate API]
-  Spring --> Rx[Prescription API]
+  Spring -- 피드백 적재만 --> Rx[Prescription API]
   Spring --> RMQ[RabbitMQ]
   RMQ --> Val[ValidationAgent]
-  Val --> Rx
+  Val -- 추천 조회 --> Rx
   Val --> PubMed[PubMed]
   Val --> OpenAI[OpenAI]
   Rx --> Gemini[Gemini]

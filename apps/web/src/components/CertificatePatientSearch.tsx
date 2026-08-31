@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import styles from "./CertificatePatientSearch.module.css";
+import { Button, Field, Panel, Table, rowActivateProps } from "@/components/ui";
 import { getAllPatients, getPatientById } from "@services/certificate";
 import { get } from "@/services/http/client";
 import type { PatientDTO } from "@services/certificate";
@@ -164,60 +165,68 @@ export default function CertificatePatientSearch({ onPatientFound }: Props) {
   };
 
   return (
-    <div className={styles.container}>
-      <div className={styles.header}>
-        <h3 className={styles.title}>환자 조회</h3>
-      </div>
-
+    <Panel className={styles.container} title="환자 조회">
       <div className={styles.body}>
-        <div className={styles.field}>
-          <label className={styles.label}>환자번호</label>
+        <Field label="환자번호" htmlFor="certificate-patient-number">
           <input
+            id="certificate-patient-number"
             type="text"
-            className={styles.input}
             value={patientNumber}
             onChange={(e) => setPatientNumber(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="환자번호 입력"
           />
+        </Field>
+
+        <div className={styles.actionsColumn}>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={handleSearch}
+            disabled={loading || !patientNumber.trim()}
+            loading={loading}
+          >
+            조회
+          </Button>
+
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={handleLoadCompletedPatients}
+            disabled={completedLoading}
+            loading={completedLoading}
+          >
+            진료 완료 환자 조회
+          </Button>
         </div>
-
-        <button
-          type="button"
-          className={styles.searchButton}
-          onClick={handleSearch}
-          disabled={loading || !patientNumber.trim()}
-        >
-          {loading ? "조회 중…" : "조회"}
-        </button>
-
-        <button
-          type="button"
-          className={styles.secondaryButton}
-          onClick={handleLoadCompletedPatients}
-          disabled={completedLoading}
-        >
-          {completedLoading ? "완료 환자 조회 중…" : "진료 완료 환자 조회"}
-        </button>
 
         {error && <p className={styles.error}>{error}</p>}
 
         {completedPatients.length > 0 && (
           <div className={styles.completedList}>
             <p className={styles.resultTitle}>진료 완료 환자</p>
-            {completedPatients.map((patient) => (
-              <button
-                key={`${patient.waitingId}-${patient.patientId}`}
-                type="button"
-                className={styles.completedItem}
-                onClick={() => handleSelectCompletedPatient(patient)}
-              >
-                <span>
-                  {patient.patientName} ({patient.patientNumber})
-                </span>
-                <small>{patient.entryDate.slice(0, 16).replace("T", " ")}</small>
-              </button>
-            ))}
+            <Table dense>
+              <thead>
+                <tr>
+                  <th scope="col">환자</th>
+                  <th scope="col">접수일시</th>
+                </tr>
+              </thead>
+              <tbody>
+                {completedPatients.map((patient) => (
+                  <tr
+                    key={`${patient.waitingId}-${patient.patientId}`}
+                    onClick={() => handleSelectCompletedPatient(patient)}
+                    {...rowActivateProps(() => handleSelectCompletedPatient(patient))}
+                  >
+                    <td>
+                      {patient.patientName} ({patient.patientNumber})
+                    </td>
+                    <td>{patient.entryDate.slice(0, 16).replace("T", " ")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
           </div>
         )}
 
@@ -247,6 +256,6 @@ export default function CertificatePatientSearch({ onPatientFound }: Props) {
           </div>
         )}
       </div>
-    </div>
+    </Panel>
   );
 }

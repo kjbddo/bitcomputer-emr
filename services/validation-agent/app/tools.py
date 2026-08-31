@@ -147,9 +147,69 @@ def prescription_validator(
         "status": "APPROPRIATE",
         "evidence": [
             f"저장 처방 {len(saved_prescriptions)}건, 저장 상병 {len(saved_diseases)}건을 확인했습니다.",
-            "상세 약물 적합성 판단은 LLM 최종 검토 단계에서 근거와 함께 보수적으로 평가합니다.",
+            # 이 문장은 evidence[] 를 타고 checks[] 와 트레이스로 의사 화면에 간다.
+            # 이전 문구("상세 약물 적합성 판단은 LLM 최종 검토 단계에서 근거와 함께
+            # 보수적으로 평가합니다")가 가리키던 단계는 도달 불가능한 `_llm_finalize`
+            # 였고(F-M2), 그 단계는 삭제됐다. 하지도 않을 일을 약속하지 않는다.
+            "이 검사는 저장 처방과 상병/증상이 함께 존재하는지만 확인했습니다 — "
+            "약물 적합성은 판단하지 않습니다.",
         ],
         "suspiciousItems": [],
+    }
+
+
+def _int_or_zero(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _graph_lookup_loaded(body: Dict[str, Any]) -> Dict[str, Any]:
+    """prescription_api 의 ArangoDB 조회 플래그를 화면까지 갈 형태로 정리한다(F-M6).
+
+    그래프가 빈손이면 추천은 모델의 일반지식에만 기대게 된다. 그 차이가 화면에
+    보이지 않으면 의사는 두 경우를 구분할 수 없으므로, 로그가 아니라 관측값으로
+    싣는다(설계 문서 §3.2).
+    """
+    arango_count = _int_or_zero(body.get("arango_top_rx_count"))
+    cohort_count = _int_or_zero(body.get("cohort_rx_count"))
+
+    evidence: List[str] = []
+    if arango_count:
+        evidence.append(f"환자 그래프에서 이 환자의 과거 처방 {arango_count}건을 참고했습니다.")
+    else:
+        evidence.append("환자 그래프에서 이 환자의 과거 처방을 찾지 못했습니다 (0건).")
+    if cohort_count:
+        evidence.append(f"같은 상병 코호트의 처방 {cohort_count}건을 참고했습니다.")
+    else:
+        evidence.append("같은 상병 코호트의 처방을 그래프에서 찾지 못했습니다 (0건).")
+
+    return {
+        "status": "LOADED",
+        "usedArangoTopRx": bool(body.get("used_arango_top_rx")),
+        "arangoTopRxCount": arango_count,
+        "usedCohortRx": bool(body.get("used_cohort_rx")),
+        "cohortRxCount": cohort_count,
+        "foundNothing": not (arango_count or cohort_count),
+        "evidence": evidence,
+    }
+
+
+def _graph_lookup_failed(error: str) -> Dict[str, Any]:
+    """조회 실패는 "0건" 이 아니다.
+
+    GC-3 fail-closed: 확인하지 못한 것을 "확인했는데 없었다" 로 읽히게 하면
+    안 된다. `foundNothing` 은 False 로 남기고 status 로만 구분한다.
+    """
+    return {
+        "status": "FAILED",
+        "usedArangoTopRx": False,
+        "arangoTopRxCount": 0,
+        "usedCohortRx": False,
+        "cohortRxCount": 0,
+        "foundNothing": False,
+        "evidence": [f"처방 그래프를 조회하지 못했습니다: {error}"],
     }
 
 
@@ -178,8 +238,15 @@ def prescription_finder(
         "fetch_cohort_rx_from_arango": True,
     }
 
+    # 최종 리뷰 IMPORTANT: prescription-api 자신의 게이트웨이 호출 총 예산
+    # (LLM_GATEWAY_TIMEOUT_SECONDS, 기본 180s) 보다 짧으면 이 호출이 먼저
+    # 포기해버려 prescription_finder 가 게이트웨이 처리 도중에 "실패"로
+    # 기록된다 — prescription-api 는 여전히 응답을 만들고 있는데도. 이
+    # 호출자의 타임아웃은 prescription-api 의 총 예산과 맞추거나 더 커야
+    # 한다(infra/.env.example 의 LLM_GATEWAY_TIMEOUT_SECONDS 주석 참고).
+    timeout = float(os.environ.get("PRESCRIPTION_AGENT_TIMEOUT_SECONDS", "180"))
     try:
-        with httpx.Client(timeout=60.0) as client:
+        with httpx.Client(timeout=timeout) as client:
             response = client.post(f"{base_url}{path}", json=payload)
             response.raise_for_status()
             body = response.json()
@@ -188,12 +255,37 @@ def prescription_finder(
             "status": "FAILED",
             "evidence": [f"처방 RAG 호출 실패: {exc}"],
             "candidatePrescriptions": [],
+            "recommendationLlmStatus": "fallback",
+            "recommendationVerification": None,
+            "graphLookup": _graph_lookup_failed(str(exc)),
+            # 관문을 돌리지 못했다. clear 를 지어내면 "확인해 보니 해당 없음" 이
+            # 되어 이 부품이 있는 이유가 사라진다(renal_gate.py 모듈 주석).
+            "recommendationRenalGate": None,
         }
 
+    graph_lookup = _graph_lookup_loaded(body)
     return {
         "status": "LOADED",
-        "evidence": ["기존 처방 RAG에서 참고 처방 후보를 조회했습니다."],
+        "evidence": [
+            "기존 처방 RAG에서 참고 처방 후보를 조회했습니다.",
+            *graph_lookup["evidence"],
+        ],
         "candidatePrescriptions": body.get("prescriptions") or [],
+        # ArangoDB 처방 그래프 조회 결과(F-M6). 이 스텝의 근거 출처이지 검증
+        # 판정이 아니므로 최상위 상태와 섞지 않고 validation.graphLookup 으로만
+        # 나간다 — recommendationVerification 과 같은 원칙.
+        "graphLookup": graph_lookup,
+        # 처방 RAG 자신이 모델을 썼는지. 이 스텝의 페이로드 출처이지, 검증 결정의
+        # 출처가 아니다 — 최상위 llmStatus 에 섞으면 안 된다(Task 6 회귀).
+        "recommendationLlmStatus": body.get("llmStatus"),
+        # prescription_api 자신의 검증 결과. 이 스텝의 근거 정보이지
+        # 검증 에이전트 자신의 판정이 아니다 — 최상위에 섞지 않는다.
+        "recommendationVerification": body.get("verification"),
+        # prescription_api 의 신기능 금기 관문(services/prescription/renal_gate.py).
+        # warn / clear / unknown 세 결과와 항목별 evidence 를 그대로 넘긴다 —
+        # 여기서 요약하거나 outcome 만 뽑으면 `clear` 가 뜻하는 "이 표의 범위
+        # 안에서 해당 없음" 이 "안전함" 으로 바뀐다.
+        "recommendationRenalGate": body.get("renalGate"),
     }
 
 

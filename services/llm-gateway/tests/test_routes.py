@@ -1,0 +1,400 @@
+import json
+import logging
+
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+
+import app.main as main
+
+
+@pytest.fixture()
+def client(monkeypatch):
+    """상류를 MockTransport 로 바꿔치기한 앱 클라이언트."""
+
+    def _make(handler):
+        def _fake_client(**_kwargs):
+            return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+        monkeypatch.setattr(main, "make_upstream_client", _fake_client)
+        return TestClient(main.app)
+
+    return _make
+
+
+def test_health_returns_ok():
+    with TestClient(main.app) as c:
+        response = c.get("/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
+
+def test_chat_completions_forwards_and_returns_upstream_body(client):
+    def handler(_request):
+        return httpx.Response(200, json={"choices": [{"message": {"content": "hi"}}]})
+
+    with client(handler) as c:
+        response = c.post(
+            "/v1/chat/completions",
+            json={"model": "m", "messages": [], "temperature": 0.7},
+            headers={"X-LLM-Caller": "validation-agent"},
+        )
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "hi"
+
+
+def test_temperature_is_stripped_before_upstream(client):
+    seen = {}
+
+    def handler(request):
+        seen["body"] = request.read().decode()
+        return httpx.Response(200, json={"ok": True})
+
+    with client(handler) as c:
+        c.post(
+            "/v1/chat/completions",
+            json={"model": "m", "messages": [], "temperature": 0.7},
+        )
+    assert "temperature" not in seen["body"]
+    assert "reasoning_effort" in seen["body"]
+
+
+def test_upstream_4xx_becomes_502_without_leaking_key(client):
+    def handler(_request):
+        return httpx.Response(400, text="bad request")
+
+    with client(handler) as c:
+        response = c.post("/v1/chat/completions", json={"model": "m", "messages": []})
+    assert response.status_code == 502
+    assert "Bearer" not in response.text
+
+
+def test_upstream_failure_is_logged_as_failed(client, caplog):
+    def handler(_request):
+        return httpx.Response(400, text="bad request")
+
+    # 이 로거는 임포트 시점에 INFO 로 설정되므로 at_level 없이도 지금은 통과한다.
+    # 그래도 감싸는 이유는 LOG_LEVEL 환경변수가 그 레벨을 바꿀 수 있어서다 —
+    # 앰비언트 환경 때문에 테스트가 흔들리지 않게 레벨을 고정한다.
+    # (루트 레벨은 무관하다. 전파는 조상 로거의 레벨을 보지 않는다.)
+    with caplog.at_level(logging.INFO, logger="llm-gateway"):
+        with client(handler) as c:
+            c.post("/v1/chat/completions", json={"model": "m", "messages": []})
+    assert any("failed" in rec.getMessage() for rec in caplog.records)
+
+
+def test_param_notes_reach_log_record(client, caplog):
+    """GC-2: build_record 가 param_notes 를 검증할 수 없으므로, 라우트가
+    실제로 그것을 넘기는지는 이 테스트만 확인한다. build_record 호출부에서
+    param_notes=[] 를 넘기는 회귀가 생겨도 경고 로그(test_temperature_is_...
+    류)는 여전히 찍히므로 이 assert 가 없으면 아무 테스트도 못 잡는다."""
+
+    def handler(_request):
+        return httpx.Response(200, json={"ok": True})
+
+    with caplog.at_level(logging.INFO, logger="llm-gateway"):
+        with client(handler) as c:
+            c.post(
+                "/v1/chat/completions",
+                json={"model": "m", "messages": [], "temperature": 0.7},
+            )
+
+    payloads = []
+    for rec in caplog.records:
+        try:
+            payloads.append(json.loads(rec.getMessage()))
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+    assert any(
+        isinstance(payload, dict) and "dropped:temperature" in payload.get("paramNotes", [])
+        for payload in payloads
+    ), "temperature 드롭 기록이 계측 로그(paramNotes)에 실제로 실려야 한다"
+
+
+# 계측이 실제로 나가는지.
+#
+# 설정 전에는 루트 로거가 WARNING 이고 핸들러가 없어서, uvicorn 기본 설정에서도
+# logger.info() 로 내보내는 계측 레코드가 통째로 유실됐다. warning 은 lastResort 로
+# stderr 에 나가기 때문에 유실이 눈에 안 띄는 종류의 결함이었다.
+def test_gateway_logger_has_its_own_handler():
+    """계측이 나가려면 이 로거 자신이 INFO 이고 핸들러를 가져야 한다.
+
+    capsys 로는 검증할 수 없다 — 핸들러가 import 시점의 sys.stdout 을 붙들기
+    때문이고 그건 컨테이너에서 옳은 동작이다. 그래서 속성을 단언한다.
+    """
+    import logging
+
+    lg = logging.getLogger("llm-gateway")
+    assert lg.level <= logging.INFO
+    assert any(getattr(h, "_llm_gateway", False) for h in lg.handlers)
+
+
+def test_root_logger_is_not_touched():
+    """루트를 건드리면 NOTSET 인 모든 서드파티 로거의 바닥이 함께 올라간다."""
+    import logging
+
+    root = logging.getLogger()
+    assert not any(getattr(h, "_llm_gateway", False) for h in root.handlers)
+
+
+def test_third_party_info_logs_stay_suppressed():
+    """httpx 는 상류 호출마다 INFO 로 한 줄씩 찍는다.
+
+    루트 레벨을 올렸을 때 이 줄들이 계측 JSON 사이에 평문으로 끼어들어
+    "한 줄에 JSON 하나" 가 깨졌다. 그 회귀를 고정한다.
+    """
+    import logging
+
+    assert not logging.getLogger("httpx").isEnabledFor(logging.INFO)
+
+
+def test_emitted_lines_are_all_json(client):
+    """이 로거가 내보내는 모든 줄은 JSON 으로 파싱돼야 한다.
+
+    계측 레코드와 파라미터 경고가 같은 스트림을 공유하므로, 한쪽이 평문이면
+    스트림을 파싱하는 쪽이 그 줄에서 깨진다.
+    """
+    import io
+    import json as json_mod
+    import logging
+
+    lg = logging.getLogger("llm-gateway")
+    buffer = io.StringIO()
+    probe = logging.StreamHandler(buffer)
+    probe.setFormatter(logging.Formatter("%(message)s"))
+    lg.addHandler(probe)
+    try:
+        def handler(_request):
+            return httpx.Response(
+                200, json={"ok": True, "usage": {"prompt_tokens": 3, "completion_tokens": 2}}
+            )
+
+        with client(handler) as c:
+            c.post(
+                "/v1/chat/completions",
+                json={"model": "m", "messages": [], "temperature": 0.7},
+            )
+    finally:
+        lg.removeHandler(probe)
+
+    lines = [line for line in buffer.getvalue().splitlines() if line.strip()]
+    assert len(lines) >= 2, "경고와 계측 레코드 둘 다 나와야 한다"
+    for line in lines:
+        json_mod.loads(line)  # 파싱 실패하면 그 자체가 실패다
+
+
+def test_metering_record_content_reaches_the_log(client, caplog):
+    import logging
+
+    def handler(_request):
+        return httpx.Response(
+            200, json={"ok": True, "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+        )
+
+    with caplog.at_level(logging.INFO, logger="llm-gateway"):
+        with client(handler) as c:
+            c.post(
+                "/v1/chat/completions",
+                json={"model": "m", "messages": []},
+                headers={"X-LLM-Caller": "validation-agent"},
+            )
+    logged = " ".join(rec.getMessage() for rec in caplog.records)
+    assert "estimatedCostUsd" in logged
+    assert "validation-agent" in logged
+
+
+def test_info_level_is_enabled_without_extra_setup():
+    """caplog.at_level 같은 보조 없이도 INFO 가 살아 있어야 한다."""
+    import logging
+
+    assert logging.getLogger("llm-gateway").isEnabledFor(logging.INFO)
+
+
+# ══ 제공자 교체 ═══════════════════════════════════════════════════
+
+import app.providers as providers_module  # noqa: E402
+from factories import make_bedrock_settings, make_settings  # noqa: E402
+
+
+@pytest.fixture()
+def provider_client(monkeypatch):
+    """설정을 바꿔 끼운 앱 클라이언트. 상류는 MockTransport 다."""
+
+    def _make(handler, settings):
+        def _fake_client(**_kwargs):
+            return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+        monkeypatch.setattr(main, "make_upstream_client", _fake_client)
+        monkeypatch.setattr(main, "SETTINGS", settings)
+        monkeypatch.setattr(main, "PROVIDER", providers_module.resolve_provider(settings))
+        return TestClient(main.app)
+
+    return _make
+
+
+def _bedrock_settings(**overrides):
+    return make_settings(
+        provider="bedrock",
+        api_key="openai-super-secret",
+        bedrock=make_bedrock_settings(
+            api_key="bedrock-super-secret", region="us-west-2", **overrides
+        ),
+    )
+
+
+def _records(caplog):
+    out = []
+    for rec in caplog.records:
+        try:
+            payload = json.loads(rec.getMessage())
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(payload, dict) and "outcome" in payload:
+            out.append(payload)
+    return out
+
+
+# 호출 서비스는 손대지 않는다. 같은 본문을 보내도 상류 URL·모델·인증이 바뀐다.
+def test_bedrock_configuration_changes_url_model_and_auth(provider_client):
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["auth"] = request.headers.get("authorization")
+        seen["body"] = json.loads(request.read().decode())
+        return httpx.Response(200, json={"ok": True})
+
+    with provider_client(handler, _bedrock_settings()) as c:
+        c.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-5.6-luna", "messages": [], "temperature": 0.7},
+        )
+
+    assert seen["url"] == (
+        "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/chat/completions"
+    )
+    assert seen["auth"] == "Bearer bedrock-super-secret"
+    assert seen["body"]["model"] == "global.openai.gpt-5.6-luna"
+    # OpenAI 규칙이 새어 들어오면 여기서 잡힌다.
+    assert seen["body"]["temperature"] == 0.7
+    assert "reasoning_effort" not in seen["body"]
+
+
+def test_openai_configuration_still_uses_openai_rules(provider_client):
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["auth"] = request.headers.get("authorization")
+        seen["body"] = json.loads(request.read().decode())
+        return httpx.Response(200, json={"ok": True})
+
+    settings = make_settings(
+        upstream_base_url="https://api.openai.com/v1", api_key="openai-super-secret"
+    )
+    with provider_client(handler, settings) as c:
+        c.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-5.6-luna", "messages": [], "temperature": 0.7},
+        )
+
+    assert seen["url"] == "https://api.openai.com/v1/chat/completions"
+    assert seen["auth"] == "Bearer openai-super-secret"
+    assert seen["body"]["model"] == "gpt-5.6-luna"
+    assert "temperature" not in seen["body"]
+    assert seen["body"]["reasoning_effort"] == "low"
+
+
+# ── 계측의 provider 는 실행에서 나온다 ─────────────────────────────
+
+def test_record_provider_matches_the_host_actually_called(provider_client, caplog):
+    def handler(_request):
+        return httpx.Response(
+            200, json={"usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+        )
+
+    with caplog.at_level(logging.INFO, logger="llm-gateway"):
+        with provider_client(handler, _bedrock_settings()) as c:
+            c.post("/v1/chat/completions", json={"model": "gpt-5.6-luna", "messages": []})
+
+    record = _records(caplog)[0]
+    assert record["provider"] == "bedrock"
+    assert record["upstreamHost"] == "bedrock-runtime.us-west-2.amazonaws.com"
+    assert record["authMode"] == "bearer:bedrock_api_key"
+    # 실제로 보낸 모델 ID 여야 한다 — 호출자가 보낸 것이 아니라.
+    assert record["model"] == "global.openai.gpt-5.6-luna"
+    assert record["inputTokens"] == 10
+
+
+# 설정만 bedrock 이고 실제로는 붙을 수 없는 상태. 레코드가 "bedrock" 이라고
+# 말하면, 로그만 보고 Bedrock 이 응답한 줄 알게 된다.
+def test_unresolvable_provider_is_not_reported_as_the_configured_one(
+    provider_client, caplog
+):
+    def handler(_request):  # 도달하면 안 된다
+        raise AssertionError("미해석 제공자인데 상류로 나갔다")
+
+    settings = make_settings(
+        provider="bedrock", bedrock=make_bedrock_settings(region="", base_url="")
+    )
+    with caplog.at_level(logging.INFO, logger="llm-gateway"):
+        with provider_client(handler, settings) as c:
+            response = c.post(
+                "/v1/chat/completions", json={"model": "gpt-5.6-luna", "messages": []}
+            )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "provider_unresolved"
+
+    record = _records(caplog)[0]
+    assert record["provider"] == "unresolved"
+    assert record["providerConfigured"] == "bedrock"
+    assert record["upstreamHost"] == ""
+    assert record["outcome"] == "failed"
+
+
+def test_unknown_provider_name_does_not_reach_openai(provider_client, caplog):
+    def handler(_request):
+        raise AssertionError("모르는 제공자인데 상류로 나갔다")
+
+    with caplog.at_level(logging.INFO, logger="llm-gateway"):
+        with provider_client(handler, make_settings(provider="anthropic")) as c:
+            response = c.post("/v1/chat/completions", json={"model": "m", "messages": []})
+
+    assert response.status_code == 503
+    assert _records(caplog)[0]["provider"] == "unresolved"
+
+
+# ── GC-7 ───────────────────────────────────────────────────────────
+
+def test_no_key_reaches_logs_or_error_body_on_bedrock_failure(provider_client, caplog):
+    def handler(_request):
+        return httpx.Response(403, text="expired token")
+
+    with caplog.at_level(logging.INFO, logger="llm-gateway"):
+        with provider_client(handler, _bedrock_settings()) as c:
+            response = c.post("/v1/chat/completions", json={"model": "m", "messages": []})
+
+    logged = " ".join(rec.getMessage() for rec in caplog.records)
+    assert "bedrock-super-secret" not in logged
+    assert "bedrock-super-secret" not in response.text
+    assert "openai-super-secret" not in logged
+    # 만료를 일반 장애와 구별할 수 있어야 한다.
+    assert _records(caplog)[0]["upstreamStatus"] == 403
+
+
+def test_unresolved_error_body_does_not_leak_secrets(provider_client):
+    def handler(_request):
+        raise AssertionError("도달하면 안 된다")
+
+    settings = make_settings(
+        provider="bedrock",
+        api_key="openai-super-secret",
+        bedrock=make_bedrock_settings(api_key="bedrock-super-secret", region=""),
+    )
+    with provider_client(handler, settings) as c:
+        response = c.post("/v1/chat/completions", json={"model": "m", "messages": []})
+
+    assert "bedrock-super-secret" not in response.text
+    assert "openai-super-secret" not in response.text
