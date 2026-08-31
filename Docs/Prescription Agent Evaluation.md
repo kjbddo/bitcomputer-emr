@@ -1,10 +1,22 @@
 # Prescription Agent Evaluation
 
+> **이 문서는 2026-06-06 실행 기록이다.** 측정값(§8, §13)은 그 시점의 것이고 그대로 둔다.
+> 그 이후 두 가지가 바뀌었으므로, 지금 코드를 읽을 때 아래를 함께 본다.
+>
+> 1. **경로.** 모노레포 재구성으로 `GraphDB/langchain_graph_qa/` 는 `services/prescription/`
+>    이 됐다. 본문 경로는 현재 경로로 고쳤다.
+> 2. **파이프라인.** PR #13(2026-08-30) 이후 **순위를 조회가 정하고 모델은 사유·용법만 쓴다.**
+>    응답 항목의 처방명·처방코드는 조회가 확정한 slate 에서 오므로, 이 평가가 측정한
+>    `UNANCHORED_NAME` / `FAKE_CODE` 계열 환각은 그 경로에서 구조적으로 불가능해졌다.
+>    즉 §8 의 hallucination rate 0.9 는 **그때의 아키텍처에 대한 측정**이며 현재 값이 아니다.
+>    §11 의 권고 1·2·3 은 이 변경으로 이행됐다. 재측정은 아직 하지 않았다.
+>    현재 파이프라인은 [04-ai-services-and-agents.md](04-ai-services-and-agents.md) §4 를 본다.
+
 이 문서는 `prescription-api` 처방 추천 에이전트의 평가 방법론, 평가 구조, 실행 워크플로우, 산출 결과 해석 방식을 정리한다. 기존의 실제 처방 데이터 기반 통계 평가는 유지하고, 새로 추가한 LLM-as-judge 기반 에이전트 평가는 답변 품질, 환각, tool path 정확도를 검증한다.
 
 ## 1. 평가 대상
 
-처방 추천 기능은 `GraphDB/langchain_graph_qa/prescription_api.py`의 `/api/agent/prescription/recommend` 엔드포인트다. 이 서비스는 ReAct agent처럼 LLM이 tool을 자율 선택하는 구조가 아니라, 입력 조건에 따라 ArangoDB 조회와 LLM 생성을 수행하는 조건부 파이프라인이다.
+처방 추천 기능은 `services/prescription/prescription_api.py`의 `/api/agent/prescription/recommend` 엔드포인트다. 이 서비스는 ReAct agent처럼 LLM이 tool을 자율 선택하는 구조가 아니라, 입력 조건에 따라 ArangoDB 조회와 LLM 생성을 수행하는 조건부 파이프라인이다.
 
 ```mermaid
 flowchart TD
@@ -28,7 +40,7 @@ flowchart TD
   H --> I
   H0 --> I
 
-  I --> J[llm_generate<br/>Gemini/OpenAI]
+  I --> J[llm_generate<br/>llm-gateway 경유]
   J --> K[json_parse]
   K --> L[confidence_score 주입]
   L --> M[PrescriptionRecommendResponse]
@@ -42,7 +54,7 @@ flowchart TD
 | `top_rx_from_arango` | 환자 방문 기반 과거 처방 조회 | `top_rx`가 비어 있고 `fetch_top_rx_from_arango=true` |
 | `cohort_rx_from_arango` | 상병별 코호트 처방 빈도 조회 | `disease_codes`가 있고 `fetch_cohort_rx_from_arango=true` |
 | `prompt_builder` | 환자/그래프 컨텍스트를 LLM 프롬프트로 변환 | 정상 추천 생성 시 항상 |
-| `llm_generate` | Gemini 또는 평가용 OpenAI 모델로 Top-3 처방 JSON 생성 | 정상 추천 생성 시 항상 |
+| `llm_generate` | 처방 JSON 생성. 평가 당시에는 Gemini 또는 평가용 OpenAI 모델을 직접 불렀고, 현재는 `llm-gateway` 경유 단일 모델이다 | 정상 추천 생성 시 항상 |
 | `json_parse` | LLM 응답 strict JSON 검증 | 정상 추천 생성 시 항상 |
 
 ## 2. 평가 계층
@@ -74,7 +86,7 @@ flowchart TB
 
 ## 3. 새 평가 파일 구조
 
-추가된 파일은 `GraphDB/langchain_graph_qa/evals` 아래에 있다.
+추가된 파일은 `services/prescription/evals` 아래에 있다(평가 당시 경로는 `GraphDB/langchain_graph_qa/evals`).
 
 | 파일 | 역할 |
 |---|---|
@@ -114,7 +126,7 @@ flowchart LR
 | `evals/scenarios/template_prescription_eval_scenarios_60.jsonl` | rule/template 생성 | 60개 | quota 없을 때 smoke/regression |
 | `evals/scenarios/template_prescription_eval_scenarios.jsonl` | rule/template 생성 | 10개 | 빠른 샘플 |
 
-LLM 생성 데이터는 평가 대상 처방 API의 Gemini 생성 모델과 다른 모델을 사용해, 평가 데이터가 동일 모델의 패턴에 과도하게 맞춰지는 것을 줄인다.
+LLM 생성 데이터는 평가 대상 처방 API가 당시 쓰던 생성 모델(Gemini)과 다른 모델을 사용해, 평가 데이터가 동일 모델의 패턴에 과도하게 맞춰지는 것을 줄인다.
 
 대조군의 의미:
 
@@ -244,9 +256,9 @@ F1 = 2 * Precision * Recall / (Precision + Recall)
 
 | 산출물 | 파일 |
 |---|---|
-| Raw results | `GraphDB/langchain_graph_qa/evals/results/prescription_eval_results_20260606T034823Z.jsonl` |
-| Summary | `GraphDB/langchain_graph_qa/evals/results/prescription_eval_summary_20260606T034823Z.json` |
-| Report | `GraphDB/langchain_graph_qa/evals/results/prescription_eval_report_20260606T034823Z.md` |
+| Raw results | `services/prescription/evals/results/prescription_eval_results_20260606T034823Z.jsonl` |
+| Summary | `services/prescription/evals/results/prescription_eval_summary_20260606T034823Z.json` |
+| Report | `services/prescription/evals/results/prescription_eval_report_20260606T034823Z.md` |
 
 전체 지표:
 
@@ -309,33 +321,37 @@ Tool별 결과:
 
 ### 9.1 LLM 기반 평가 데이터 생성
 
-```powershell
-cd "C:\Users\kjbdd\OneDrive\바탕 화면\Project\BitComputer\GraphDB\langchain_graph_qa"
-python .\evals\generate_scenarios.py --strategy llm --provider openai --model gpt-4o-mini --count 50 --batch-size 10 --output .\evals\scenarios\llm_prescription_eval_scenarios.jsonl
+```bash
+cd services/prescription
+python evals/generate_scenarios.py --strategy llm --provider openai --model gpt-4o-mini --count 50 --batch-size 10 --output evals/scenarios/llm_prescription_eval_scenarios.jsonl
 ```
 
 ### 9.2 Template 데이터 생성
 
-```powershell
-python .\evals\generate_scenarios.py --strategy template --count 60 --output .\evals\scenarios\template_prescription_eval_scenarios_60.jsonl
+```bash
+python evals/generate_scenarios.py --strategy template --count 60 --output evals/scenarios/template_prescription_eval_scenarios_60.jsonl
 ```
 
 ### 9.3 Mock smoke test
 
-```powershell
-python .\evals\run_eval.py --scenarios .\evals\scenarios\llm_prescription_eval_scenarios.jsonl --output-dir .\evals\results --skip-judges --mock-agent --limit 5
+```bash
+python evals/run_eval.py --scenarios evals/scenarios/llm_prescription_eval_scenarios.jsonl --output-dir evals/results --skip-judges --mock-agent --limit 5
 ```
 
 ### 9.4 실제 API + OpenAI judge 평가
 
-```powershell
-python .\evals\run_eval.py --scenarios .\evals\scenarios\llm_prescription_eval_scenarios.jsonl --output-dir .\evals\results --judge-provider openai --openai-judge-model gpt-4o-mini --agent-model gpt-4o-mini --agent-temperature 0
+```bash
+python evals/run_eval.py --scenarios evals/scenarios/llm_prescription_eval_scenarios.jsonl --output-dir evals/results --judge-provider openai --openai-judge-model gpt-4o-mini --agent-model gpt-4o-mini --agent-temperature 0
 ```
+
+> `--agent-model` / `--agent-temperature` 는 현재 운영 경로에서 무시된다. prescription-api 는
+> 게이트웨이에 항상 `LLM_MODEL` 을 싣고, `req.model` / `req.temperature` 가 채워져 있으면
+> `toolTrace` 의 `ignoredRequestModel` / `ignoredTemperature` 로 흔적만 남긴다.
 
 ### 9.5 실행 중인 API를 HTTP로 평가
 
-```powershell
-python .\evals\run_eval.py --scenarios .\evals\scenarios\llm_prescription_eval_scenarios.jsonl --api-url http://localhost:8001 --output-dir .\evals\results --judge-provider openai --openai-judge-model gpt-4o-mini --agent-model gpt-4o-mini --agent-temperature 0
+```bash
+python evals/run_eval.py --scenarios evals/scenarios/llm_prescription_eval_scenarios.jsonl --api-url http://localhost:8001 --output-dir evals/results --judge-provider openai --openai-judge-model gpt-4o-mini --agent-model gpt-4o-mini --agent-temperature 0
 ```
 
 ## 10. 해석 기준
@@ -363,9 +379,16 @@ python .\evals\run_eval.py --scenarios .\evals\scenarios\llm_prescription_eval_s
 
 현재 평가 구조는 방법론과 실행 경로를 갖췄지만, 결과상 안전성 guard를 먼저 보강해야 한다.
 
-1. `prescription_agent.py` 프롬프트에 “입력 `top_rx` 또는 Arango/cohort 근거에 없는 처방명·코드·용량은 생성 금지” 규칙을 더 강하게 넣는다.
-2. `prescription_api.py` 후처리에서 `allowedPrescriptionNames`에 해당하는 근거 목록 밖 처방은 제거하거나 `미기재/근거 부족` 응답으로 대체한다.
-3. `top_rx`와 cohort 후보가 모두 부족하면 Top-3를 억지로 채우지 말고, “추천 보류/근거 부족/추가 진료 필요” 상태를 반환할 수 있는 응답 스키마를 검토한다.
+1. ~~`prescription_agent.py` 프롬프트에 "입력 `top_rx` 또는 Arango/cohort 근거에 없는 처방명·코드·용량은 생성 금지" 규칙을 더 강하게 넣는다.~~
+   → **이행됨(PR #13).** 프롬프트를 강화하는 대신 문제 자체를 없앴다 — 응답의 처방명·코드는
+   모델 출력이 아니라 조회가 확정한 slate 에서 조립된다.
+2. ~~`prescription_api.py` 후처리에서 `allowedPrescriptionNames`에 해당하는 근거 목록 밖 처방은 제거하거나 `미기재/근거 부족` 응답으로 대체한다.~~
+   → **이행됨.** `verification.py` 가 응답의 모든 코드가 조회 후보에서 왔는지 대조하고,
+   `renal_gate.py` 가 신배설 금기를 별도 축으로 경고한다.
+3. ~~`top_rx`와 cohort 후보가 모두 부족하면 순위를 억지로 채우지 말고, "추천 보류/근거 부족/추가 진료 필요" 상태를 반환할 수 있는 응답 스키마를 검토한다.~~
+   → **이행됨.** 조회가 뒷받침하지 않는 순위는 모델 문장으로 채우지 않는다. 그 자리를
+   어떻게 처리하는지는 `services/prescription/ranking.py` 를 본다 — 이 부분은 응답 계약
+   변경 작업이 진행 중이라 구체적인 형태가 바뀔 수 있다.
 4. `confidence_scores` expected path 정책을 정리한다. 운영상 항상 계산할 것인지, judge 기준처럼 특정 케이스에서 금지할 것인지 결정한 뒤 scenario와 metric을 맞춘다.
 5. `HALLUCINATION_TRAP`, `ADVERSARIAL`, `SPARSE_DATA` 실패 케이스를 regression set으로 고정해 프롬프트/후처리 수정 전후를 비교한다.
 6. LLM judge 결과와 heuristic 결과를 모두 저장해 judge drift를 확인하고, 외부 LLM quota 문제를 줄이기 위해 judge 결과 cache를 둔다.

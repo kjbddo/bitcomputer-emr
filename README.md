@@ -4,19 +4,23 @@
 
 ## 1. 전체 서비스 실행
 
-루트 디렉터리에서 실행한다.
+compose 파일과 `.env` 는 `infra/` 안에 있다. 명령은 그 디렉터리에서 실행하며,
+`--env-file` 을 따로 줄 필요가 없다 — compose 가 같은 디렉터리의 `.env` 를 읽는다.
 
-```powershell
-cd "C:\Users\kjbdd\OneDrive\바탕 화면\Project\BitComputer"
-docker compose --env-file .env.docker up -d --build
+```bash
+cd infra
+docker compose up -d --build
 ```
 
 `--build`는 코드, Dockerfile, requirements, package 의존성이 바뀐 뒤에 필요하다. 단순히 다시 켜는 경우에는 아래처럼 실행해도 된다.
 
-```powershell
-docker compose --env-file .env.docker up -d
-docker compose --env-file .env.docker up -d frontend
+```bash
+docker compose up -d
+docker compose up -d frontend
 ```
+
+> **`up -d` 는 이미지를 다시 빌드하지 않는다.** 코드를 고쳤는데 화면이 그대로면
+> [Docs/08-runbook-container-images.md](Docs/08-runbook-container-images.md) 를 본다.
 
 실행되는 주요 서비스:
 
@@ -37,34 +41,35 @@ docker compose --env-file .env.docker up -d frontend
 
 상태 확인:
 
-```powershell
-docker compose --env-file .env.docker ps
+```bash
+cd infra && docker compose ps
 ```
 
 헬스 체크:
 
-```powershell
+```bash
 curl http://localhost:8080/actuator/health
 curl http://localhost:8000/health
 curl http://localhost:5001/health
 curl http://localhost:8001/health
 curl http://localhost:8002/health
+curl http://localhost:8003/health
 ```
 
 ## 2. 전체 서비스 종료
 
 데이터를 유지하면서 종료:
 
-```powershell
-docker compose --env-file .env.docker down
+```bash
+cd infra && docker compose down
 ```
 
 다시 켜면 MySQL/ArangoDB 데이터는 유지된다.
 
 데이터까지 모두 삭제:
 
-```powershell
-docker compose --env-file .env.docker down -v
+```bash
+cd infra && docker compose down -v
 docker system prune -a --volumes
 ```
 
@@ -74,57 +79,63 @@ docker system prune -a --volumes
 
 `docker compose down -v`로 볼륨을 삭제했거나 MySQL을 새로 만들었다면 프론트의 상병/진단 DB 조회용 마스터 데이터를 다시 적재해야 한다.
 
-루트 디렉터리에서 실행한다. MySQL 컨테이너(`bit-mysql`)가 실행 중이어야 한다.
+MySQL 컨테이너(`bit-mysql`)가 실행 중이어야 한다.
 
-```powershell
-cd "C:\Users\kjbdd\OneDrive\바탕 화면\Project\BitComputer"
+```bash
+cd apps/api
 python -m pip install openpyxl
-python .\Back-End\scripts\import_master_codes.py
+MYSQL_PASSWORD="$(grep '^MYSQL_ROOT_PASSWORD=' ../../infra/.env | cut -d= -f2-)" python scripts/import_master_codes.py
 ```
 
 기본 동작:
 
-- `Back-End\상병코드.xlsx`를 `Back-End\generated\master-codes\disease_codes.csv`로 변환한 뒤 `disease` 테이블에 적재한다.
-- `Back-End\처방코드.xlsx`를 `Back-End\generated\master-codes\prescription_codes.csv`로 변환한 뒤 `diagnose` 테이블에 적재한다.
+- `apps/api/상병코드.xlsx`를 `apps/api/generated/master-codes/disease_codes.csv`로 변환한 뒤 `disease` 테이블에 적재한다.
+- `apps/api/처방코드.xlsx`를 `apps/api/generated/master-codes/prescription_codes.csv`로 변환한 뒤 `diagnose` 테이블에 적재한다.
 - 적재 전 `disease`, `diagnose` 테이블을 비우고 auto increment를 1부터 다시 시작한다.
 
 CSV만 생성하고 DB에는 넣지 않으려면:
 
-```powershell
-python .\Back-End\scripts\import_master_codes.py --convert-only
+```bash
+python scripts/import_master_codes.py --convert-only
 ```
 
 상병 또는 처방 중 하나만 다시 적재하려면:
 
-```powershell
-python .\Back-End\scripts\import_master_codes.py --target disease
-python .\Back-End\scripts\import_master_codes.py --target diagnose
+```bash
+python scripts/import_master_codes.py --target disease
+python scripts/import_master_codes.py --target diagnose
 ```
 
 적재 확인:
 
-```powershell
+```bash
 docker exec bit-mysql mysql -uroot -p<YOUR_MYSQL_ROOT_PASSWORD> -D bitcomputer -e "SELECT COUNT(*) AS disease_count FROM disease; SELECT COUNT(*) AS diagnose_count FROM diagnose;"
 curl "http://localhost:8080/api/diseases?page=0&size=5"
 curl "http://localhost:8080/api/diagnoses?page=0&size=5"
 ```
 
+> `python3` 은 쓰지 않는다. Windows 에서 Microsoft Store 스텁에 잡히면 아무 일도 하지
+> 않고 성공한 것처럼 끝난다.
+
 ## 4. XrayGraphRAG 데이터 적재
 
 ### 4.1. 사전 준비
 
-XrayGraphRAG 스크립트는 로컬 venv에서 실행하는 것을 권장한다. CheXpert archive가 호스트 경로에 있기 때문이다.
+> 절차 전문(토큰 발급, 벡터 인덱스 차원 확인, PSPNet ROI 가중치 마운트, 시드 후 검증)은
+> **[Docs/07-runbook-data-loading.md](Docs/07-runbook-data-loading.md) §5** 에 있다.
+> 아래는 요약이다.
 
-```powershell
-cd "C:\Users\kjbdd\OneDrive\바탕 화면\Project\BitComputer\XrayGraphRAG"
-.\.venv\Scripts\Activate.ps1
+xray-rag 스크립트는 로컬 venv에서 실행하는 것을 권장한다. CheXpert archive가 호스트 경로에 있기 때문이다.
+
+```bash
+cd services/xray-rag
 ```
 
 실제 SQUID 가중치를 쓰려면 `scipy`가 설치되어 있어야 한다. 없으면 mock reconstruction으로 fallback된다.
 
-```powershell
+```bash
 python -m pip install scipy
-python scripts\verify_squid.py
+python scripts/verify_squid.py
 ```
 
 아래 로그가 뜨면 실제 가중치를 못 쓰고 mock을 쓰는 상태다.
@@ -137,23 +148,26 @@ python scripts\verify_squid.py
 
 ArangoDB 컨테이너가 실행 중이어야 한다.
 
-```powershell
-python scripts\init_db.py
+```bash
+python scripts/init_db.py
 ```
 
 이 명령은 `xray_graph_db`에 컬렉션, 그래프, 기본 disease/ROI/finding 노드, 벡터 인덱스를 준비한다.
 
 ### 4.3. CheXpert train frontal 데이터 적재
 
+CheXpert 는 `python scripts/download_chexpert.py --dest ./archive` 로 받는다(런북 §5.2).
 train 데이터 중 frontal AP/PA를 모두 넣는 명령:
 
-```powershell
-python scripts\seed_chexpert.py `
-  --archive "C:\Users\kjbdd\Downloads\archive" `
-  --split train `
-  --frontal-only `
-  --uncertainty ones `
-  --batch 100
+```bash
+export USE_TORCH_EMBEDDING=true
+python scripts/seed_chexpert.py \
+  --archive ./archive \
+  --split train \
+  --frontal-only \
+  --uncertainty ones \
+  --batch 100 \
+  --use-real-model
 ```
 
 현재 스크립트의 `--frontal-only`는 `Frontal/Lateral == Frontal`만 거른다. 이 안에는 `AP`, `PA`가 모두 포함되므로 `--view`를 생략하면 AP/PA가 함께 적재된다.
@@ -162,13 +176,13 @@ python scripts\seed_chexpert.py `
 
 처음 테스트할 때는 전체를 바로 넣지 말고 limit을 걸어 속도와 결과를 확인하는 것을 권장한다.
 
-```powershell
-python scripts\seed_chexpert.py `
-  --archive "C:\Users\kjbdd\Downloads\archive" `
-  --split train `
-  --frontal-only `
-  --limit 1000 `
-  --uncertainty ones `
+```bash
+python scripts/seed_chexpert.py \
+  --archive ./archive \
+  --split train \
+  --frontal-only \
+  --limit 1000 \
+  --uncertainty ones \
   --batch 100
 ```
 
@@ -176,8 +190,8 @@ python scripts\seed_chexpert.py `
 
 CheXpert seed가 끝난 뒤 다시 실행한다.
 
-```powershell
-python scripts\init_db.py
+```bash
+python scripts/init_db.py
 ```
 
 데이터를 넣기 전에 만든 벡터 인덱스는 학습 샘플 부족으로 `not ready`가 될 수 있다. 따라서 seed 이후 재실행해야 의미가 있다.
@@ -196,15 +210,12 @@ python scripts\init_db.py
 
 ### 5.1. 일반 output CSV 적재
 
-```powershell
-cd "C:\Users\kjbdd\OneDrive\바탕 화면\Project\BitComputer\GraphDB\data_normalize"
+```bash
+cd packages/graph-etl
 python -m pip install -r requirements.txt
 
-$env:ARANGO_HOST="localhost"
-$env:ARANGO_PORT="8529"
-$env:ARANGO_USER="root"
-$env:ARANGO_PASSWORD="<YOUR_ARANGO_ROOT_PASSWORD>"
-$env:ARANGO_DATABASE="bitcomputer_graph"
+export ARANGO_HOST=localhost ARANGO_PORT=8529 ARANGO_USER=root ARANGO_DATABASE=bitcomputer_graph
+export ARANGO_PASSWORD="$(grep '^ARANGO_PASSWORD=' ../../infra/.env | cut -d= -f2-)"
 
 python import_to_arango.py --database bitcomputer_graph --batch 1000
 ```
@@ -212,17 +223,18 @@ python import_to_arango.py --database bitcomputer_graph --batch 1000
 기본 입력 디렉터리는 다음이다.
 
 ```text
-GraphDB\data_normalize\output
+packages/graph-etl/output
 ```
 
-필수 CSV가 없으면 먼저 normalize 스크립트를 실행해 `output/*.csv`를 생성해야 한다.
+필수 CSV가 없으면 먼저 `python graph_normalize.py` 를 실행해 `output/*.csv`를 생성해야 한다.
+절차 전문은 [Docs/07-runbook-data-loading.md](Docs/07-runbook-data-loading.md) §4 에 있다.
 
 ### 5.2. train/test split 그래프 적재
 
 train/test용 output을 별도 DB에 넣고 싶으면 아래 스크립트를 쓴다.
 
-```powershell
-cd "C:\Users\kjbdd\OneDrive\바탕 화면\Project\BitComputer\GraphDB\data_normalize"
+```bash
+cd packages/graph-etl
 python import_train_test_to_arango.py --only both --batch 1000
 ```
 
@@ -233,7 +245,7 @@ train -> bitcomputer_graph_train
 test  -> bitcomputer_graph_test
 ```
 
-Spring/처방 추천 서비스가 사용할 DB는 `.env.docker`와 `docker-compose.yml`의 `ARANGO_DATABASE` 값과 맞아야 한다. 현재 기본은 `bitcomputer_graph`다.
+Spring/처방 추천 서비스가 사용할 DB는 `infra/.env` 와 `infra/docker-compose.yml` 의 `ARANGO_DATABASE` 값과 맞아야 한다. 현재 기본은 `bitcomputer_graph`다.
 
 ## 6. 진단서 의사소견 데이터 준비
 
@@ -249,7 +261,7 @@ Spring/처방 추천 서비스가 사용할 DB는 `.env.docker`와 `docker-compo
 
 확인:
 
-```powershell
+```bash
 curl http://localhost:5001/health
 ```
 
@@ -266,7 +278,7 @@ curl http://localhost:5001/health
 3. Spring이 RabbitMQ `validation.prescription.request` queue에 job 메시지 발행
 4. `validation-agent`가 메시지를 소비하고 `RUNNING` 상태 이벤트 발행
 5. ValidationAgent가 `X-ray Result Loader` → `Disease Validator` → `Prescription Validator` → `Pubmed Loader` → `Prescription Finder` 순서로 고정 파이프라인 수행 (모델은 PubMed 질의 생성과 근거 요약에만 쓴다)
-6. `PASS` 또는 최대 반복 횟수 도달 시 structured JSON result 생성
+6. 규칙 기반 최종 판정(`rule_based_finalize`) 후 structured JSON result 생성. 도구 선택 루프가 없으므로 "최대 반복 횟수" 라는 종료 조건도 없다 — 각 단계 앞에서 전역 예산(`VALIDATION_JOB_BUDGET_SECONDS`)만 확인하고, 소진되면 남은 단계를 건너뛰고 지금까지의 관측값으로 마감한다
 7. ValidationAgent가 RabbitMQ `validation.prescription.result` queue에 결과 발행
 8. Spring consumer가 `validation_result`에 결과 JSON을 저장하고 `validation_job`을 `DONE` 또는 `FAILED`로 갱신
 9. 프론트는 `/api/validation-jobs/{jobId}`를 polling하고, 완료되면 검증 완료 팝업과 추천 처방을 표시
@@ -297,13 +309,13 @@ RabbitMQ queue:
 
 헬스 체크:
 
-```powershell
+```bash
 curl http://localhost:8002/health
 ```
 
 검증 결과 조회:
 
-```powershell
+```bash
 curl "http://localhost:8080/api/validation-jobs/{jobId}"
 ```
 
@@ -336,7 +348,7 @@ curl "http://localhost:8080/api/validation-jobs/{jobId}"
 | `VALIDATION_RABBITMQ_REQUEST_QUEUE` | `validation.prescription.request` | 추천/검증 요청 queue |
 | `VALIDATION_RABBITMQ_RESULT_QUEUE` | `validation.prescription.result` | 추천/검증 결과 queue |
 | `LLM_GATEWAY_BASE_URL` | `http://llm-gateway:8003/v1` | ValidationAgent 가 게이트웨이 경유로 LLM 을 호출하는 base URL. 자격증명은 게이트웨이가 가짐 |
-| `LLM_MODEL` | `openai.gpt-5.6-luna` | ValidationAgent tool decider/PubMed 요약용 모델 |
+| `LLM_MODEL` | `gpt-5.6-luna` (`infra/.env.example`) / 환경변수가 없을 때 코드 폴백 `openai.gpt-5.6-luna` | ValidationAgent 의 두 모델 호출(PubMed 질의 생성, 근거 요약)용 모델. 도구 선택 루프는 PR #11 에서 제거됐다 |
 
 검증 에이전트는 DB를 직접 수정하지 않는다. 상병/처방 자동 변경도 하지 않고, 의료진 검토용 결과만 `validation_result`에 저장한다.
 
@@ -346,22 +358,23 @@ curl "http://localhost:8080/api/validation-jobs/{jobId}"
 
 XrayGraphRAG 직접 확인:
 
-```powershell
-curl.exe -X POST http://localhost:8000/infer `
-  -F "image=@C:\Users\kjbdd\Downloads\archive\valid\patient64541\study1\view1_frontal.jpg" `
-  -F "view=AP" `
+```bash
+IMG=$(ls services/xray-rag/archive/valid/*/*/*.jpg | head -1)
+curl -X POST http://localhost:8000/infer \
+  -F "image=@$IMG" \
+  -F "view=AP" \
   -F "topK=10"
 ```
 
 Spring API 경유 확인:
 
-```powershell
-curl.exe -X POST http://localhost:8080/api/radiology/upload-and-analyze `
-  -F "file=@C:\Users\kjbdd\Downloads\archive\valid\patient64541\study1\view1_frontal.jpg" `
-  -F "patientId=1" `
-  -F "employeeId=1" `
-  -F "deptId=1" `
-  -F "entryDate=2026-05-10" `
+```bash
+curl -X POST http://localhost:8080/api/radiology/upload-and-analyze \
+  -F "file=@$IMG" \
+  -F "patientId=1" \
+  -F "employeeId=1" \
+  -F "deptId=1" \
+  -F "entryDate=2026-05-10" \
   -F "view=PA"
 ```
 
@@ -395,65 +408,71 @@ Docker build 시점에 ArangoDB 벡터 인덱싱을 하는 것은 의미가 없�
 
 올바른 순서:
 
-```powershell
-docker compose --env-file .env.docker up -d --build
+```bash
+cd infra && docker compose up -d --build
 
-cd "C:\Users\kjbdd\OneDrive\바탕 화면\Project\BitComputer\XrayGraphRAG"
-.\.venv\Scripts\Activate.ps1
-
-python scripts\init_db.py
-python scripts\seed_chexpert.py --archive "C:\Users\kjbdd\Downloads\archive" --split train --frontal-only --uncertainty ones --batch 100
-python scripts\init_db.py
+cd ../services/xray-rag
+python scripts/init_db.py
+python scripts/seed_chexpert.py --archive ./archive --split train --frontal-only --uncertainty ones --batch 100 --use-real-model
+python scripts/init_db.py
 ```
 
 ## 10. 자주 쓰는 명령 요약
 
+모두 `infra/` 에서 실행한다.
+
 전체 실행:
 
-```powershell
-docker compose --env-file .env.docker up -d
+```bash
+docker compose up -d
 ```
 
 전체 재빌드 후 실행:
 
-```powershell
-docker compose --env-file .env.docker up -d --build
+```bash
+docker compose up -d --build
 ```
 
-MySQL 상병/처방 마스터 적재:
+MySQL 상병/처방 마스터 적재 (`apps/api` 에서):
 
-```powershell
-python .\Back-End\scripts\import_master_codes.py
+```bash
+python scripts/import_master_codes.py
 ```
 
 전체 종료, 데이터 유지:
 
-```powershell
-docker compose --env-file .env.docker down
+```bash
+docker compose down
 ```
 
 전체 종료, 데이터 삭제:
 
-```powershell
-docker compose --env-file .env.docker down -v
+```bash
+docker compose down -v
 ```
 
 상태 확인:
 
-```powershell
-docker compose --env-file .env.docker ps
+```bash
+docker compose ps
 ```
 
 Spring 로그:
 
-```powershell
+```bash
 docker logs -f bit-spring-boot
 ```
 
 검증 에이전트 로그:
 
-```powershell
+```bash
 docker logs -f bit-validation-agent
+```
+
+LLM 게이트웨이 로그:
+
+```bash
+docker logs -f bit-llm-gateway
 ```
 
 RabbitMQ 관리 UI:
@@ -466,7 +485,7 @@ password: guest
 
 XrayGraphRAG 로그:
 
-```powershell
+```bash
 docker logs -f bit-xraygraph
 ```
 
@@ -475,5 +494,5 @@ ArangoDB 웹 UI:
 ```text
 http://localhost:8529
 user: root
-password: .env.docker의 ARANGO_PASSWORD
+password: infra/.env 의 ARANGO_PASSWORD
 ```

@@ -1,5 +1,11 @@
 # AWS Architecture
 
+> **이 문서는 ECS 기반 설계다.** 2026-08-31 에 시작한 실제 구축 계획
+> ([06-infra-build-schedule.md](06-infra-build-schedule.md))은 **EKS** 를 목표로 하고
+> 리전을 `us-west-2` 로 고정했다. 두 문서가 어긋나면 배포 대상 오케스트레이터와
+> 리전은 06 이 최신이며, 이 문서의 부하 특성·데이터 계층·Auto Scaling 지표는
+> 오케스트레이터와 무관하게 그대로 유효하다.
+
 이 문서는 BitComputer를 AWS에 배포할 때 권장하는 Web, WAS, AI 서비스, Redis, DB, RabbitMQ 구조를 정리한다. 목표는 단일 서버 Docker Compose 구조를 운영용 고가용성 구조로 분리하고, Spring Boot WAS와 AI 서비스의 부하 특성에 맞게 독립적으로 확장하는 것이다.
 
 ## 1. 권장 요약
@@ -42,6 +48,7 @@ flowchart TB
       Cert[Certificate API ECS]
       Rx[Prescription API ECS]
       Val[ValidationAgent ECS Worker/API]
+      GW[LLM Gateway ECS<br/>단일 LLM 진입점 / 자격증명 보관]
     end
 
     subgraph PrivateData["Private Data Subnets"]
@@ -71,14 +78,15 @@ flowchart TB
   MQ <--> Val
   Val --> Rx
   Val --> DDB
-  Val --> OpenAI[OpenAI API]
+  Val --> GW
   Val --> PubMed[PubMed API]
 
   Xray --> Arango
   Xray --> S3Data
   Rx --> Arango
-  Cert --> Gemini[Gemini API]
-  Rx --> Gemini
+  Cert --> GW
+  Rx --> GW
+  GW --> Upstream[상류 LLM API<br/>기본 OpenAI, 설정으로 Bedrock]
 
   PrivateApp --> NAT
   NAT --> Internet[External APIs]
@@ -90,6 +98,9 @@ flowchart TB
 - Web은 EC2 Auto Scaling Group으로 배포하고 ALB에서 `/` 트래픽을 Web Target Group으로 보낸다. 정적 asset cache가 필요하면 앞단에 CloudFront를 둔다.
 - Spring Boot WAS와 AI 서비스는 서로 다른 ECS Service로 배포해 병목이 전파되지 않게 한다.
 - ValidationAgent는 HTTP API보다 RabbitMQ worker 성격이 강하므로 queue depth 기반 Auto Scaling을 둔다.
+- **상류 LLM 자격증명은 `llm-gateway` 태스크에만 주입한다.** certificate/prescription/validation
+  태스크는 게이트웨이 base URL 만 알면 되므로, Secrets Manager 접근 권한을 가진 태스크 역할이
+  하나로 줄어든다. Bedrock 을 상류로 고르면 `LLM_BEDROCK_*` 도 이 태스크에만 붙는다.
 - 이미지/PDF/분석 산출물은 컨테이너 volume 대신 S3에 저장한다.
 
 ## 3. 요청 흐름
@@ -195,6 +206,7 @@ AI 서비스는 부하 특성이 서로 다르므로 하나의 큰 인스턴스�
 | `certificate-api` | LLM 외부 API 호출 중심 | Fargate 1~2 vCPU | RPS, 외부 API latency |
 | `prescription-api` | ArangoDB 조회 + LLM 호출 | Fargate 1~2 vCPU | RPS, Arango query latency |
 | `validation-agent` | RabbitMQ consumer, LLM/PubMed I/O 중심 | Fargate worker service | RabbitMQ queue depth |
+| `llm-gateway` | 상류 LLM 프록시. I/O 대기 중심, 상태 없음 | Fargate 0.5~1 vCPU, 최소 2 tasks | 동시 인플라이트 요청, 상류 p95 latency |
 
 ValidationAgent scaling 예시:
 
@@ -211,7 +223,7 @@ flowchart LR
 
 - `validation.prescription.request` queue depth가 task당 5~10개 이상이면 scale out.
 - queue depth가 0으로 10~15분 유지되면 scale in.
-- 외부 LLM rate limit 때문에 무작정 task 수를 늘리지 않는다. OpenAI/Gemini quota에 맞춰 max task를 제한한다.
+- 외부 LLM rate limit 때문에 무작정 task 수를 늘리지 않는다. 상류 quota에 맞춰 max task를 제한한다. 실제 소비량은 게이트웨이의 계측 레코드 한 곳에서 볼 수 있다.
 
 ## 5. 데이터 계층
 
@@ -339,9 +351,10 @@ flowchart TB
 |---|---|---|---|
 | Spring Boot WAS | CPU > 60%, p95 latency > 800ms, RequestCountPerTarget 증가 | CPU < 30%, latency 안정 | RDS connection 수 |
 | Web EC2 | CPU > 50~60%, RequestCountPerTarget 증가, p95 latency 증가 | CPU < 25~30%, latency 안정 | SSR 사용 여부, static cache hit |
-| ValidationAgent | request queue depth/task > 5~10, oldest message age 증가 | queue depth 0 지속 | OpenAI/PubMed rate limit |
-| Prescription API | RPS, p95 latency, CPU | latency 안정 | ArangoDB query capacity, Gemini quota |
-| Certificate API | RPS, p95 latency | latency 안정 | Gemini quota |
+| ValidationAgent | request queue depth/task > 5~10, oldest message age 증가 | queue depth 0 지속 | 상류 LLM / PubMed rate limit |
+| Prescription API | RPS, p95 latency, CPU | latency 안정 | ArangoDB query capacity, 상류 LLM quota |
+| Certificate API | RPS, p95 latency | latency 안정 | 상류 LLM quota |
+| LLM Gateway | 인플라이트 요청 수, 상류 p95 latency | 사용률 안정 | 상류 rate limit — 여기가 전체 LLM 트래픽의 병목 지점이다 |
 | XrayGraphRAG | CPU/GPU, p95 latency | 사용률 안정 | 모델 로딩 시간, GPU 비용 |
 | Flask Radiology | CPU, memory, 처리 시간 | 사용률 안정 | 이미지 크기와 동시 처리량 |
 

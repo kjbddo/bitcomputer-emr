@@ -152,7 +152,7 @@ sequenceDiagram
   participant FE as MedicalCertificate
   participant Spring as Spring Boot
   participant Cert as Certificate API
-  participant Gemini as Gemini
+  participant GW as LLM Gateway
   participant DB as MySQL
   participant Files as Certificate Storage
 
@@ -161,8 +161,8 @@ sequenceDiagram
   FE->>Spring: POST /api/agent/document/generate
   Spring->>DB: history, patient, disease, diagnose 조회
   Spring->>Cert: POST /api/ai/document/generate
-  Cert->>Gemini: 진단서 소견 생성
-  Gemini-->>Cert: 치료 내용 및 향후 치료 소견
+  Cert->>GW: 진단서 소견 생성 (POST /v1/chat/completions)
+  GW-->>Cert: 치료 내용 및 향후 치료 소견
   Cert-->>Spring: medicalCertificate
   Spring-->>FE: medicalCertificate + token
   FE-->>User: 미리보기 모달
@@ -199,7 +199,7 @@ flowchart TD
   B -->|예| C[AI 결과 반환]
   B -->|아니오| D{기능별 폴백 존재?}
   D -->|진단서| E[백엔드 기본 소견 템플릿 반환]
-  D -->|검증 에이전트| F[규칙 기반 tool decision / rule finalize]
+  D -->|검증 에이전트| F[규칙 기반 최종 판정<br/>rule_based_finalize]
   D -->|XrayGraphRAG| G[Mock 모델 또는 brute-force 검색 fallback]
   D -->|없음| H[오류 응답]
 ```
