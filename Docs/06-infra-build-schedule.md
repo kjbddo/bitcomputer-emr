@@ -24,8 +24,8 @@ DR 시 무엇이 넘어가고 무엇이 안 넘어가는지가 이 프로젝트�
 | `apps/api` (Spring Boot) | ○ | ○ | 3-tier 의 app |
 | MySQL | ○ RDS | ○ Cloud SQL | 3-tier 의 data |
 | Redis | ○ ElastiCache | ○ Memorystore | 세션·캐시 |
-| `services/prescription` | ○ | **×** | AI |
-| `services/certificate` | ○ | **×** | AI |
+| `services/prescription` | ○ | **×** | AI. `prescription-api` 와 `certificate-api` 두 컨테이너가 이 한 컨텍스트에서 나온다(별도 `services/certificate` 디렉터리는 없다) |
+| `services/llm-gateway` | ○ | **×** | AI. 단일 LLM 진입점 — 상류 자격증명이 여기에만 있다 |
 | `services/validation-agent` | ○ | **×** | AI |
 | `services/xray-rag` | ○ | **×** | AI |
 | `services/radiology-legacy` | ○ | **×** | AI |

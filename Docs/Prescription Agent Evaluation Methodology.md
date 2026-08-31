@@ -1,5 +1,11 @@
 # 처방 추천 에이전트 평가 방법론
 
+> **2026-06-06 실행 기록이다.** 측정값은 그 시점의 것이고 그대로 둔다. 이후 모노레포
+> 재구성으로 경로가 바뀌었고(본문은 현재 경로로 고쳤다), PR #13 이후 추천 순위를
+> 조회가 정하고 모델은 사유·용법만 쓴다. §5·§6 이 측정한 anchoring/환각 지표는
+> **그때의 아키텍처에 대한 값**이며 재측정하지 않았다. 자세한 것은
+> [Prescription Agent Evaluation.md](./Prescription%20Agent%20Evaluation.md) 머리말을 본다.
+
 ## 1. 평가 개요
 
 처방 추천 에이전트 평가는 단순히 추천 결과가 “그럴듯한지”만 확인하는 것이 아니라, 실제 서비스 관점에서 다음 세 가지 축으로 나누어 수행했다.
@@ -10,7 +16,7 @@
 | 답변 퀄리티 | Top-3 처방 추천 결과가 입력 데이터와 DB 조회 근거에 잘 연결되어 있는지 확인 | Average Overall Score |
 | 할루시네이션 레이트 | 근거에 없는 약물명, 처방코드, 용량, 환자정보 등을 생성했는지 확인 | Hallucination Rate |
 
-평가 대상은 `GraphDB/langchain_graph_qa/prescription_api.py`의 `/api/agent/prescription/recommend` 엔드포인트다. 이 API는 ReAct Agent처럼 LLM이 자유롭게 tool을 선택하는 구조가 아니라, 입력 조건에 따라 ArangoDB 조회와 LLM 생성을 수행하는 조건부 파이프라인이다.
+평가 대상은 `services/prescription/prescription_api.py`의 `/api/agent/prescription/recommend` 엔드포인트다. 이 API는 ReAct Agent처럼 LLM이 자유롭게 tool을 선택하는 구조가 아니라, 입력 조건에 따라 ArangoDB 조회와 LLM 생성을 수행하는 조건부 파이프라인이다.
 
 따라서 여기서 말하는 tool은 LangChain tool이 아니라, 평가를 위해 관찰 가능한 파이프라인 단계다.
 
@@ -24,7 +30,7 @@
 
 | 항목 | 내용 |
 |---|---|
-| 파일 | `GraphDB/langchain_graph_qa/evals/scenarios/llm_prescription_eval_scenarios.jsonl` |
+| 파일 | `services/prescription/evals/scenarios/llm_prescription_eval_scenarios.jsonl` |
 | 생성 방식 | OpenAI `gpt-4o-mini` 기반 LLM 생성 |
 | 전체 케이스 수 | 50개 |
 | 최종 성공 케이스 | 50개 |
@@ -59,7 +65,7 @@
 
 ## 3. 평가 실행 흐름
 
-평가는 `GraphDB/langchain_graph_qa/evals/run_eval.py`에서 수행했다.
+평가는 `services/prescription/evals/run_eval.py`에서 수행했다.
 
 ```mermaid
 sequenceDiagram
@@ -83,16 +89,20 @@ sequenceDiagram
 
 정식 평가 실행 명령은 다음과 같다.
 
-```powershell
-python .\evals\run_eval.py `
-  --scenarios .\evals\scenarios\llm_prescription_eval_scenarios.jsonl `
-  --api-url http://localhost:8001 `
-  --output-dir .\evals\results `
-  --judge-provider openai `
-  --openai-judge-model gpt-4o-mini `
-  --agent-model gpt-4o-mini `
+```bash
+cd services/prescription
+python evals/run_eval.py \
+  --scenarios evals/scenarios/llm_prescription_eval_scenarios.jsonl \
+  --api-url http://localhost:8001 \
+  --output-dir evals/results \
+  --judge-provider openai \
+  --openai-judge-model gpt-4o-mini \
+  --agent-model gpt-4o-mini \
   --agent-temperature 0
 ```
+
+> `--agent-model` / `--agent-temperature` 는 현재 운영 경로에서 무시된다 — prescription-api 는
+> 게이트웨이에 항상 `LLM_MODEL` 을 싣고, 무시했다는 사실만 `toolTrace` 에 남긴다.
 
 ---
 

@@ -124,10 +124,17 @@ flowchart TD
 | `GET` | `/api/agent/document/{historyId}` | 진단서 폼용 환자/진료 상세 조회 | MySQL |
 | `GET` | `/api/agent/document/{historyId}/past-prescriptions` | 과거 처방 조회 | MySQL |
 | `GET` | `/api/agent/document/search` | 진단서 목록/이력 검색 | MySQL, `medical_certificate` |
-| `POST` | `/api/agent/document/generate` | 실제 진료 이력 기반 소견 생성 | Certificate API -> Gemini |
-| `POST` | `/api/agent/document/generate-test` | 테스트 입력 기반 소견 생성 | Certificate API -> Gemini |
+| `POST` | `/api/agent/document/generate` | 실제 진료 이력 기반 소견 생성 | Certificate API -> LLM Gateway |
+| `POST` | `/api/agent/document/generate-test` | 테스트 입력 기반 소견 생성 | Certificate API -> LLM Gateway |
 | `POST` | `/api/agent/document/save` | 진단서 PDF와 소견 저장 | `medical_certificate`, certificate storage |
-| `POST` | `/api/agent/document/evaluate` | 진단서 문장 평가 | Gemini evaluation |
+| `POST` | `/api/agent/document/evaluate` | 진단서 문장 평가 (**현재 동작하지 않는다** — 아래 주석) | `CertificateEvaluationServiceImpl` -> Gemini 직접 호출 |
+
+> **`/api/agent/document/evaluate` 는 이 시스템에서 유일하게 게이트웨이를 거치지 않는
+> LLM 경로이며, 현재 죽어 있다.** `CertificateEvaluationServiceImpl` 이
+> `generativelanguage.googleapis.com` 을 직접 호출하고 `GEMINI_API_KEY` 를 따로
+> 요구하는데, 그 키가 폐기됐다. 이 엔드포인트를 쓰는 화면(`apps/web/src/app/evaluation`)
+> 은 어디에서도 링크되지 않는다 — 벤치마크용으로 남은 코드다. 다른 AI 기능은 전부
+> 게이트웨이 경유라 영향이 없다.
 
 `/save`는 `multipart/form-data`를 사용한다.
 
@@ -180,10 +187,20 @@ flowchart TD
 
 | Method | Path | 역할 |
 |---|---|---|
-| `GET` | `/health` | 헬스 체크, OpenAI 설정 확인 |
+| `GET` | `/health` | 헬스 체크. `llm_gateway_configured`, `default_model`, `prescription_agent`, `rabbitmq_enabled` 를 반환한다 |
 | `POST` | `/api/agent/validation/run` | 동기 검증 실행 |
 
 RabbitMQ consumer는 애플리케이션 시작 시 백그라운드에서 실행된다.
+
+### 8.6 LLM Gateway
+
+| Method | Path | 역할 |
+|---|---|---|
+| `GET` | `/health` | 헬스 체크 |
+| `POST` | `/v1/chat/completions` | OpenAI 호환 채팅 완성. 상류 제공자(`LLM_UPSTREAM_PROVIDER`: `openai` 기본, `bedrock` 선택)와 자격증명은 이 서비스만 안다 |
+
+certificate-api / prescription-api / validation-agent 는 상류 API 를 직접 부르지 않고
+`LLM_GATEWAY_BASE_URL`(`http://llm-gateway:8003/v1`)만 안다.
 
 ## 9. 엔드포인트별 외부 도구 매핑
 
@@ -196,10 +213,12 @@ flowchart LR
   RMQ --> Val["ValidationAgent"]
   Val --> RxApi["Prescription API"]
   Val --> PubMed["PubMed API"]
-  Val --> OpenAI["OpenAI"]
+  Val --> GW["llm-gateway"]
 
   DocGen["/api/agent/document/generate"] --> Cert["Certificate API"]
-  Cert --> Gemini["Gemini"]
+  Cert --> GW
+  RxApi --> GW
+  GW --> Upstream["상류 LLM (기본 OpenAI)"]
 
   RxApi --> Arango["ArangoDB"]
   Xray --> Arango

@@ -118,70 +118,79 @@ flowchart LR
 | `ARANGO_DATABASE` | Spring, Prescription API | 처방 그래프 DB |
 | `XRAY_ARANGO_DATABASE` | XrayGraphRAG | X-ray 그래프 DB |
 | `LLM_GATEWAY_BASE_URL` | Certificate API, Prescription API, ValidationAgent | 게이트웨이 경유 LLM base URL, 기본 `http://llm-gateway:8003/v1` |
-| `LLM_MODEL` | Certificate API, Prescription API, ValidationAgent, LLM Gateway | 게이트웨이에 실릴 모델, 기본 `openai.gpt-5.6-luna` |
-| `LLM_API_KEY` | LLM Gateway | OpenAI API 키. 이 서비스에만 존재한다 |
-| `LLM_TIMEOUT_SECONDS` | LLM Gateway | 상류(OpenAI) 호출 1회 시도당 타임아웃(초), 기본 45 |
+| `LLM_MODEL` | Certificate API, Prescription API, ValidationAgent, LLM Gateway | 게이트웨이에 실릴 모델. `infra/.env.example` 이 주는 값은 `gpt-5.6-luna` 이고, 환경변수가 아예 없을 때 파이썬 쪽 폴백은 `openai.gpt-5.6-luna` 다 |
+| `LLM_PROVIDER` | Certificate API, Prescription API, ValidationAgent | `real` \| `stub`. 호출 서비스가 게이트웨이를 쓸지 결정론적 내부 stub 을 쓸지. 상류 제공자와는 다른 축이다 |
+| `LLM_API_KEY` | LLM Gateway | 상류 API 키. 이 서비스에만 존재한다 |
+| `LLM_UPSTREAM_BASE_URL` | LLM Gateway | 상류 base URL, 기본 `https://api.openai.com/v1` |
+| `LLM_UPSTREAM_PROVIDER` | LLM Gateway | `openai`(기본) \| `bedrock`. 게이트웨이가 어느 회사 API 를 치는가. `bedrock` 을 고르면 `LLM_BEDROCK_*` 가 함께 필요하다. **주의: 현재 `infra/docker-compose.yml` 의 `llm-gateway` 블록이 이 변수와 `LLM_BEDROCK_*` 를 컨테이너에 실어주지 않는다** — `.env` 에만 넣으면 컨테이너에서는 여전히 openai 로 뜬다 |
+| `LLM_TIMEOUT_SECONDS` | LLM Gateway | 상류 호출 1회 시도당 타임아웃(초), 기본 45 |
 | `LLM_GATEWAY_TIMEOUT_SECONDS` | Certificate API, Prescription API | 게이트웨이 응답을 기다리는 총 시간(초), 기본 180. `LLM_TIMEOUT_SECONDS`(게이트웨이 1회 시도당)와 이름이 다르다 |
 | `VALIDATION_LLM_TIMEOUT_SECONDS` | ValidationAgent | 게이트웨이 호출 타임아웃(초), 기본 180. RabbitMQ 컨슈머 스레드가 무기한 멈추지 않도록 명시한다 |
 | `VALIDATION_JOB_BUDGET_SECONDS` | ValidationAgent | 검증 작업 하나의 전역 예산(초), 기본 110. RabbitMQ 하트비트 주기의 두 배(=브로커가 연결을 닫는 120초)보다 작아야 한다. 초과하면 남은 단계를 건너뛰고 규칙 기반 판정으로 마감하며, 건너뛴 단계를 `reasoningTrace` 에 남긴다 |
 | `VALIDATION_PUBMED_MAX_QUERY_ATTEMPTS` | ValidationAgent | PubMed 검색 재시도 상한, 기본 4 |
 | `PRESCRIPTION_AGENT_TIMEOUT_SECONDS` | ValidationAgent | Prescription API 호출(처방 RAG 조회) 타임아웃(초), 기본 180 |
-| `GEMINI_API_KEY` | Spring | 진단서 NLI 평가(`CertificateEvaluationServiceImpl`, `/api/agent/document/evaluate`)에 쓰는 자격증명. 아직 Gemini |
+| `GEMINI_API_KEY` | Spring | 진단서 NLI 평가(`CertificateEvaluationServiceImpl`, `/api/agent/document/evaluate`)에 쓰던 자격증명. **이 경로는 현재 죽어 있다** — 키가 폐기됐고, 이 엔드포인트를 쓰는 `/evaluation` 화면은 어디에서도 링크되지 않는다. 게이트웨이를 거치지 않는 유일한 LLM 경로이기도 하다 |
 | `NEXT_PUBLIC_API_BASE_URL` | Front-End | Spring API base URL |
 | `XRAY_API_DEFAULT_VIEW` | Spring | 기본 X-ray 촬영 방향 |
 
 ## 6. 실행과 종료
 
-루트 디렉터리:
+compose 파일과 `.env` 는 `infra/` 안에 있다. 아래 명령은 전부 그 디렉터리 기준이며,
+`--env-file` 을 따로 줄 필요가 없다 — compose 가 같은 디렉터리의 `.env` 를 자동으로 읽는다.
 
-```powershell
-cd "C:\Users\kjbdd\OneDrive\바탕 화면\Project\BitComputer"
+```bash
+cd infra
 ```
 
 전체 빌드 후 실행:
 
-```powershell
-docker compose --env-file .env.docker up -d --build
+```bash
+docker compose up -d --build
 ```
 
 기존 이미지로 실행:
 
-```powershell
-docker compose --env-file .env.docker up -d
+```bash
+docker compose up -d
 ```
 
 특정 서비스만 재빌드:
 
-```powershell
-docker compose --env-file .env.docker up -d --build frontend
-docker compose --env-file .env.docker up -d --build spring-boot
-docker compose --env-file .env.docker up -d --build validation-agent
-docker compose --env-file .env.docker up -d --build certificate-api
+```bash
+docker compose up -d --build frontend
+docker compose up -d --build spring-boot
+docker compose up -d --build validation-agent
+docker compose up -d --build certificate-api prescription-api
 ```
+
+> `certificate-api` 와 `prescription-api` 는 같은 컨텍스트(`services/prescription`)에서
+> 나오는 별개 이미지다. 그 디렉터리를 고쳤으면 둘 다 다시 빌드한다
+> ([08-runbook-container-images.md](08-runbook-container-images.md) §1).
 
 데이터 유지 종료:
 
-```powershell
-docker compose --env-file .env.docker down
+```bash
+docker compose down
 ```
 
 데이터까지 삭제:
 
-```powershell
-docker compose --env-file .env.docker down -v
+```bash
+docker compose down -v
 ```
 
 `-v`를 붙이면 MySQL, ArangoDB, RabbitMQ 등 Docker volume이 삭제된다.
 
 ## 7. 상태 확인
 
-```powershell
-docker compose --env-file .env.docker ps
+```bash
+cd infra && docker compose ps
 curl http://localhost:8080/actuator/health
 curl http://localhost:8000/health
 curl http://localhost:5001/health
 curl http://localhost:8001/health
 curl http://localhost:8002/health
+curl http://localhost:8003/health
 ```
 
 RabbitMQ 관리 UI:
@@ -197,17 +206,18 @@ ArangoDB 웹 UI:
 ```text
 http://localhost:8529
 user: root
-password: .env.docker의 ARANGO_PASSWORD
+password: infra/.env 의 ARANGO_PASSWORD
 ```
 
 ## 8. 로그 확인
 
-```powershell
+```bash
 docker logs -f bit-spring-boot
 docker logs -f bit-frontend
 docker logs -f bit-validation-agent
 docker logs -f bit-prescription-api
 docker logs -f bit-certificate-api
+docker logs -f bit-llm-gateway
 docker logs -f bit-xraygraph
 docker logs -f bit-flask-radiology
 ```
@@ -245,4 +255,4 @@ flowchart TD
 - ValidationAgent는 DB를 직접 수정하지 않고 결과만 RabbitMQ로 보낸다.
 - 진단서 PDF는 브라우저에서 생성한 뒤 Spring에 업로드해 저장한다.
 - `docker compose down`은 데이터를 지우지 않는다. 디스크 용량 회수가 필요하면 volume 삭제 여부를 신중히 결정해야 한다.
-- Gemini/OpenAI quota 문제가 발생하면 AI 생성/추천/요약 품질이 폴백 경로로 낮아질 수 있다.
+- 상류 LLM quota 문제가 발생하면 AI 생성/추천/요약 품질이 폴백 경로로 낮아질 수 있다. 실제로 어느 제공자가 응답했는지는 설정값이 아니라 게이트웨이의 계측 레코드에서 확인한다.

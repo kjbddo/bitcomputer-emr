@@ -1,6 +1,6 @@
 # 전체 시스템 구조
 
-BitComputer는 병원 진료 업무 UI, Spring Boot 업무 API, 여러 Python AI 서비스, MySQL/ArangoDB/RabbitMQ/Redis 인프라로 구성된다. 전체 실행은 루트의 `docker-compose.yml`이 기준이다.
+BitComputer는 병원 진료 업무 UI, Spring Boot 업무 API, 여러 Python AI 서비스, MySQL/ArangoDB/RabbitMQ/Redis 인프라로 구성된다. 전체 실행은 `infra/docker-compose.yml`이 기준이다.
 
 ## 1. 서비스 구성
 
@@ -14,8 +14,9 @@ BitComputer는 병원 진료 업무 UI, Spring Boot 업무 API, 여러 Python AI
 | ArangoDB | `bit-arangodb` | 8529 | 처방 그래프, XrayGraphRAG 그래프/벡터 저장소 |
 | XrayGraphRAG | `bit-xraygraph` | 8000 | X-ray 유사 사례 검색, 질병 후보 추론, 히트맵 |
 | Flask Radiology | `bit-flask-radiology` | 5000 | 기존 X-ray 이상 탐지 엔진 |
-| Certificate API | `bit-certificate-api` | 5001 | Gemini 기반 진단서 소견 문장 생성 |
-| Prescription API | `bit-prescription-api` | 8001 | ArangoDB + Gemini 기반 처방 추천 |
+| Certificate API | `bit-certificate-api` | 5001 | LLM 게이트웨이 경유 진단서 소견 문장 생성 |
+| Prescription API | `bit-prescription-api` | 8001 | ArangoDB 조회로 순위를 정하고, LLM 게이트웨이 경유 모델이 사유·용법을 쓴다 |
+| LLM Gateway | `bit-llm-gateway` | 8003 | 모든 서비스의 단일 LLM 진입점. 상류 자격증명은 여기에만 있다 |
 | ValidationAgent | `bit-validation-agent` | 8002 | 고정 파이프라인 기반 상병/처방/X-ray/PubMed 검증 (모델 호출은 PubMed 질의 생성·요약 2회) |
 
 ## 2. 컨텍스트 다이어그램
@@ -46,9 +47,13 @@ flowchart TB
     Images[("Image / PDF Volumes")]
   end
 
+  subgraph Gate["LLM Gateway"]
+    GW["llm-gateway<br/>단일 LLM 진입점 / 자격증명 보관"]
+  end
+
   subgraph External["External APIs"]
-    Gemini["Google Gemini"]
-    OpenAI["OpenAI"]
+    OpenAI["OpenAI<br/>(기본 상류)"]
+    Bedrock["Amazon Bedrock<br/>(LLM_UPSTREAM_PROVIDER=bedrock 일 때)"]
     PubMed["NCBI PubMed"]
   end
 
@@ -66,15 +71,20 @@ flowchart TB
   Rabbit <--> Val
   Val --> Rx
   Val --> PubMed
-  Val --> OpenAI
 
   Xray --> Arango
   Xray --> Images
   Rx --> Arango
 
-  Cert --> Gemini
-  Rx --> Gemini
+  Val --> GW
+  Cert --> GW
+  Rx --> GW
+  GW --> OpenAI
+  GW -. 설정으로 교체 .-> Bedrock
 ```
+
+XrayGraphRAG 는 LLM 을 쓰지 않는다. 나머지 세 AI 서비스는 상류 API 를 직접 부르지
+않고 게이트웨이만 안다 — API 키는 `llm-gateway` 컨테이너에만 존재한다.
 
 ## 3. Docker Compose 의존성
 
@@ -84,6 +94,9 @@ flowchart LR
   Redis[redis] --> Spring
   Rabbit[rabbitmq] --> Spring
   Rabbit --> Val[validation-agent]
+  GW[llm-gateway] --> Cert
+  GW --> Rx
+  GW --> Val
   Arango[arangodb] --> Init[arango-init]
   Arango --> Xray[xraygraph]
   Init --> Xray
@@ -101,14 +114,21 @@ flowchart LR
 
 ## 4. 저장소 디렉터리 역할
 
+> 이 표의 경로는 모노레포 재구성으로 전부 바뀌었다. 아래가 현재 경로다.
+> 옛 이름(`Front-End`, `Back-End`, `GraphDB/langchain_graph_qa`, `ValidationAgent`,
+> `XrayGraphRAG`, `AI_BackEnd`)은 저장소에 더 이상 존재하지 않는다.
+
 | 경로 | 역할 |
 |---|---|
-| `Front-End` | Next.js UI, 대시보드, 진료실, 진단서 화면, API 클라이언트 |
-| `Back-End` | Spring Boot 업무 API, JPA 엔티티/리포지토리/서비스/컨트롤러 |
-| `GraphDB/langchain_graph_qa` | 처방 추천 API, 진단서 소견 생성 API, ArangoDB 질의 코드 |
-| `ValidationAgent` | RabbitMQ consumer + 고정 순서 검증 파이프라인 |
-| `XrayGraphRAG` | X-ray 그래프 RAG, ArangoDB 벡터/그래프 기반 추론 |
-| `AI_BackEnd` | 기존 Flask 기반 X-ray 이상 탐지 |
+| `apps/web` | Next.js UI, 대시보드, 진료실, 진단서 화면, API 클라이언트 |
+| `apps/api` | Spring Boot 업무 API, JPA 엔티티/리포지토리/서비스/컨트롤러 |
+| `services/prescription` | 처방 추천 API, 진단서 소견 생성 API, ArangoDB 질의 코드 (두 컨테이너가 같은 이미지에서 나온다) |
+| `services/validation-agent` | RabbitMQ consumer + 고정 순서 검증 파이프라인 |
+| `services/llm-gateway` | 단일 LLM 진입점. 상류 제공자 선택·재시도·계측 |
+| `services/xray-rag` | X-ray 그래프 RAG, ArangoDB 벡터/그래프 기반 추론 |
+| `services/radiology-legacy` | 기존 Flask 기반 X-ray 이상 탐지 (SQUID 가중치도 여기 있다) |
+| `packages/graph-etl` | 처방 그래프 CSV 생성과 ArangoDB 적재 스크립트 |
+| `infra` | `docker-compose.yml`, `.env` / `.env.example` |
 | `Docs` | 프로젝트 구조 및 설계 문서 |
 
 ## 5. 계층별 책임
@@ -120,7 +140,7 @@ flowchart TD
   API --> Async["RabbitMQ<br/>장기 검증 작업 분리"]
   API --> AI["Python AI Services<br/>추론/추천/소견/검증"]
   AI --> Graph["ArangoDB<br/>처방 그래프, X-ray 그래프/벡터"]
-  AI --> LLM["LLM / External APIs<br/>Gemini, OpenAI, PubMed"]
+  AI --> LLM["llm-gateway -> 상류 LLM(기본 OpenAI)<br/>및 PubMed"]
 ```
 
 - Front-End는 화면 상태와 사용자 이벤트를 관리한다.

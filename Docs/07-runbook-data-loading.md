@@ -500,6 +500,6 @@ docker images --format "{{.Repository}}\t{{.CreatedAt}}" | grep "^infra-"
 
 **`docker compose down` 은 데이터를 지우지 않는다.** 볼륨을 지우면 이 런북을 §3 부터 전부 다시 돌려야 한다.
 
-**진단서 평가(`/api/agent/document/evaluate`)는 게이트웨이를 거치지 않는다.** `CertificateEvaluationServiceImpl` 이 Gemini 를 직접 호출하며 `GEMINI_API_KEY` 를 따로 요구한다. `.env` 에 없으면 이 기능만 실패한다. 다른 AI 기능은 전부 게이트웨이 경유라 영향 없다.
+**진단서 평가(`/api/agent/document/evaluate`)는 게이트웨이를 거치지 않으며, 지금은 죽어 있다.** `CertificateEvaluationServiceImpl` 이 Gemini 를 직접 호출하며 `GEMINI_API_KEY` 를 따로 요구하는데 그 키가 폐기됐다. 이 엔드포인트를 쓰는 화면(`apps/web/src/app/evaluation`)은 어디에서도 링크되지 않으므로 적재 검증 경로에는 영향이 없다. 다른 AI 기능은 전부 게이트웨이 경유다.
 
 **모든 배지가 "미검증" 이라고 검증층을 의심하기 전에** §4.3 의 상병코드부터 확인한다. 그래프 밖의 상병이면 검증층은 정상 동작 중이며 근거가 없다고 정직하게 말하는 것이다.

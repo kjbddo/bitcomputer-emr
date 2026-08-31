@@ -4,13 +4,14 @@ BitComputer의 AI 기능은 하나의 모델에 몰려 있지 않고, 기능별 
 
 ## 1. AI 서비스 요약
 
-| 서비스 | 기술 | 주요 역할 | LLM |
+| 서비스(소스 경로) | 기술 | 주요 역할 | LLM |
 |---|---|---|---|
-| `XrayGraphRAG` | FastAPI, ArangoDB, vector search | X-ray 유사 사례 검색, 상병 후보 추론, 히트맵 생성 | 없음 |
-| `AI_BackEnd` | Flask, PyTorch | 기존 X-ray 이상 탐지 | 없음 |
-| `certificate-api` | FastAPI, LangChain | 진단서 의사소견 생성 | Gemini |
-| `prescription-api` | FastAPI, ArangoDB, LangChain | 그래프 기반 처방 추천 | Gemini |
-| `validation-agent` | FastAPI, RabbitMQ, 고정 파이프라인 + 모델 호출 2회 | 상병/처방/X-ray/PubMed 검증 및 추천 후보 조합 | OpenAI |
+| `xray-rag`(`services/xray-rag`) | FastAPI, ArangoDB, vector search | X-ray 유사 사례 검색, 상병 후보 추론, 히트맵 생성 | 없음 |
+| `radiology-legacy`(`services/radiology-legacy`) | Flask, PyTorch | 기존 X-ray 이상 탐지 | 없음 |
+| `llm-gateway`(`services/llm-gateway`) | FastAPI, httpx | 단일 LLM 진입점. 상류 제공자 선택·재시도·비용 계측 | 상류 자체 (기본 OpenAI) |
+| `certificate-api`(`services/prescription`) | FastAPI, LangChain | 진단서 의사소견 생성 | llm-gateway 경유 |
+| `prescription-api`(`services/prescription`) | FastAPI, ArangoDB, LangChain | 그래프 조회가 순위를 정하고 모델이 사유·용법을 쓴다 | llm-gateway 경유 |
+| `validation-agent`(`services/validation-agent`) | FastAPI, RabbitMQ, 고정 파이프라인 + 모델 호출 2회 | 상병/처방/X-ray/PubMed 검증 및 추천 후보 조합 | llm-gateway 경유 |
 
 ## 2. XrayGraphRAG
 
@@ -69,19 +70,31 @@ flowchart TD
 
 ## 4. Prescription API
 
-Prescription API는 ArangoDB 그래프 질의 결과와 Gemini를 결합해 처방 후보를 만든다.
+Prescription API는 ArangoDB 그래프 질의 결과와 게이트웨이 경유 모델을 결합해 처방 후보를
+만든다. **순위는 조회가 정하고 모델은 설명만 쓴다**(PR #13, 설계 §3.1). 응답 항목의
+`name` 과 `prescription_code` 는 조회가 확정한 slate 에서 그대로 오고, 모델 출력에서
+가져오는 것은 순위별 `reason` 과 `dosage` 뿐이다. **조회가 뒷받침하지 않는 순위를 모델
+문장으로 채우지 않는다** — 그 자리를 무엇으로 처리하는지(자리표시자 행이냐, 애초에
+그 순위를 내지 않느냐)는 `services/prescription/ranking.py` 를 본다.
 
 ```mermaid
 flowchart TD
   A[추천 요청] --> B[방문/환자 컨텍스트 확인]
-  B --> C[ArangoDB 처방 그래프 조회]
+  B --> C[ArangoDB 처방 그래프 조회 top_rx]
   C --> D[상병 코드 기반 코호트 처방 빈도 조회]
   D --> E[confidence score 조회]
-  E --> F[프롬프트 구성]
-  F --> G[Gemini 호출]
+  E --> R[약제 코드 필터 + confidence 내림차순 정렬<br/>ranking.build_ranked_slate]
+  R --> F[프롬프트 구성 - 확정된 slate 를 함께 실어 보낸다]
+  F --> G[llm-gateway 호출]
   G --> H[JSON 파싱]
-  H --> I[Top-N 처방 후보 반환]
+  H --> I[slate 로 항목 조립<br/>모델에서는 reason·dosage 만 취한다]
+  I --> V[verification 대조 + 신기능 금기 관문]
+  V --> O[PrescriptionRecommendResponse]
 ```
+
+관련 순수 모듈: `ranking.py`(순위), `medication_codes.py`(약제 코드 판별),
+`feedback_adjustment.py`(피드백 보정 산술), `renal_gate.py`(신기능 금기 관문),
+`verification.py`(응답이 조회 근거를 벗어나지 않았는지 대조).
 
 ### 4.1 입력 컨텍스트
 
@@ -208,7 +221,7 @@ flowchart TD
   A[Spring: 진료 데이터 집계] --> B[Certificate API 요청]
   B --> C[진단서 종류 확인<br/>GENERAL / MILITARY]
   C --> D[프롬프트 생성]
-  D --> E[Gemini 호출]
+  D --> E[llm-gateway 호출]
   E --> F[소견 텍스트 반환]
   F --> G[Spring 응답]
   G --> H[Front-End 미리보기 / 적용]
@@ -315,12 +328,16 @@ flowchart LR
   RMQ --> Val[ValidationAgent]
   Val -- 추천 조회 --> Rx
   Val --> PubMed[PubMed]
-  Val --> OpenAI[OpenAI]
-  Rx --> Gemini[Gemini]
-  Cert --> Gemini
+  Val --> GW[llm-gateway]
+  Rx --> GW
+  Cert --> GW
+  GW --> Upstream[상류 LLM<br/>기본 OpenAI, 설정으로 Bedrock]
   Rx --> Arango[ArangoDB]
   Xray --> Arango
 ```
+
+자격증명은 `llm-gateway` 컨테이너에만 있다. 세 호출 서비스는 상류가 누구인지 모르고
+`LLM_GATEWAY_BASE_URL` 만 안다.
 
 ## 8. 의료 안전성 원칙
 
