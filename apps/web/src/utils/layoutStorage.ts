@@ -144,6 +144,20 @@ export function toTrackList(tracks: Track[], min: number): string {
  * 두 트랙이 크기를 주고받되, `1fr`(null) 트랙은 값을 갖지 않으므로 건드리지
  * 않는다 — 남는 공간을 흡수하는 것이 그 역할이다. 그래서 이웃이 `1fr` 이면
  * 이쪽 트랙만 바뀐다.
+ *
+ * 경계 양쪽이 둘 다 `1fr` 이면 — 이 경계를 끄는 것이야말로 사용자가 가장
+ * 자주 하는 동작이므로 no-op 으로 두지 않는다. `1fr` 트랙은 남는 공간을
+ * 정확히 균등 분할하므로 실측 없이 물질화(materialize)할 수 있다:
+ * `each = (containerPx - 고정 트랙 합) / null 트랙 개수`. 물질화한 뒤에는
+ * 기존 분기(아래)로 그대로 흘려보낸다 — 로직을 복제하지 않는다.
+ *
+ * 단, 이 축에는 `null` 이 최소 하나 남아야 한다는 불변식이 있다
+ * (`matchesShape` 가 `some(t => t === null)` 로 검사한다 — 창 크기 변경 시
+ * 흡수할 트랙이 없으면 레이아웃이 무너지기 때문). 그래서 `a`·`b` 를 둘 다
+ * 물질화했을 때 이 축에 다른 `null` 이 하나도 안 남으면(2트랙 축이 정확히
+ * 그 경우다), `b` 는 물질화하지 않고 `1fr` 로 남긴다 — 그러면 "a 는 고정,
+ * 이웃은 1fr" 경로가 그대로 처리해, a 를 키우면 b 가 줄어드는 기대대로
+ * 동작한다.
  */
 export function applyDelta(
   tracks: Track[],
@@ -153,9 +167,23 @@ export function applyDelta(
   containerPx: number
 ): Track[] {
   const next = [...tracks];
-  const a = next[index];
-  const b = next[index + 1];
-  if (a === null && b === null) return next; // 둘 다 1fr — 경계에 의미가 없다
+  let a = next[index];
+  let b = next[index + 1];
+
+  if (a === null && b === null) {
+    const fixedSum = next.reduce<number>((sum, t) => (t === null ? sum : sum + t), 0);
+    const nullCount = next.filter((t) => t === null).length;
+    const each = (containerPx - fixedSum) / nullCount;
+
+    next[index] = each;
+    a = each;
+
+    const otherNullExists = next.some((t, i) => i !== index && i !== index + 1 && t === null);
+    if (otherNullExists) {
+      next[index + 1] = each;
+      b = each;
+    }
+  }
 
   if (a !== null && b !== null) {
     const total = a + b;

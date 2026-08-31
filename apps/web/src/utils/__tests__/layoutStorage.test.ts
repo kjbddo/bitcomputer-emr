@@ -158,4 +158,23 @@ describe("applyDelta", () => {
       120, null,
     ]);
   });
+
+  describe("둘 다 1fr 인 경계 — 물질화", () => {
+    it("2트랙 축은 a 만 물질화하고 b 는 1fr 로 남긴다", () => {
+      const result = applyDelta([null, null], 0, 100, MIN_COLUMN_PX, 800);
+      expect(result).toEqual([500, null]);
+      expect(result.some((t) => t === null)).toBe(true);
+    });
+
+    it("3트랙 축은 a·b 를 물질화하고 나머지 null 은 그대로 둔다", () => {
+      const result = applyDelta([null, null, null], 0, 60, MIN_COLUMN_PX, 900);
+      expect(result).toEqual([360, 240, null]);
+      expect(result[2]).toBeNull();
+    });
+
+    it("물질화 후에도 min 클램핑이 적용된다", () => {
+      const result = applyDelta([null, null], 0, -1000, MIN_COLUMN_PX, 800);
+      expect(result).toEqual([MIN_COLUMN_PX, null]);
+    });
+  });
 });
