@@ -10,11 +10,14 @@ yarn add axios
 
 ### 환경 변수
 
-`.env.local`에 기본 API URL을 설정할 수 있습니다.
+없습니다. `baseURL` 은 비어 있고 요청은 현재 오리진으로 나갑니다.
 
-```env
-NEXT_PUBLIC_API_BASE_URL=https://api.example.com
-```
+주소를 환경변수로 받지 않는 이유는 `NEXT_PUBLIC_` 값이 **빌드 시점에 번들에
+박히기** 때문입니다. 값이 다른 만큼 프론트 이미지가 갈라져, AWS 용과 DR 용을
+따로 구워야 했습니다. 지금은 하나입니다.
+
+프론트와 API 를 같은 호스트명 아래 두는 것이 그 전제입니다 - 배포에서는
+CloudFront 가, 로컬에서는 `next.config.ts` 의 rewrite 가 그 조건을 만듭니다.
 
 ### 초기화 (선택)
 
@@ -23,8 +26,8 @@ NEXT_PUBLIC_API_BASE_URL=https://api.example.com
 ```ts
 import { http } from "@services";
 
+// baseURL 을 여기서 절대 주소로 덮으면 그 시점부터 이미지가 환경에 묶입니다.
 http({
-  baseURL: process.env.NEXT_PUBLIC_API_BASE_URL,
   timeoutMs: 15000,
 });
 ```

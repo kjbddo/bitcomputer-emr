@@ -332,7 +332,7 @@ xraygraph:
 | 자격증명 | `LLM_API_KEY`, DB 비밀번호, `JWT_SECRET` | Secrets Manager |
 | 접속 정보 | `*_BASE_URL`, 엔드포인트 | Parameter Store (테라폼 출력) |
 | 동작 토글 | `USE_PSPNET_ROI`, `USE_TORCH_*`, `LLM_PROVIDER` | ConfigMap |
-| 빌드 시점 | `NEXT_PUBLIC_API_BASE_URL` | 이미지에 굽힘 |
+| 빌드 시점 | **없다** | 프론트 빌드 인자를 전부 없앴다 (§7.2) |
 
 ### 7.1 토글 기본값이 두 곳에 있으면 조용히 어긋난다
 
@@ -346,13 +346,29 @@ healthy, 시더 "202건 적재 성공", 검색도 결과를 냄.
 **K8s 에서 ConfigMap 과 코드 기본값 사이에 같은 함정이 재발한다.** 적재 Job 과
 런타임 파드가 **같은 ConfigMap 을 참조**하도록 배선한다.
 
-### 7.2 `NEXT_PUBLIC_API_BASE_URL`
+### 7.2 프론트 빌드 인자를 없앴다 (완료)
 
-단일 오리진이므로 빈 값 + 상대 경로로 두면 **도메인이 바뀌어도 재빌드가 필요
-없다.** 나중에 Route53 을 붙일 때 이득이다.
+빌드 인자가 둘 있었다. `NEXT_PUBLIC_` 값은 번들에 박혀 기동 환경변수로 바뀌지
+않으므로, **값이 다른 만큼 이미지가 갈렸다** — 도메인마다 하나, DR 용으로 또 하나.
 
-`apps/web/src/services/http/client.ts` 가 빈 값이면 `http://localhost:8080` 으로
-폴백하므로 **한 줄 수정이 필요하다.**
+```
+NEXT_PUBLIC_API_BASE_URL          상대 경로로 대체        client.ts
+NEXT_PUBLIC_AI_FEATURES_ENABLED   서버 503 문구로 대체    AiFeatures.java
+```
+
+**이제 프론트 이미지가 하나다.** AWS·GCP(DR)·로컬이 같은 것을 쓴다.
+
+전제는 **프론트와 API 가 같은 호스트명 아래 있는 것**이다. AWS 는 CloudFront 가
+그 조건을 만들고, 로컬은 `next.config.ts` 의 rewrite 가 대신한다.
+
+> **`rewrites()` 는 `next build` 때 평가돼 `routes-manifest.json` 에 구워진다.**
+> `next start` 는 다시 읽지 않으므로 기동 환경변수로 켜고 끌 수 없다. 그래서
+> 목적지를 `http://spring-boot:8080` 으로 고정했다 — compose 서비스 이름과 K8s
+> Service 이름을 양쪽 다 그렇게 두면 어느 환경에서나 같은 값이 된다.
+
+프론트 자신의 엔드포인트는 `/api` 밖에 둔다. 헬스는 `/healthz` 다 — `/api/health`
+로 두면 배포에서 ALB 가 그 요청을 Spring 으로 보내, 프론트 상태를 묻는데 Spring 이
+답한다.
 
 ---
 
@@ -409,19 +425,30 @@ AI 관련 API 를 **전부 배제**하고 EMR 코어만 가져간다.
 ArangoDB(처방 그래프 전용)와 RabbitMQ/AmazonMQ(검증 job 전용)는 AI 를 걷어내면
 소비자가 없어 함께 빠진다. **결과적으로 DR 상태 저장소는 Cloud SQL 하나**다.
 
-### 10.1 별도 이미지를 만들지 않는다
+### 10.1 별도 이미지를 만들지 않는다 (완료)
 
-`LLM_PROVIDER=stub` 이라는 seam 이 이미 있고 CI 의 `compose e2e` 가 매번 그 형상으로
-돈다. 이미지를 갈래로 나누면 빌드·테스트 표면이 두 배가 되고 **두 갈래가 조용히
-어긋난다.** 같은 이미지, 다른 배포 프로파일로 간다.
+**프론트도 Spring 도 전체 스택과 같은 이미지를 쓴다.**
 
-### 10.2 먼저 재야 할 것
+```
+spring-boot   SPRING_PROFILES_ACTIVE=docker,dr    기동 값
+frontend      설정 없음                            AI 유무는 서버 503 이 알린다
+```
 
-**Spring 이 AI 서비스 없이 정상 동작하는지 확인된 바 없다.** 화면이 깨지는지, 빈
-상태로 뜨는지, 예외를 던지는지 모른다.
+Spring 쪽은 원래 빌드 인자가 없어 내용이 같았는데 이름만 `bitcomputer-dr-*` 로
+갈려 있었다. 레지스트리에 올리면 그만큼 빌드가 두 배가 되고 두 태그가 어긋날
+자리가 생기므로 이름을 합쳤다.
 
-이건 DR 뿐 아니라 **AWS 배포 순서**에도 걸린다 — 코어부터 올리고 AI 를 나중에
-붙일 수 있는지가 그 답에 달려 있다.
+프론트는 진짜로 달랐다. 빌드 인자 둘을 없애 하나로 만들었다(§7.2).
+
+**이미지 7개, Deployment 8개다.** DR 이 추가하는 이미지는 0이다.
+
+### 10.2 Spring 이 AI 없이 도는가 (확인됨)
+
+`features.ai.enabled=false` 로 RabbitMQ·ArangoDB 배선이 함께 빠지고 AI 엔드포인트는
+503 을 낸다. CI 의 `dr stack` 잡이 매번 그 형상으로 스택을 세워 검증한다.
+
+**404 가 아니라 503 인 이유**는 "이 배포에 그 기능이 없다" 와 "주소를 잘못 불렀다"
+를 구별하기 위해서다. 문구까지 실어 보내므로 화면에서도 갈린다.
 
 ### 10.3 동기화
 
@@ -469,7 +496,7 @@ GCP DR           AI 전면 배제, Cloud SQL 하나
 ```
 1. ~~이미지 저장소~~               GHCR private 로 확정 (11 §5)
 2. ArgoCD 태그 갱신                 CI 커밋 vs Image Updater
-3. ~~프론트 헬스 엔드포인트~~        완료 — `/api/health` 추가, compose 헬스체크도 함께
+3. ~~프론트 헬스 엔드포인트~~        완료 — `/healthz` 추가, compose 헬스체크도 함께
 4. 노드 그룹 분리 여부               AI 워크로드 격리
 5. AmazonMQ 엔진 버전 / 단일 vs 클러스터
 6. 로그 수집 경로                   Fluent Bit → S3 직접 vs CloudWatch 경유
@@ -487,7 +514,7 @@ GCP DR           AI 전면 배제, Cloud SQL 하나
 완료:
 
 ```
-프론트 /api/health   force-dynamic, 상류를 확인하지 않음. compose 헬스체크 연동
+프론트 /healthz   force-dynamic, 상류를 확인하지 않음. compose 헬스체크 연동
                      -> frontend 가 처음으로 (healthy) 를 찍는다
 ```
 

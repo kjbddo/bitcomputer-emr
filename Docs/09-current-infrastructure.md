@@ -182,7 +182,7 @@ K8s 에는 이런 바인드 마운트가 없으므로 **이미지에 굽거나 S
 | 자격증명 | `LLM_API_KEY`, `MYSQL_ROOT_PASSWORD`, `ARANGO_PASSWORD`, `JWT_SECRET`, `RABBITMQ_ERLANG_COOKIE` | Secrets Manager |
 | 접속 정보 | `*_BASE_URL`, `ARANGO_HOST` | Parameter Store (테라폼 출력) |
 | 동작 토글 | `USE_PSPNET_ROI`, `USE_TORCH_*`, `LLM_PROVIDER`, `RADIOLOGY_ENGINE` | ConfigMap |
-| 빌드 시점 | `NEXT_PUBLIC_API_BASE_URL` | **이미지에 굽힌다** — 도메인 바뀌면 재빌드 |
+| 빌드 시점 | **없다** | 프론트 빌드 인자를 전부 없앴다 (§11) |
 
 ### 5.1 토글 하나가 코드와 compose 양쪽에 기본값을 갖는다
 
@@ -327,9 +327,14 @@ binlog 보존 시간 설정이 필요하다.
 **`arangodb` 는 AWS 관리형 등가물이 없다.** 인클러스터 + EBS 로 운영해야 하고,
 EBS 가 AZ 에 묶이므로 노드 장애 시 같은 AZ 로 재스케줄되어야 한다.
 
-**`NEXT_PUBLIC_API_BASE_URL` 은 빌드 시점에 번들에 박힌다.** 도메인이 바뀌면
-프론트 이미지를 다시 빌드해야 한다. CloudFront + S3 로 정적 배포하면 이 값이
-빌드 파이프라인의 입력이 된다.
+**프론트 이미지는 환경 의존이 없다.** 예전에는 `NEXT_PUBLIC_API_BASE_URL` 과
+`NEXT_PUBLIC_AI_FEATURES_ENABLED` 두 빌드 인자가 있었고, `NEXT_PUBLIC_` 값은 번들에
+박히므로 도메인마다 하나 DR 용으로 또 하나씩 이미지가 갈렸다. 둘 다 없앴다 —
+API 는 상대 경로로, AI 유무는 서버가 내는 503 문구로 대체했다.
+
+**대신 조건이 하나 붙는다. 프론트와 API 가 같은 호스트명 아래 있어야 한다.**
+AWS 는 CloudFront 가 `/*` 와 `/api/*` 를 갈라 그 조건을 만든다. **GCP DR 도 같은
+구조여야 하고, 아니면 프론트 이미지가 다시 갈라진다.**
 
 **진단서 평가 경로(`/api/agent/document/evaluate`)는 죽어 있다.**
 `CertificateEvaluationServiceImpl` 이 게이트웨이를 거치지 않고 Gemini 를 직접

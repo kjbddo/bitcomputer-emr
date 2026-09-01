@@ -427,12 +427,12 @@ ClusterIP 로 클러스터 내부에서만 접근한다.
 
 | 서비스 | 경로 |
 |---|---|
-| frontend | `/api/health` |
+| frontend | `/healthz` |
 | spring-boot | `/actuator/health` |
 | 파이썬 서비스 | `/health` |
 | flask-radiology | `/api/ai/is_running` |
 
-> **frontend `/api/health` 는 새로 만든 것이다.** 없으면 `readinessProbe` 가
+> **frontend `/healthz` 는 새로 만든 것이다.** 없으면 `readinessProbe` 가
 > 컨테이너 프로세스만 보고 트래픽을 보내, Next 가 준비되기 전 요청이 실패한다.
 > 상류(Spring·DB)는 확인하지 않는다 — 상류 장애가 이 파드 재시작으로 번지면 안 된다.
 
@@ -510,8 +510,12 @@ SG 인바운드는 둘 중 하나로 연다.
 **단일 오리진이라 CORS·SameSite 재설계가 필요 없다.** 프론트와 API 가 같은
 CloudFront 도메인 아래 있고, 인증이 쿠키 기반이라 이 이득이 크다.
 
-`NEXT_PUBLIC_API_BASE_URL` 은 빈 값 + 상대 경로로 두면 **도메인이 바뀌어도 재빌드가
-필요 없다.**
+**프론트 이미지에 빌드 인자가 없다.** API 를 상대 경로로 부르므로 도메인이 바뀌어도
+재빌드가 필요 없고, DR 여부도 서버가 내는 503 문구로 알린다. AWS·GCP(DR)·로컬이
+같은 이미지를 쓴다.
+
+전제가 이 단일 오리진 구조다 — **프론트와 API 를 다른 호스트에 두면 그 순간 프론트
+이미지가 다시 갈라진다.**
 
 ### 34. 인증서
 
@@ -1342,6 +1346,10 @@ Root Module 에 Child Module 을 하나씩 추가하는 방식으로 진행한�
 - [ ] Private App Subnet 에 `kubernetes.io/role/internal-elb` 태그가 붙어 있다
 - [ ] 적재 Job 과 런타임 파드가 **같은 ConfigMap** 을 본다
 - [ ] `latest` 태그를 참조하는 매니페스트가 없다
+- [ ] 프론트 Dockerfile 에 `ARG` 가 하나도 없다 — 하나라도 생기면 이미지가 환경에 묶인다
+- [ ] 쿠버네티스 Spring Service 이름이 `spring-boot` 이다 (`next.config.ts` rewrite 목적지)
+- [ ] `apps/web/src/app/api/` 아래에 라우트가 없다 — 있으면 ALB 가 Spring 으로 보내 영원히 닿지 않는다
+- [ ] 새 `NEXT_PUBLIC_*` 값을 도입하지 않았다 — 번들에 박혀 이미지를 가른다 (`NEXT_PUBLIC_EMPLOYEE_ID`, `NEXT_PUBLIC_DEFAULT_DEPT_ID` 가 코드에 남아 있으나 어디서도 설정하지 않는다. 설정하는 순간 갈린다)
 - [ ] StorageClass 가 붙이는 태그와 AWS Backup selection 조건이 같다
 - [ ] `/storage/*` HTTPRoute 가 있다 — 없으면 X-ray 히트맵이 안 뜬다
 - [ ] **복원을 한 번 해 봤다** — 백업 계획이 초록인 것과 복원되는 것은 다르다

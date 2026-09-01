@@ -32,19 +32,41 @@ rabbitmq          arangodb  arango-init                <- AI 전용 미들웨어
 
 ## 1. 무엇으로 갈리는가
 
-플래그 하나다.
+**플래그 하나, 그리고 이미지는 전체 스택과 같은 것을 쓴다.**
 
 | 위치 | 값 | 효과 |
 |---|---|---|
-| `features.ai.enabled` | Spring 속성 | AI 엔드포인트 503, RabbitMQ·ArangoDB 배선 비활성 |
-| `NEXT_PUBLIC_AI_FEATURES_ENABLED` | 웹 **빌드 인자** | AI 버튼을 렌더하지 않음 |
+| `features.ai.enabled` | Spring 속성 (`dr` 프로파일) | AI 엔드포인트 503, RabbitMQ·ArangoDB 배선 비활성 |
 
-**둘 다 기본값이 "켜짐" 이다.** 설정 실수 하나로 AI 가 조용히 사라지면 화면에서
-DR 구성과 구별되지 않는다. 끄는 것은 명시적 선택이어야 한다.
+**기본값은 "켜짐" 이다.** 설정 실수 하나로 AI 가 조용히 사라지면 화면에서 DR
+구성과 구별되지 않는다. 끄는 것은 명시적 선택이어야 한다.
 
-> **`NEXT_PUBLIC_` 값은 빌드 시점에 번들에 박힌다.** 기동 환경변수만 바꿔서는
-> 프론트가 바뀌지 않는다. 그래서 DR 프론트는 **별도 이미지**이고, compose 가
-> `build args` 로 넘긴다. "환경변수 넣었는데 버튼이 그대로"는 이것 때문이다.
+### 프론트에는 플래그가 없다
+
+**AI 버튼은 DR 에서도 그대로 보인다.** 누르면 서버가 503 과 함께 문구로 답한다.
+
+```
+이 배포에는 AI 기능이 포함되어 있지 않습니다(DR 구성).
+처방 추천·진단서 생성·X-ray 분석은 전체 스택에서만 동작합니다.
+```
+
+예전에는 `NEXT_PUBLIC_AI_FEATURES_ENABLED` 빌드 인자로 버튼을 숨겼다. 그 값은
+**번들에 박히므로** DR 프론트가 별도 이미지가 됐고, `NEXT_PUBLIC_API_BASE_URL`
+까지 더해 도메인마다 이미지가 하나씩 늘었다. **둘 다 없앴다** — 이제 프론트
+이미지는 AWS·GCP(DR)·로컬에서 같은 하나다.
+
+그 문구가 화면에 닿는 경로는 이렇다. **한 칸이라도 빠지면 일반 오류처럼 보인다.**
+
+```
+AiFeatures.requireEnabled()   ResponseStatusException(503, 문구)
+GlobalExceptionHandler        ResponseEntity.status(503).body(ex.getReason())   평문
+interceptors.ts               stringBody 로 읽어 HttpError.message 에 담는다
+컴포넌트 catch                 alert 에 그대로 붙인다
+```
+
+특히 `GlobalExceptionHandler` 의 `ResponseStatusException` 핸들러가 없으면
+Spring 기본 에러 본문이 나가는데, `server.error.include-message` 기본값이
+`never` 라 **문구만 지워진 503** 이 된다.
 
 ---
 
@@ -85,7 +107,7 @@ DR compose 는 헬스체크를 붙였다. DR 은 사람이 브라우저로 보�
 
 ```bash
 curl -s http://localhost:8081/actuator/health   # {"status":"UP"}
-curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3001/api/health   # 200
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3001/healthz   # 200
 ```
 
 **`/actuator/health` 가 UP 인 것이 이 스택의 핵심 확인이다.** RabbitMQ 도
@@ -143,7 +165,7 @@ AI 버튼 자리에 이 문구가 뜬다:
 ```
 Spring 이 RabbitMQ·ArangoDB 없이 뜨는가
 /actuator/health 가 UP 인가
-프론트 /api/health 가 200 인가
+프론트 /healthz 가 200 인가
 AI 엔드포인트가 404·500 이 아닌가
 DR 프로젝트에 정확히 4개 서비스만 있는가
 ```
@@ -169,8 +191,8 @@ docker compose -f docker-compose.dr.yml -p bitcomputer-dr down -v   # 데이터�
 
 ## 8. 자주 겪는 함정
 
-**프론트 AI 버튼이 그대로 보인다.** `NEXT_PUBLIC_` 은 빌드 시점 값이다.
-`--build` 없이 올렸거나 기존 이미지를 재사용한 것이다.
+**프론트 AI 버튼이 그대로 보인다.** 정상이다(§1). 눌렀을 때 503 과 함께 DR
+문구가 뜨는지로 확인한다. 일반 오류 문구만 나오면 그때가 결함이다.
 
 **`frontend` 가 unhealthy 인데 브라우저는 열린다.** 헬스체크가 `wget` 을 쓰면
 그렇게 된다 — 이 이미지에는 `wget` 도 `curl` 도 없다(`node:*-slim`). compose 는

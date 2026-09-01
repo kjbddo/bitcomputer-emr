@@ -853,9 +853,17 @@ SQUID 가중치 전달(§4.4), 백업(§4.5), 레지스트리·태그 갱신(§5
 
 ```
 1. ImageStorageUtil / WebMvcConfig 경로 탐색 → image.storage.path 준수   ← 필수
-2. http/client.ts 빈 baseURL → 상대 경로                              (한 줄)
-3. SQUID 가중치를 S3 에 올리고 initContainer 로 받게 한다 (§4.4)
+2. SQUID 가중치를 S3 에 올리고 initContainer 로 받게 한다 (§4.4)
 ```
+
+**프론트 쪽은 끝났다.** 빌드 인자 둘을 없애 AWS·GCP(DR)·로컬이 한 이미지를 쓴다 —
+API 는 상대 경로로, AI 유무는 서버 503 문구로 대체했다. 헬스 경로도 `/api/health`
+에서 `/healthz` 로 옮겼다. `/api/*` 는 ALB 가 Spring 으로 보내므로 그 아래 두면
+프론트 상태를 묻는데 Spring 이 답한다.
+
+그 대가로 **쿠버네티스 Service 이름을 `spring-boot` 으로 고정**해야 한다.
+`next.config.ts` 의 rewrite 목적지가 그 이름이고, `rewrites()` 는 빌드 때 구워져
+기동 값으로 못 바꾼다.
 
 **1번이 위험하다.** `getProjectRoot()` 가 작업 디렉터리에서 `BitComputer` 폴더를
 위로 훑어 찾고 못 찾으면 **현재 디렉터리에 만든다.** K8s 에서 다른 곳을 가리키면

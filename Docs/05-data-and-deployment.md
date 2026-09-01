@@ -129,7 +129,7 @@ flowchart LR
 | `VALIDATION_JOB_BUDGET_SECONDS` | ValidationAgent | 검증 작업 하나의 전역 예산(초), 기본 110. RabbitMQ 하트비트 주기의 두 배(=브로커가 연결을 닫는 120초)보다 작아야 한다. 초과하면 남은 단계를 건너뛰고 규칙 기반 판정으로 마감하며, 건너뛴 단계를 `reasoningTrace` 에 남긴다 |
 | `PRESCRIPTION_AGENT_TIMEOUT_SECONDS` | ValidationAgent | Prescription API 호출(처방 RAG 조회) 타임아웃(초), 기본 180 |
 | `GEMINI_API_KEY` | Spring | 진단서 NLI 평가(`CertificateEvaluationServiceImpl`, `/api/agent/document/evaluate`)에 쓰던 자격증명. **이 경로는 현재 죽어 있다** — 키가 폐기됐고, 이 엔드포인트를 쓰는 `/evaluation` 화면은 어디에서도 링크되지 않는다. 게이트웨이를 거치지 않는 유일한 LLM 경로이기도 하다 |
-| `NEXT_PUBLIC_API_BASE_URL` | Front-End | Spring API base URL |
+| `API_PROXY_TARGET` | ~~Front-End~~ | **없앴다.** 프론트는 API 를 상대 경로로 부르고, `next.config.ts` 가 `/api/*` 를 `http://spring-boot:8080` 으로 넘긴다. 예전의 `NEXT_PUBLIC_API_BASE_URL` 은 번들에 박히는 값이라 도메인마다 이미지가 갈렸다 |
 | `XRAY_API_DEFAULT_VIEW` | Spring | 기본 X-ray 촬영 방향 |
 | `USE_TORCH_ANOMALY`·`USE_TORCH_EMBEDDING` | XrayGraphRAG | 실제 모델을 **시도하라**는 뜻이지 "실제 모델이다"가 아니다. 가중치를 못 올리면 mock 으로 내려가고 그 사실이 `engineStatus` 에 남는다 |
 | `USE_PSPNET_ROI` | XrayGraphRAG | ChestX-Det PSPNet 해부학 ROI 분할. **기본값 `false`** — CPU 에서 분할 한 번에 18~32초라 추론 전체가 90초가 되는데 `EVALUATION.md` 11.3 의 사전 기준을 넘지 못했다. 끄면 고전 CV 분할로 내려간다. 실제로 어느 쪽이 떴는지는 응답의 `roiStatus`(`pspnet`/`cv`/`mock`)가 답한다. **이 값을 바꾸면 마스크가 달라지므로 X-ray 코퍼스를 전량 재적재해야 한다** |

@@ -9,7 +9,7 @@ import {
   XrayUncertainty,
   XrayView,
 } from "@/services/radiology";
-import { AI_DISABLED_NOTICE, isAiEnabled } from "@/services/aiFeatures";
+import { HttpError } from "@/services";
 
 const EXCLUDED_DISEASE_TAGS = new Set(["no_finding", "support_devices"]);
 const MAX_VISIBLE_DISEASES = 3;
@@ -123,11 +123,18 @@ export default function AIReport({
       setUncertainty(response.uncertainty || null);
     } catch (err: unknown) {
       console.error("AI 분석 오류:", err);
-      const apiError = err as { response?: { data?: { error?: string } }; message?: string };
+      // 서버 문구를 그대로 띄운다. AI 가 없는 배포(DR)에서 503 과 함께 오는
+      // "이 배포에는 AI 기능이 포함되어 있지 않습니다" 가 여기로 나온다.
+      //
+      // 예전에는 `err.response?.data?.error` 를 먼저 봤다. 그건 axios 원본 형태인데
+      // 인터셉터가 이미 HttpError 로 바꿔 던지므로 `response` 가 없다. 늘 undefined
+      // 로 떨어져 `message` 로 넘어갔고 결과만 우연히 맞았다.
       const errorMessage =
-        apiError.response?.data?.error ||
-        apiError.message ||
-        "AI 분석 중 오류가 발생했습니다.";
+        err instanceof HttpError
+          ? `[${err.status}] ${err.message}`
+          : err instanceof Error
+            ? err.message
+            : "AI 분석 중 오류가 발생했습니다.";
       setError(errorMessage);
       alert(`AI 분석 실패: ${errorMessage}`);
     } finally {
@@ -182,7 +189,12 @@ export default function AIReport({
           <option value="PA">PA</option>
           <option value="AP">AP</option>
         </select>
-        {isAiEnabled() ? (
+        {/*
+          DR 구성에도 이 버튼은 남는다. 프론트는 자기가 어떤 배포에 있는지 모른다 —
+          알게 하려면 그 값을 번들에 박아야 하고, 그 순간 DR 프론트가 별도 이미지가
+          된다. 대신 누르면 서버가 503 과 함께 무슨 배포인지 문구로 답하고
+          (config/AiFeatures.java), 아래 catch 가 그 문구를 그대로 띄운다.
+        */}
         <Button
           type="button"
           variant="secondary"
@@ -192,11 +204,6 @@ export default function AIReport({
         >
           {isLoading ? "분석 중..." : "AI 분석"}
         </Button>
-        ) : (
-          // DR 구성에는 xraygraph 가 없다. 버튼을 두면 눌러서 503 을 받는데,
-          // 화면에서는 "없는 기능" 과 "고장" 이 구별되지 않는다.
-          <span role="note">{AI_DISABLED_NOTICE}</span>
-        )}
       </div>
 
       {/* 결과 이미지 표시 영역 */}
