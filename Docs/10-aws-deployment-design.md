@@ -85,7 +85,7 @@ eksctl    클러스터, 노드그룹, OIDC, IRSA, 애드온
 | EKS | eksctl 이 IRSA·애드온을 훨씬 적은 코드로 처리한다 |
 | ALB / 리스너 / 리스너룰 / TG | Gateway API 컨트롤러가 만들고 소유한다 |
 | ASG | EKS 관리형 노드그룹이 ASG 를 직접 만든다 |
-| RDS | 상태 자원이라 손으로 만든다. 단 **서브넷 그룹·파라미터 그룹·SG 는 테라폼** |
+| ~~RDS~~ | **철회.** 테라폼이 만든다 — `deletion_protection` + `prevent_destroy` 로 잠근다 |
 | Route53 / VPN | 나중 단계 |
 | 정적 콘텐츠 S3 | 프론트가 컨테이너로 가면서 할 일이 없어졌다 |
 
@@ -172,7 +172,7 @@ ALB 가 살아 있는 채로 서브넷을 지우려 하면 테라폼이 오래 �
 00-bootstrap   state 버킷, GH Actions OIDC 역할     ← 로컬 state 로 만들고 마이그레이션
 10-network     VPC, subnet, RT, IGW, NAT, 엔드포인트
 20-security    SG, WAF, IAM
-30-data        RDS 부속, ElastiCache, AmazonMQ, S3 ×2
+30-data        RDS, ElastiCache, AmazonMQ, S3 ×2, EFS
 40-edge        CloudFront + VPC origin              ← 3단계 이후에만 적용 가능
 
 키: s3://<bucket>/<env>/<layer>/terraform.tfstate
@@ -198,7 +198,7 @@ workspace 는 지금 어느 환경인지가 명령에 드러나지 않아, 프�
 
 | 지금 | AWS | 비고 |
 |---|---|---|
-| `mysql` 컨테이너 | **RDS MySQL 8.0** | 서브넷 그룹·파라미터 그룹·SG 는 테라폼 |
+| `mysql` 컨테이너 | **RDS MySQL 8.0** | 인스턴스·부속 전부 테라폼 |
 | `redis` 컨테이너 | **ElastiCache** | |
 | `rabbitmq` 컨테이너 | **AmazonMQ** | 엔진 버전 확인 필요 |
 | `arangodb` 컨테이너 | **인클러스터 + EBS** | 관리형 등가물 없음 |
@@ -296,7 +296,11 @@ xraygraph:
 ```
 
 없으면 `engineStatus` 가 `real` → `mock` 으로 떨어진다. K8s 에는 이런 마운트가
-없으므로 **이미지에 굽거나 S3 + initContainer** 로 넣는다.
+없다.
+
+**S3 + initContainer 로 간다**(11 §4.4). 이미지에 굽지 않는 이유는 가중치가 코드와
+다른 주기로 바뀌고, 구우면 `xraygraph`·`flask-radiology` 두 이미지에 같은 파일이
+중복되기 때문이다.
 
 `flask-radiology` 를 안 띄우더라도 **이 디렉터리는 지울 수 없다.**
 
@@ -453,7 +457,7 @@ RabbitMQ         AmazonMQ
 Redis            ElastiCache
 ArangoDB         인클러스터 + EBS 동적 프로비저닝
 images-storage   1단계 EFS (코드 수정 0, 용량 100MB 대라 단가 차이 무의미), 2단계 S3
-테라폼 제외       EKS, ALB/리스너/TG/ASG, RDS 본체, Route53, VPN, 정적 콘텐츠 S3
+테라폼 제외       EKS, ALB/리스너/TG/ASG, Route53, VPN, 정적 콘텐츠 S3
 GCP DR           AI 전면 배제, Cloud SQL 하나
 ```
 
@@ -466,7 +470,7 @@ GCP DR           AI 전면 배제, Cloud SQL 하나
 4. 노드 그룹 분리 여부               AI 워크로드 격리
 5. AmazonMQ 엔진 버전 / 단일 vs 클러스터
 6. 로그 수집 경로                   Fluent Bit → S3 직접 vs CloudWatch 경유
-7. CloudFront VPC origin 리전 지원 확인
+7. CloudFront VPC origin 리전 지원 확인 (`ap-northeast-2`)
 ```
 
 ### 코드 수정이 필요한 것
@@ -474,7 +478,7 @@ GCP DR           AI 전면 배제, Cloud SQL 하나
 ```
 1. ImageStorageUtil / WebMvcConfig 경로 탐색 → 프로퍼티 준수      (이전 전 필수)
 2. http/client.ts 빈 baseURL → 상대 경로                        (한 줄)
-3. SQUID 가중치 전달 경로 (이미지에 굽기 vs S3+initContainer)
+3. SQUID 가중치를 S3 에 올리고 initContainer 로 받게 한다 (11 §4.4)
 ```
 
 완료:

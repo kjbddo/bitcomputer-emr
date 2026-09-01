@@ -104,6 +104,49 @@ CloudFront 가 대신하고 이 라우트는 사라진다(§4.3).
 
 ## 2. 테라폼이 만드는 것
 
+### 2.0 확정 파라미터
+
+레이어를 쓰기 전에 정해야 하는 값들이다. **바꾸는 비용이 특히 큰 것들이라**
+먼저 못박는다 — 서브넷은 만든 뒤 크기를 못 바꾸고, 리전을 바꾸면 전부 재생성이다.
+
+| 항목 | 값 |
+|---|---|
+| 리전 | `ap-northeast-2` (서울) |
+| 보조 리전 | `us-east-1` — **CloudFront 용 WAF·ACM 전용.** 프로바이더 alias 로만 쓴다 |
+| AZ | `a`, `c` — 2개 |
+| 환경 | `dev`, `prod` — **VPC 부터 분리** |
+| 서브넷 | `/24` |
+
+```
+prod  10.0.0.0/16
+  public    10.0.0.0/24   (a)    10.0.1.0/24   (c)    ALB · NAT · bastion
+  private   10.0.10.0/24  (a)    10.0.11.0/24  (c)    EKS 노드 · 파드
+  data      10.0.20.0/24  (a)    10.0.21.0/24  (c)    RDS · ElastiCache · AmazonMQ · EFS
+
+dev   10.1.0.0/16
+  public    10.1.0.0/24   (a)    10.1.1.0/24   (c)
+  private   10.1.10.0/24  (a)    10.1.11.0/24  (c)
+  data      10.1.20.0/24  (a)    10.1.21.0/24  (c)
+```
+
+**데이터 계층을 별도 서브넷으로 뺀 이유가 `/24` 때문이다.** VPC CNI 는 **파드마다
+VPC IP 를 할당**한다 — IP 를 먹는 것은 노드 수가 아니라 파드 수다. RDS·ElastiCache
+가 같은 서브넷에 있으면 그만큼 파드가 쓸 IP 가 준다.
+
+`/24` 는 AWS 예약 5개를 빼고 **251개**다. `m5.large` 기준 노드 하나가 ENI 3개 ×
+10 IP = 약 29개를 잡으므로 **서브넷당 노드 8대**까지 들어간다. 지금 워크로드가
+파드 25~40개라 충분하다.
+
+> **VPC CNI prefix delegation 을 켜면 얘기가 달라진다.** ENI 마다 `/28`(16개)을
+> 통째로 잡아 IP 소모가 급증한다. `/24` 에서는 켜지 않는다.
+
+**AZ 2개로 두는 것의 뜻:** EKS 최소 요건(2)은 만족하고 NAT·노드 비용이 3개보다
+싸다. ArangoDB 가용성은 AZ 개수와 무관하다 — **EBS 는 몇 개를 두든 단일 AZ 에
+묶인다.**
+
+> **환경 둘은 비용이 두 배다.** 클러스터·RDS·NAT 가 각각 하나씩 더 든다.
+> `dev` 는 NAT 하나 공유·RDS 단일 AZ·작은 노드로 줄이는 것을 권한다.
+
 ```mermaid
 flowchart LR
   subgraph L0["00-bootstrap"]
@@ -120,7 +163,7 @@ flowchart LR
     S2["IAM"]
   end
   subgraph L3["30-data"]
-    D1["RDS 부속<br/>subnet·param group"]
+    D1["RDS<br/>인스턴스 + 부속"]
     D2["ElastiCache"]
     D3["AmazonMQ"]
     D4["S3 ×2 · EFS"]
@@ -140,7 +183,7 @@ flowchart LR
 | `00-bootstrap` | state 버킷, GH Actions OIDC 역할 | 로컬 state 로 만들고 마이그레이션 |
 | `10-network` | VPC, subnet, RT, IGW, NAT, VPC 엔드포인트 | **서브넷 EKS 태그를 여기서 붙인다** |
 | `20-security` | SG, IAM | 클러스터 SG ID 대신 CIDR 을 소스로 |
-| `30-data` | RDS 부속, ElastiCache, AmazonMQ, S3 ×2, EFS | RDS 인스턴스 본체는 수동 |
+| `30-data` | **RDS**, ElastiCache, AmazonMQ, S3 ×2, EFS | RDS 는 `deletion_protection` + `prevent_destroy` 로 잠근다 |
 | `40-edge` | CloudFront, WAF, VPC origin | **ALB 생성 이후에만 적용 가능** |
 
 ### 테라폼이 만들지 않는 것
@@ -151,7 +194,6 @@ flowchart LR
 | ALB · 리스너 · TG | Gateway API 컨트롤러 | 컨트롤러가 만들고 소유한다 |
 | ASG | EKS 관리형 노드그룹 | 노드그룹이 ASG 를 직접 만든다 |
 | EBS 볼륨 | EBS CSI + PVC | 정적 생성은 파드를 AZ·노드에 못 박는다 |
-| RDS 인스턴스 | 수동 | 상태 자원. 부속만 테라폼 |
 | Route53 · VPN | 나중 단계 | |
 
 ### 상태 관리
@@ -347,6 +389,33 @@ ReadWriteMany 가 필요하다. `RADIOLOGY_ENGINE=xray` 인 지금은 flask 가 
 `images-storage` 때와 같은 이유로 나눈다 — **배포와 코드 변경을 한 번에 묶지
 않는다.**
 
+### 4.4 SQUID 가중치 — initContainer 로 넣는다
+
+지금은 `xraygraph` 가 `radiology-legacy` 디렉터리를 바인드 마운트해 읽는다.
+K8s 에는 그런 마운트가 없다.
+
+```
+S3 (X-ray 버킷)  models/squid_exp1_256_mask/model.pth
+       │  initContainer — IRSA 로 인증, 체크섬 검증
+       ▼
+   emptyDir /weights
+       │
+       ▼
+  xraygraph   SQUID_MODEL_DIR=/weights/squid_exp1_256_mask
+```
+
+**이미지에 굽지 않는 이유:** 가중치가 코드와 다른 주기로 바뀌고, 구우면 두
+이미지(`xraygraph`·`flask-radiology`)에 같은 파일이 중복된다. S3 에 한 벌 두고
+둘 다 받아 가는 편이 낫다.
+
+**체크섬을 검증해야 한다.** 가중치가 바뀌었는데 이미지가 그대로면
+`engineStatus` 는 여전히 `real` 인데 **모델이 다르다.** initContainer 가 받은
+파일의 해시를 확인하고 다르면 기동을 실패시킨다 — 이 저장소가 반복해서 겪은
+"조용히 어긋나는" 부류를 여기서 막는다.
+
+**업로드는 CI 가 한다.** `services/radiology-legacy/squid_exp1_256_mask/**` 가
+바뀌면 S3 에 올리고 매니페스트의 기대 해시를 갱신한다.
+
 ### EBS 를 미리 만들지 않는다
 
 정적 PV 로 미리 만든 볼륨을 물리면 파드가 그 AZ·그 노드에 못 박히고, 테라폼이 볼륨
@@ -534,17 +603,29 @@ K8s 에서 ConfigMap 과 코드 기본값 사이에 같은 함정이 재발한�
 ```
 1. 레지스트리 GHCR vs ECR              DR 운용 빈도에 달림
 2. ArgoCD 태그 갱신                    CI 커밋 vs Image Updater
-3. AmazonMQ 엔진 버전 / 단일 vs 클러스터
-4. 로그 수집 경로                       Fluent Bit → S3 직접 vs CloudWatch 경유
-5. CloudFront VPC origin 리전 지원 확인
+3. 시크릿 주입 기제                     External Secrets vs Secrets Store CSI vs IRSA 직접
+4. ArgoCD 부트스트랩                    자기 자신은 누가 설치하나 (helm 1회 → app-of-apps)
+5. AmazonMQ 엔진 버전 / 단일 vs 클러스터
+6. 노드 인스턴스 타입·개수 / RDS 클래스 / ElastiCache 노드
+7. 로그 수집 경로                       Fluent Bit → S3 직접 vs CloudWatch 경유
+8. 모니터링·알람                        CloudWatch vs Prometheus
+9. 백업                                RDS 보존 기간, ArangoDB EBS 스냅샷 주기
+10. CloudFront VPC origin 이 ap-northeast-2 에서 되는지
 ```
+
+**3번과 4번은 값이 아니라 기제라 일찍 정하는 게 낫다** — 둘 다 매니페스트 구조를
+바꾼다.
+
+**9번의 ArangoDB 백업이 특히 비어 있다.** 인클러스터 + EBS 라 관리형 자동 백업이
+없다. 처방 그래프는 엑셀에서 4.5분이면 재생성되지만, **운영 중 쌓인 피드백 이력은
+복구할 방법이 없다.**
 
 ### 이전 전에 고쳐야 할 코드
 
 ```
 1. ImageStorageUtil / WebMvcConfig 경로 탐색 → image.storage.path 준수   ← 필수
 2. http/client.ts 빈 baseURL → 상대 경로                              (한 줄)
-3. SQUID 가중치 전달 (이미지에 굽기 vs S3+initContainer)
+3. SQUID 가중치를 S3 에 올리고 initContainer 로 받게 한다 (§4.4)
 ```
 
 **1번이 위험하다.** `getProjectRoot()` 가 작업 디렉터리에서 `BitComputer` 폴더를
