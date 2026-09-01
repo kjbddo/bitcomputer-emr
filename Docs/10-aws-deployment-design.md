@@ -242,12 +242,27 @@ flask 를 띄우는 순간 ReadWriteMany 가 필요해진다.
 |---|---|---|
 | 코드 수정 | **세 곳 전부** | 없음 |
 | 정적 서빙 | 프리사인 URL 또는 CloudFront 오리진 추가 | 그대로 |
-| 비용 | 매우 낮음 | 높음 |
+| RWX | 해당 없음(객체 저장소) | 지원 |
+| 단가 | GB-월 기준 가장 쌈 | S3 의 7~10배 |
 
-**1단계는 EFS 로 간다.** 지금 코드 상태에서 S3 로 가면 세 곳을 동시에 고쳐야 하고
-그중 하나가 브라우저가 직접 보는 정적 서빙이다. **배포와 코드 변경을 한 번에
-묶으면 문제가 났을 때 원인이 둘로 갈린다.** 업로드 원본이라 용량이 당장 크지
-않다는 것도 근거다.
+**1단계는 EFS 로 간다.** 근거 셋이다.
+
+**첫째, S3 로 가려면 세 곳을 동시에 고쳐야 하고 그중 하나가 브라우저가 직접 보는
+정적 서빙이다.** 배포와 코드 변경을 한 번에 묶으면 문제가 났을 때 원인이 둘로
+갈린다 — 인프라가 잘못된 것인지 코드가 잘못된 것인지 구분하는 데 시간이 든다.
+
+**둘째, 이 볼륨은 크지 않다.** X-ray 원본 한 장이 46KB 다. 파생 산출물까지 포함한
+로컬 `storage/` 전체가 471파일에 109MB 다. **EFS 단가가 S3 의 10배여도 GB 단위
+용량에서는 절대 금액 차이가 무의미하다.** 단가 비교가 의미를 갖는 것은 TB 규모
+부터다.
+
+**셋째, 지금 RWX 가 필요한 경로는 실제로 쓰이지 않는다.** `RADIOLOGY_ENGINE=xray`
+가 기본이라 flask 는 호출되지 않는다. 그런데도 EBS 를 못 쓰는 이유는 **flask 를
+켜는 순간 조용히 깨지기 때문**이다. EFS 는 그 경로를 켜든 끄든 동작한다.
+
+> **뒤집을 조건을 미리 적어 둔다.** 업로드가 수십 GB 를 넘거나 정적 서빙을
+> CloudFront 로 옮기게 되면 S3 로 간다. 그전에는 EFS 가 싸다 — 금액이 아니라
+> **바꾸지 않아도 되는 코드**가 싸다.
 
 **2단계에서 S3 로 옮기는 순서:**
 
@@ -437,7 +452,7 @@ MySQL            RDS
 RabbitMQ         AmazonMQ
 Redis            ElastiCache
 ArangoDB         인클러스터 + EBS 동적 프로비저닝
-images-storage   1단계 EFS, 2단계 S3
+images-storage   1단계 EFS (코드 수정 0, 용량 100MB 대라 단가 차이 무의미), 2단계 S3
 테라폼 제외       EKS, ALB/리스너/TG/ASG, RDS 본체, Route53, VPN, 정적 콘텐츠 S3
 GCP DR           AI 전면 배제, Cloud SQL 하나
 ```
@@ -447,7 +462,7 @@ GCP DR           AI 전면 배제, Cloud SQL 하나
 ```
 1. 이미지 저장소 GHCR vs ECR        프라이빗 클러스터면 ECR 이 유리(NAT 회피, IRSA 인증)
 2. ArgoCD 태그 갱신                 CI 커밋 vs Image Updater
-3. 프론트 헬스 엔드포인트            지금 없다. readinessProbe 용으로 필요
+3. ~~프론트 헬스 엔드포인트~~        완료 — `/api/health` 추가, compose 헬스체크도 함께
 4. 노드 그룹 분리 여부               AI 워크로드 격리
 5. AmazonMQ 엔진 버전 / 단일 vs 클러스터
 6. 로그 수집 경로                   Fluent Bit → S3 직접 vs CloudWatch 경유
@@ -459,8 +474,14 @@ GCP DR           AI 전면 배제, Cloud SQL 하나
 ```
 1. ImageStorageUtil / WebMvcConfig 경로 탐색 → 프로퍼티 준수      (이전 전 필수)
 2. http/client.ts 빈 baseURL → 상대 경로                        (한 줄)
-3. 프론트 /api/health 라우트                                    (5줄)
-4. SQUID 가중치 전달 경로 (이미지에 굽기 vs S3+initContainer)
+3. SQUID 가중치 전달 경로 (이미지에 굽기 vs S3+initContainer)
+```
+
+완료:
+
+```
+프론트 /api/health   force-dynamic, 상류를 확인하지 않음. compose 헬스체크 연동
+                     -> frontend 가 처음으로 (healthy) 를 찍는다
 ```
 
 ---
