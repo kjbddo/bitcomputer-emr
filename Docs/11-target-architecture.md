@@ -147,6 +147,39 @@ VPC IP 를 할당**한다 — IP 를 먹는 것은 노드 수가 아니라 파�
 > **환경 둘은 비용이 두 배다.** 클러스터·RDS·NAT 가 각각 하나씩 더 든다.
 > `dev` 는 NAT 하나 공유·RDS 단일 AZ·작은 노드로 줄이는 것을 권한다.
 
+### 2.1 사이징
+
+| 대상 | 타입 | 근거 |
+|---|---|---|
+| 노드 `general` | `t3.medium` | frontend·spring·경량 API 4개·ArangoDB. 각 60~650MB |
+| 노드 `ai` | `c6i.xlarge` | **버스터블을 쓰면 안 된다** (아래) |
+| RDS | `db.t3.medium` | 질의가 산발적이라 버스터블이 맞다 |
+| ElastiCache | `cache.t3.medium` | 세션·캐시 전용 |
+| 백업 | **7일** | RDS 자동 백업, ArangoDB EBS 스냅샷 |
+
+**`ai` 노드그룹만 c 계열인 이유가 둘이다.**
+
+**t3 는 버스터블이다.** CPU 크레딧이 마르면 **베이스라인 20%** 로 떨어진다. 추론은
+짧고 굵게 CPU 를 전부 쓰는 작업이라 크레딧이 빠르게 마르고, 마른 뒤의 성능은
+예측이 어렵다.
+
+**코어 수가 성능을 직접 정한다.** 실측이 **14코어에서 3~4초**였다. torch 추론은
+코어를 병렬로 쓰므로 코어가 줄면 그만큼 늘어난다.
+
+```
+14 vCPU (실측)      3~4초
+ 4 vCPU (c6i.xlarge) 10~12초 예상
+ 2 vCPU (t3.medium)  20~30초 예상 + 크레딧 소진 시 그 이상
+```
+
+웹 타임아웃이 60초라 실패하지는 않지만, 20초를 넘기면 사용자는 화면이 멈춘 것으로
+느낀다.
+
+### 2.2 범위에서 뺀 것
+
+**모니터링·알람·옵저버빌리티는 이번 범위가 아니다.** 로그 수집용 S3 는 만들되
+수집 파이프라인은 나중에 붙인다.
+
 ```mermaid
 flowchart LR
   subgraph L0["00-bootstrap"]
@@ -222,7 +255,13 @@ flowchart TB
     C5["애드온<br/>vpc-cni·coredns·kube-proxy"]
   end
 
+  subgraph bs["helm 1회 — 부트스트랩"]
+    B1["ArgoCD"]
+    B2["root-app<br/>app-of-apps"]
+  end
+
   subgraph mf["매니페스트 — ArgoCD"]
+    M0["External Secrets<br/>Operator"]
     M1["Gateway API CRD"]
     M2["AWS LB 컨트롤러"]
     M3["Gateway · HTTPRoute"]
@@ -232,8 +271,11 @@ flowchart TB
   end
 
   C1 --> C2 --> C3 --> C4 --> C5
-  C5 --> M1 --> M2 --> M3
+  C5 --> B1 --> B2
+  B2 --> M0
+  B2 --> M1 --> M2 --> M3
   M2 --> M4 --> M5 --> M6
+  M0 --> M5
 ```
 
 ### eksctl 로 갈 때 주의사항
@@ -278,13 +320,13 @@ ALB 가 살아 있는 채로 서브넷을 지우면 테라폼이 오래 매달�
 
 ### 노드 그룹
 
-| 그룹 | 워크로드 | 근거 |
+| 그룹 | 타입 | 워크로드 |
 |---|---|---|
-| `general` | frontend, spring-boot, 경량 API 4개, ArangoDB | 각 60~650MB |
-| `ai` | xraygraph | **CPU 전부 + 1.4GB.** 추론 3~4초가 그 전제 |
+| `general` | `t3.medium` | frontend, spring-boot, 경량 API 4개, ArangoDB |
+| `ai` | `c6i.xlarge` | xraygraph — **CPU 전부 + 1.4GB** |
 
 `xraygraph` 가 CPU 를 다 쓰는 동안 프론트가 같은 노드에 있으면 화면 응답이 같이
-느려진다. taint/toleration 으로 가른다.
+느려진다. **taint/toleration 으로 가른다** — 사이징 근거는 §2.1.
 
 ---
 
@@ -551,7 +593,7 @@ ArgoCD 가 한 번만 실행한다. `ttlSecondsAfterFinished` 로 오래된 Job 
 클러스터에서 NAT 비용과 PAT 만료는 매번 치른다. **DR 을 상시 띄울 거면 GHCR,
 아니면 ECR** 이 유리하다. 아직 열린 항목이다.
 
-### 시크릿
+### 5.1 CI 쪽 시크릿
 
 | 레포 | 필요한 것 | 방식 |
 |---|---|---|
@@ -562,19 +604,74 @@ ArgoCD 가 한 번만 실행한다. `ttlSecondsAfterFinished` 로 오래된 Job 
 
 **장수명 클라우드 키가 한 곳도 없다.** 이것이 이 구성의 핵심이다.
 
+### 5.2 런타임 시크릿 — External Secrets Operator
+
+```
+Secrets Manager
+   │  ClusterSecretStore (IRSA — 정적 키 없음)
+   ▼
+ExternalSecret  →  K8s Secret  →  파드 envFrom
+```
+
+**이 선택의 근거는 하나다 — 이 앱들은 전부 환경변수로 설정을 읽는다.** `.env` 37개
+키가 전부 그렇다.
+
+| | 코드 수정 | 방식 |
+|---|---|---|
+| **ESO** | **없음** | Secret 을 만들어 `envFrom` 으로 주입 |
+| Secrets Store CSI | 필요 | 파일 마운트. 환경변수로 쓰려면 결국 Secret 을 또 만든다 |
+| IRSA + SDK 직접 | **8개 서비스 전부** | 앱이 기동 때 조회 |
+
+CSI 드라이버도 `secretObjects` 로 K8s Secret 을 만들 수 있는데, **그러면 ESO 와
+같은 일을 부품 하나 더 얹어서 하는 셈**이다.
+
+> **회전에는 재시작이 필요하다.** ESO 가 K8s Secret 은 갱신하지만 **파드의
+> 환경변수는 안 바뀐다** — 환경변수는 컨테이너 기동 시점에 고정된다. 자동화하려면
+> `stakater/Reloader` 를 얹는다. 지금 규모에서는 수동 롤링 재시작으로 충분하다.
+
+### 5.3 ArgoCD 부트스트랩 — helm 1회 후 자기 관리
+
+**ArgoCD 가 매니페스트를 배포하는데, ArgoCD 자신은 누가 설치하나.**
+
+```
+1. eksctl create cluster
+2. helm install argocd argo/argo-cd -n argocd -f bootstrap/argocd-values.yaml
+3. kubectl apply -f bootstrap/root-app.yaml        app-of-apps
+4. 이후 ArgoCD 가 자기 자신을 포함해 전부 관리
+```
+
+**테라폼에 helm/kubernetes 프로바이더를 넣지 않는 것이 요점이다.** 넣는 순간
+"존재하지 않는 클러스터를 참조하는 plan" 순환이 돌아온다 — eksctl 로 빼면서 없앤
+바로 그 문제다.
+
+4단계에서 root-app 이 **argo-cd 차트 자체를 관리하는 Application 을 포함**한다.
+그러면 2단계의 수동 설치가 이후 git 으로 대체된다.
+
+> **자기 관리에는 위험이 하나 있다.** 잘못된 sync 로 ArgoCD 가 죽으면 스스로
+> 복구하지 못한다. 그래서 `bootstrap/argocd-values.yaml` 을 레포에 남긴다 — 그
+> 파일로 helm install 을 다시 돌리면 살아난다.
+
+**프라이빗 클러스터라 둘이 더 필요하다.** ArgoCD 가 GitHub 에 닿아야 하므로 **NAT
+egress** 가 필요하고, UI 는 외부에 노출하지 않고 **bastion 경유 SSM 포트포워드**로
+본다.
+
 ---
 
 ## 6. 적용 순서
 
 ```mermaid
 flowchart LR
-  P1["1. 테라폼 1차<br/>네트워크·SG·데이터"] --> P2["2. eksctl<br/>클러스터"]
-  P2 --> P3["3. 매니페스트<br/>Gateway → ALB"]
-  P3 --> P4["4. 테라폼 2차<br/>CloudFront + VPC origin"]
+  P1["1 · 테라폼 1차<br/>네트워크 · SG · 데이터"] --> P2["2 · eksctl<br/>클러스터 · IRSA · 애드온"]
+  P2 --> P3["3 · helm 1회<br/>ArgoCD + root-app"]
+  P3 --> P4["4 · ArgoCD<br/>ESO · LB컨트롤러 · Gateway → ALB"]
+  P4 --> P5["5 · 테라폼 2차<br/>CloudFront + VPC origin"]
 ```
 
-**4가 3에 의존한다.** CloudFront 오리진에 ALB 가 필요한데 그것은 Gateway 가 만든다.
+**5가 4에 의존한다.** CloudFront 오리진에 ALB 가 필요한데 그것은 Gateway 가 만든다.
 한 번에 `terraform apply` 하면 실패한다.
+
+3단계의 helm 설치는 **한 번뿐**이다. 그 뒤로는 ArgoCD 가 자기 자신을 포함해 전부
+git 에서 가져간다(§5.3).
 
 ---
 
@@ -603,22 +700,24 @@ K8s 에서 ConfigMap 과 코드 기본값 사이에 같은 함정이 재발한�
 ```
 1. 레지스트리 GHCR vs ECR              DR 운용 빈도에 달림
 2. ArgoCD 태그 갱신                    CI 커밋 vs Image Updater
-3. 시크릿 주입 기제                     External Secrets vs Secrets Store CSI vs IRSA 직접
-4. ArgoCD 부트스트랩                    자기 자신은 누가 설치하나 (helm 1회 → app-of-apps)
-5. AmazonMQ 엔진 버전 / 단일 vs 클러스터
-6. 노드 인스턴스 타입·개수 / RDS 클래스 / ElastiCache 노드
-7. 로그 수집 경로                       Fluent Bit → S3 직접 vs CloudWatch 경유
-8. 모니터링·알람                        CloudWatch vs Prometheus
-9. 백업                                RDS 보존 기간, ArangoDB EBS 스냅샷 주기
-10. CloudFront VPC origin 이 ap-northeast-2 에서 되는지
+3. AmazonMQ 엔진 버전 / 단일 vs 클러스터
+4. 노드 개수 (타입은 §2.1 에서 확정)
+5. CloudFront VPC origin 이 ap-northeast-2 에서 되는지
 ```
 
-**3번과 4번은 값이 아니라 기제라 일찍 정하는 게 낫다** — 둘 다 매니페스트 구조를
-바꾼다.
+**해소된 것:** 리전·CIDR·AZ·환경(§2.0), 사이징·백업(§2.1), 시크릿 주입 기제(§5.2),
+ArgoCD 부트스트랩(§5.3), SQUID 가중치 전달(§4.4), RDS 소유권(§2).
 
-**9번의 ArangoDB 백업이 특히 비어 있다.** 인클러스터 + EBS 라 관리형 자동 백업이
-없다. 처방 그래프는 엑셀에서 4.5분이면 재생성되지만, **운영 중 쌓인 피드백 이력은
-복구할 방법이 없다.**
+**범위에서 뺀 것:** 모니터링·알람·옵저버빌리티(§2.2). 로그 수집용 S3 는 만들되
+파이프라인은 나중이다.
+
+### ArangoDB 백업은 여전히 손이 간다
+
+백업 보존은 7일로 정했지만, **인클러스터 + EBS 라 관리형 자동 백업이 없다.**
+스냅샷을 누가 언제 뜨는지를 따로 만들어야 한다(CronJob 또는 AWS Backup).
+
+처방 그래프는 엑셀에서 4.5분이면 재생성되지만, **운영 중 쌓인 피드백 이력은 그
+경로로 복구되지 않는다.**
 
 ### 이전 전에 고쳐야 할 코드
 
