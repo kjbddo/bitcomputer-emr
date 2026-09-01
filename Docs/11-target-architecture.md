@@ -54,6 +54,7 @@ flowchart TB
   CF -->|VPC origin| ALB
   ALB -->|"/*"| FE
   ALB -->|"/api/*"| SB
+  ALB -->|"/storage/*"| XR
 
   SB --> RX
   SB --> CT
@@ -83,6 +84,21 @@ flowchart TB
 
 **클러스터 밖으로 나가는 트래픽은 둘뿐이다** — 상류 LLM 호출(NAT 경유)과 S3·ECR
 같은 AWS 서비스(VPC 엔드포인트 경유).
+
+### 1.1 `/storage/*` 가 따로 있는 이유
+
+`xraygraph` 는 나머지 내부 서비스와 달리 **브라우저가 직접 읽는 경로를 갖는다.**
+
+```python
+app.mount("/storage", StaticFiles(directory=STORAGE_DIR), name="storage")
+```
+
+추론 응답의 `heatmapPath` 를 Spring 이 `XRAY_API_PUBLIC_BASE_URL` 로 절대 URL 로
+만들어 브라우저에 준다. 브라우저는 그 주소로 히트맵 PNG 를 가져간다.
+
+**`xraygraph` 를 ClusterIP 로만 두면 분석은 되는데 이미지가 안 뜬다.** 그래서
+`/storage/*` HTTPRoute 가 필요하다. 2단계에서 히트맵을 S3 로 옮기면 이 경로는
+CloudFront 가 대신하고 이 라우트는 사라진다(§4.3).
 
 ---
 
@@ -266,20 +282,33 @@ flowchart LR
 | **ArangoDB** (인클러스터+EBS) | 처방 그래프, X-ray 그래프 | 엑셀·CheXpert → Job | **AWS 관리형 등가물 없음** |
 | **ElastiCache** | 세션·캐시 | — | 관리형 |
 | **AmazonMQ** | 검증 job 큐 | — | 관리형 |
-| **EFS** | 업로드 원본·오버레이 | 운영 중 | **RWX 필요** |
-| **S3** | 로그, X-ray 파생물 | 배치 | 가장 쌈 |
+| **EFS** | 진료 업로드 원본 + flask 오버레이 | 운영 중 상시 | **RWX 필요** (§4.2) |
+| **S3 · X-ray** | CheXpert 사례 산출물 + 질의 히트맵 | 적재 시 / 추론마다 | 무한 증가분을 라이프사이클로 만료 (§4.3) |
+| **S3 · 로그** | 컨테이너 로그 | 상시 | 가장 쌈 |
 
-### `images-storage` 가 EFS 인 이유
+### 4.2 EFS — 진료 업로드 원본과 오버레이
+
+**실제 진료에서 올린 X-ray 다.** 아래 규약으로 쌓인다.
+
+```
+images/<radiologyRequestId>/original/<파일명>              Spring 이 업로드를 저장
+images/<radiologyRequestId>/overlay/<파일명>_overlay.jpg   flask 가 히트맵을 얹어 저장
+```
+
+`original` 은 `RadiologyReportController` 가 업로드를 받아 쓰고, `overlay` 는
+`flask-radiology` 가 자기 추론 결과를 얹어 만든다.
 
 **세 곳이 쓴다.**
 
 ```
-쓰기   Spring ImageStorageUtil       업로드 원본
-읽기   flask-radiology               Spring 이 경로 문자열만 넘기고 flask 가 직접 읽는다
-서빙   Spring WebMvcConfig /images/**  브라우저에 정적 서빙
+쓰기   Spring ImageStorageUtil          original/
+쓰기   flask-radiology                  overlay/
+서빙   Spring WebMvcConfig /images/**   브라우저에 정적 서빙
 ```
 
-**EBS 로는 안 된다** — flask 를 켜는 순간 ReadWriteMany 가 필요해진다.
+**EBS 로는 안 된다** — Spring 과 flask 가 같은 디렉터리를 각자 쓰므로
+ReadWriteMany 가 필요하다. `RADIOLOGY_ENGINE=xray` 인 지금은 flask 가 호출되지
+않아 실제로는 Spring 혼자 쓰지만, **flask 를 켜는 순간 조용히 깨진다.**
 
 **S3 로 가려면 세 곳을 동시에 고쳐야 하고** 그중 하나가 브라우저가 직접 보는 정적
 서빙이다. 배포와 코드 변경을 한 번에 묶으면 문제가 났을 때 원인이 둘로 갈린다.
@@ -288,6 +317,35 @@ flowchart LR
 109MB 다. 단가가 10배여도 이 규모에서는 절대 금액 차이가 무의미하다.
 
 > 뒤집을 조건: 업로드가 수십 GB 를 넘거나 정적 서빙을 CloudFront 로 옮길 때.
+
+### 4.3 S3 · X-ray — 적재 산출물과 질의 히트맵
+
+**EFS 와 담는 것이 완전히 다르다.** 이쪽은 `xraygraph` 의 `storage/` 다.
+
+| 종류 | 접두사 | 언제 생기나 | 실측 |
+|---|---|---|---|
+| 사례 원본 | `case_*` | 적재 시 1회 | 471개 · 26MB |
+| 재구성 출력 | `case_*` | 적재 시 1회 | 471개 · 19MB |
+| 히트맵 | `case_*` | 적재 시 1회 | 471개 · 65MB |
+| **질의 히트맵** | `query_case_*` | **추론할 때마다 1개** | 누적 |
+
+**질의 히트맵이 무한히 쌓인다.** 추론 한 번에 파일 하나다. 로컬에서 오늘 17번
+돌려 17개가 생겼다. 운영에서는 정리 정책이 필요하고, **S3 라이프사이클로 자동
+만료시킬 수 있다는 것이 EBS 대신 S3 를 쓸 실질 근거다.**
+
+**브라우저가 이 파일을 직접 읽는다**(§1.1). 그래서 이관이 두 단계로 갈린다.
+
+```
+1단계   적재 산출물만 S3 에 백업 (재적재에 4.5분 걸리므로 보관 가치가 있다)
+        질의 히트맵은 EBS 에 두고 /storage/* HTTPRoute 로 서빙
+
+2단계   히트맵을 S3 에 직접 쓰고 CloudFront 가 서빙
+        라이프사이클로 query_* 자동 만료
+        xraygraph 의 StaticFiles 마운트와 /storage/* 라우트를 함께 제거
+```
+
+`images-storage` 때와 같은 이유로 나눈다 — **배포와 코드 변경을 한 번에 묶지
+않는다.**
 
 ### EBS 를 미리 만들지 않는다
 
