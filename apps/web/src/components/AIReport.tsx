@@ -9,6 +9,7 @@ import {
   XrayUncertainty,
   XrayView,
 } from "@/services/radiology";
+import { AI_DISABLED_NOTICE, isAiEnabled } from "@/services/aiFeatures";
 
 const EXCLUDED_DISEASE_TAGS = new Set(["no_finding", "support_devices"]);
 const MAX_VISIBLE_DISEASES = 3;
@@ -181,6 +182,7 @@ export default function AIReport({
           <option value="PA">PA</option>
           <option value="AP">AP</option>
         </select>
+        {isAiEnabled() ? (
         <Button
           type="button"
           variant="secondary"
@@ -190,6 +192,11 @@ export default function AIReport({
         >
           {isLoading ? "분석 중..." : "AI 분석"}
         </Button>
+        ) : (
+          // DR 구성에는 xraygraph 가 없다. 버튼을 두면 눌러서 503 을 받는데,
+          // 화면에서는 "없는 기능" 과 "고장" 이 구별되지 않는다.
+          <span role="note">{AI_DISABLED_NOTICE}</span>
+        )}
       </div>
 
       {/* 결과 이미지 표시 영역 */}

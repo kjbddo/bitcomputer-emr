@@ -1,5 +1,6 @@
 package com.example.bitcomputer.serviceImpl;
 
+import com.example.bitcomputer.config.AiFeatures;
 import com.example.bitcomputer.Repository.RadiologyReportRepository;
 import com.example.bitcomputer.entity.RadiologyReport;
 import com.example.bitcomputer.model.RadiologyAnalysisResponseDTO;
@@ -28,6 +29,7 @@ public class RadiologyReportServiceImpl implements RadiologyReportService {
     private final RadiologyReportRepository radiologyReportRepository;
     private final RestTemplate restTemplate;
     private final XrayGraphRagClient xrayGraphRagClient;
+    private final AiFeatures aiFeatures;
     private final ObjectMapper objectMapper;
 
     @Value("${ai.api.base-url:http://localhost:5000}")
@@ -43,11 +45,13 @@ public class RadiologyReportServiceImpl implements RadiologyReportService {
             RadiologyReportRepository radiologyReportRepository,
             RestTemplate restTemplate,
             XrayGraphRagClient xrayGraphRagClient,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            AiFeatures aiFeatures) {
         this.radiologyReportRepository = radiologyReportRepository;
         this.restTemplate = restTemplate;
         this.xrayGraphRagClient = xrayGraphRagClient;
         this.objectMapper = objectMapper;
+        this.aiFeatures = aiFeatures;
     }
 
     @Override
@@ -156,6 +160,10 @@ public class RadiologyReportServiceImpl implements RadiologyReportService {
     }
 
     private AnalysisResult callConfiguredEngine(RadiologyReportRequestDTO request) {
+        // DR 구성에는 xraygraph 도 flask-radiology 도 없다. 요청 레코드를 만든 뒤
+        // 여기서 끊으면 pending 이 남으므로, 엔진 호출 직전이 아니라 이 진입점에서
+        // 끊는다 - 호출자는 즉시 503 을 받는다.
+        aiFeatures.requireEnabled();
         if ("flask".equalsIgnoreCase(radiologyEngine)) {
             return callFlaskRadiology(request);
         }
