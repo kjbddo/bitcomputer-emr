@@ -193,9 +193,11 @@ AZ 를 덮고** 워크로드 분포에 따라 자동 확장한다. 서브넷에 
 지금 밖으로 나가는 곳은 **상류 LLM 과 GHCR 뿐이고 둘 다 허용목록이 없으므로 자동
 모드로 충분하다.**
 
-> **인스턴스 타입의 AZ 별 가용성을 먼저 확인한다.** `c6i.xlarge` 가 `a`·`b`·`c`
-> 전부에 있는지 봐야 한다 — 없는 AZ 가 있으면 노드그룹 생성이 실패한다. 그때는 그
-> 노드그룹의 서브넷만 좁힌다.
+**`c6i.xlarge` 는 `a`·`b`·`c` 전부에서 쓸 수 있다**(계정에서 확인). 노드그룹의
+서브넷을 좁힐 필요가 없다.
+
+> 다른 계정·리전으로 옮길 때는 다시 확인한다. 없는 AZ 가 있으면 노드그룹 생성이
+> 실패한다.
 >
 > ```bash
 > aws ec2 describe-instance-type-offerings --location-type availability-zone >   --filters Name=instance-type,Values=c6i.xlarge --region ap-northeast-2 >   --query 'InstanceTypeOfferings[].Location' --output text
@@ -213,7 +215,7 @@ AZ 를 덮고** 워크로드 분포에 따라 자동 확장한다. 서브넷에 
 | RDS | `db.t3.medium` | 질의가 산발적이라 버스터블이 맞다 |
 | ElastiCache | `cache.t3.medium` | 세션·캐시 전용 |
 | AmazonMQ | `mq.m7g.medium` × **3** | 클러스터 최소 사양. RabbitMQ **4.2** |
-| 백업 | **7일** | RDS 자동 백업, ArangoDB EBS 스냅샷 |
+| 백업 | **7일** | RDS 자동 백업 · **AWS Backup**(EBS) — §4.5 |
 
 **`ai` 노드그룹만 c 계열인 이유가 둘이다.**
 
@@ -257,7 +259,7 @@ flowchart LR
     D1["RDS<br/>인스턴스 + 부속"]
     D2["ElastiCache"]
     D3["AmazonMQ"]
-    D4["S3 ×2 · EFS"]
+    D4["S3 ×2 · EFS<br/>AWS Backup"]
   end
   subgraph L4["40-edge"]
     E1["CloudFront"]
@@ -274,7 +276,7 @@ flowchart LR
 | `00-bootstrap` | state 버킷, GH Actions OIDC 역할 | 로컬 state 로 만들고 마이그레이션 |
 | `10-network` | VPC, subnet, RT, IGW, NAT, VPC 엔드포인트 | **서브넷 EKS 태그를 여기서 붙인다** |
 | `20-security` | SG, IAM | 클러스터 SG ID 대신 CIDR 을 소스로 |
-| `30-data` | **RDS**, ElastiCache, AmazonMQ, S3 ×2, EFS | RDS 는 `deletion_protection` + `prevent_destroy` 로 잠근다 |
+| `30-data` | **RDS**, ElastiCache, AmazonMQ, S3 ×2, EFS, **AWS Backup** | RDS 는 `deletion_protection` + `prevent_destroy` 로 잠근다 |
 | `40-edge` | CloudFront, WAF, VPC origin | **ALB 생성 이후에만 적용 가능** |
 
 ### 테라폼이 만들지 않는 것
@@ -515,6 +517,44 @@ S3 (X-ray 버킷)  models/squid_exp1_256_mask/model.pth
 
 **업로드는 CI 가 한다.** `services/radiology-legacy/squid_exp1_256_mask/**` 가
 바뀌면 S3 에 올리고 매니페스트의 기대 해시를 갱신한다.
+
+### 4.5 백업 — AWS Backup
+
+```
+RDS          자동 백업 7일        관리형
+ArangoDB     AWS Backup 7일       EBS 볼륨 스냅샷
+```
+
+**ArangoDB 만 손이 간다.** 인클러스터 + EBS 라 관리형 자동 백업이 없다.
+
+**볼륨 ID 를 테라폼이 모른다는 것이 설계를 정한다.** PVC 가 동적으로 만들기
+때문이다. 그래서 **태그로 선택**한다.
+
+```
+StorageClass   tagSpecification 으로 볼륨에 backup=arangodb 를 붙인다
+AWS Backup     그 태그를 selection 조건으로 쓴다
+```
+
+StorageClass 쪽 태그를 빠뜨리면 **백업 계획은 만들어지는데 대상이 0건**이 된다 —
+콘솔에서 계획이 초록으로 보이므로 복원할 때까지 모른다.
+
+> **EBS 스냅샷은 crash-consistent 다.** 애플리케이션 일관성은 보장되지 않는다.
+> ArangoDB 는 WAL 이 있어 대부분 복구되지만, **복원을 한 번은 실제로 해 봐야
+> 한다.** 재해 복구는 그날 처음 시험해 보는 절차가 되어서는 안 된다.
+>
+> 더 확실히 하려면 `arangodump` 를 주기적으로 S3 에 넣는다. 그건 논리 백업이라
+> 애플리케이션 일관성이 있다.
+
+**무엇이 복구되고 무엇이 안 되는지 구분해 둔다.**
+
+| | 복구 경로 |
+|---|---|
+| 처방 그래프 원본 | 엑셀 → ETL 재적재 (4.5분) |
+| 합성 케이스 | 스크립트 재실행 (결정론적) |
+| X-ray 코퍼스 | CheXpert 재시드 (4.5분) |
+| **운영 중 쌓인 피드백 이력** | **백업뿐이다** |
+
+앞의 셋은 백업이 없어도 되살아난다. **마지막 하나 때문에 백업이 필요하다.**
 
 ### EBS 를 미리 만들지 않는다
 
@@ -771,6 +811,8 @@ git 에서 가져간다(§5.3).
 - [ ] 서브넷에 EKS 태그가 붙어 있다
 - [ ] 적재 Job 과 런타임 파드가 **같은 ConfigMap** 을 본다
 - [ ] `latest` 태그를 참조하는 매니페스트가 없다
+- [ ] StorageClass 가 붙이는 태그와 AWS Backup selection 조건이 같다
+- [ ] **복원을 한 번 해 봤다** — 백업 계획이 초록인 것과 복원되는 것은 다르다
 
 마지막에서 두 번째가 우리 고유 항목이다. `USE_PSPNET_ROI` 가 코드와 compose 양쪽에
 기본값을 갖는데 적재 스크립트는 호스트에서 돌아 compose 를 거치지 않았고, 그 결과
@@ -781,10 +823,7 @@ K8s 에서 ConfigMap 과 코드 기본값 사이에 같은 함정이 재발한�
 
 ## 8. 아직 열린 것
 
-```
-1. c6i.xlarge 가 a·b·c 전부에 있는지 — 계정에서 CLI 로 확인 (§2.0)
-2. ArangoDB EBS 스냅샷을 누가 언제 뜨는지 — CronJob vs AWS Backup
-```
+**설계 판단은 남지 않았다.**
 
 **웹으로 확인해 닫은 것 넷.**
 
@@ -798,21 +837,17 @@ K8s 에서 ConfigMap 과 코드 기본값 사이에 같은 함정이 재발한�
 `mq.t3.micro` 는 이미 **신규 생성이 막혔고 지원 종료가 2026-10-01** 이다. 클러스터도
 지원하지 않으므로 선택지에 없다.
 
-**해소된 것:** 리전·CIDR·AZ·환경(§2.0), 사이징·노드 개수·백업(§2.1), NAT(§2.0),
-CloudFront VPC origin(§1.1), SQUID 가중치 전달(§4.4), 레지스트리·태그 갱신(§5),
-시크릿 주입 기제(§5.2), ArgoCD 부트스트랩(§5.3), RDS 소유권(§2),
-public 서브넷 제거(§1).
+`c6i.xlarge` 는 `a`·`b`·`c` 전부에서 쓸 수 있음을 계정에서 확인했다.
+
+**전부 정해진 것:** 리전·CIDR·AZ·환경(§2.0), 사이징·노드 개수(§2.1), NAT(§2.0),
+CloudFront VPC origin(§1.1), public 서브넷 제거(§1), RDS 소유권(§2),
+SQUID 가중치 전달(§4.4), 백업(§4.5), 레지스트리·태그 갱신(§5), 시크릿 주입
+기제(§5.2), ArgoCD 부트스트랩(§5.3).
 
 **범위에서 뺀 것:** 모니터링·알람·옵저버빌리티(§2.2). 로그 수집용 S3 는 만들되
 파이프라인은 나중이다.
 
-### ArangoDB 백업은 여전히 손이 간다
-
-백업 보존은 7일로 정했지만, **인클러스터 + EBS 라 관리형 자동 백업이 없다.**
-스냅샷을 누가 언제 뜨는지를 따로 만들어야 한다(CronJob 또는 AWS Backup).
-
-처방 그래프는 엑셀에서 4.5분이면 재생성되지만, **운영 중 쌓인 피드백 이력은 그
-경로로 복구되지 않는다.**
+설계에 남은 판단은 없다. 다음은 코드다.
 
 ### 이전 전에 고쳐야 할 코드
 
