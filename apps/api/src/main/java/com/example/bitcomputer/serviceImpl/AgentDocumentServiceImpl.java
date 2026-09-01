@@ -1,5 +1,6 @@
 package com.example.bitcomputer.serviceImpl;
 
+import com.example.bitcomputer.config.AiFeatures;
 import com.example.bitcomputer.Repository.*;
 import com.example.bitcomputer.entity.*;
 import com.example.bitcomputer.jwt.JwtTokenProvider;
@@ -42,6 +43,7 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
     private final MedicalCertificateRepository medicalCertificateRepository;
     private final JwtTokenProvider jwtTokenProvider;
     private final CertificateAgentClient certificateAgentClient;
+    private final AiFeatures aiFeatures;
 
     /**
      * historyId → 그 historyId 로 가장 최근에 실행된 generateCertificate/
@@ -69,7 +71,8 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
             HistoryDiagnoseRepository historyDiagnoseRepository,
             MedicalCertificateRepository medicalCertificateRepository,
             JwtTokenProvider jwtTokenProvider,
-            CertificateAgentClient certificateAgentClient) {
+            CertificateAgentClient certificateAgentClient,
+            AiFeatures aiFeatures) {
         this.historyRepository = historyRepository;
         this.patientRepository = patientRepository;
         this.employeeRepository = employeeRepository;
@@ -79,6 +82,7 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
         this.medicalCertificateRepository = medicalCertificateRepository;
         this.jwtTokenProvider = jwtTokenProvider;
         this.certificateAgentClient = certificateAgentClient;
+        this.aiFeatures = aiFeatures;
     }
 
     @Override
@@ -286,6 +290,9 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
             String diagnosisKind,
             String purpose,
             String username) {
+        // DR 구성에는 certificate-api 가 없다. 진단서 조회·저장은 그대로 두고
+        // 생성만 막는다 - 조회는 AI 와 무관한 DB 읽기다.
+        aiFeatures.requireEnabled();
 
         History history = historyRepository.findById(historyId)
                 .orElseThrow(() -> new EntityNotFoundException("History not found: " + historyId));
@@ -351,6 +358,8 @@ public class AgentDocumentServiceImpl implements AgentDocumentService {
             String diagnosisKind,
             String purpose,
             String username) {
+        // 생성 경로만 막는다. 위 generateCertificate 와 같은 이유다.
+        aiFeatures.requireEnabled();
 
         String trimmedDiseaseCode = diseaseCode != null ? diseaseCode.trim() : "";
         String trimmedPrescriptionCode = prescriptionCode != null ? prescriptionCode.trim() : "";

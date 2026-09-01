@@ -1,0 +1,135 @@
+# DR(재해 복구) 스택 — AI 없이 3-tier 만 세운다.
+#
+# 이 파일은 `docker-compose.yml` 을 확장하지 않고 **독립적으로** 선다.
+# profiles 로 한 파일에 합치는 방법도 있지만, 실수로 AI 서비스가 딸려 오는
+# 것을 막지 못한다. DR 은 "무엇이 없는가" 가 핵심이라 파일을 갈랐다.
+#
+# 실행:
+#   cd infra
+#   docker compose -f docker-compose.dr.yml -p bitcomputer-dr up -d --build
+#
+# `-p bitcomputer-dr` 로 프로젝트 이름을 갈라야 한다. 빼면 기존 스택과 같은
+# 프로젝트로 묶여 컨테이너·볼륨·네트워크를 덮어쓴다.
+#
+# 무엇이 빠졌는가 (전체 스택 대비):
+#   prescription-api  certificate-api  validation-agent
+#   llm-gateway       xraygraph        flask-radiology     <- AI 서비스 6개
+#   rabbitmq          arangodb  arango-init                <- AI 전용 미들웨어
+#
+# 이미지 총량 14.4GB -> 약 4.5GB. torch 를 싣는 두 이미지(5.5GB)가 통째로
+# 빠지는 것이 가장 크다.
+#
+# 남긴 것과 이유:
+#   mysql   진료 기록. 이 스택의 존재 이유다
+#   redis   세션과 헬스체크. Spring 이 실제로 쓴다
+#   spring-boot / frontend
+#
+# 포트는 전체 스택과 겹치지 않게 옮겼다. DR 검증을 평소 스택과 나란히
+# 돌려 볼 수 있어야 하기 때문이다.
+
+services:
+  mysql:
+    image: mysql:8
+    container_name: bit-dr-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-bitcomputer}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      # 3307 은 Docker Desktop 백엔드가 이미 쓰고 있다(환경에 따라 다르다).
+      # 호스트 포트는 DR 검증 편의를 위한 것이지 서비스 동작에 필요한 것은
+      # 아니다 - 컨테이너끼리는 네트워크 안에서 3306 으로 붙는다.
+      - "${DR_MYSQL_PORT:-3308}:3306"
+    volumes:
+      - dr-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: bit-dr-redis
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  spring-boot:
+    build:
+      context: ../apps/api
+    image: bitcomputer-dr-spring-boot:latest
+    container_name: bit-dr-spring-boot
+    environment:
+      # `docker` 위에 `dr` 을 얹는다. 순서가 중요하다 — 뒤가 앞을 덮는다.
+      # `dr` 만 주면 DB·Redis 접속 정보가 없어 기동에 실패한다.
+      SPRING_PROFILES_ACTIVE: docker,dr
+      MYSQL_HOST: mysql
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-bitcomputer}
+      MYSQL_USER: ${MYSQL_USER:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      REDIS_HOST: redis
+      JWT_SECRET: ${JWT_SECRET}
+      BOOTSTRAP_SUPERUSER_PASSWORD: ${BOOTSTRAP_SUPERUSER_PASSWORD}
+      CORS_ALLOWED_ORIGINS: ${DR_CORS_ALLOWED_ORIGINS:-http://localhost:3001}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+    ports:
+      - "8081:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  frontend:
+    build:
+      context: ../apps/web
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${DR_API_BASE_URL:-http://localhost:8081}
+        # **빌드 시점에 번들에 박힌다.** 기동 환경변수로는 못 바꾼다.
+        # 그래서 DR 프론트는 전체 스택과 다른 이미지다.
+        NEXT_PUBLIC_AI_FEATURES_ENABLED: "false"
+    image: bitcomputer-dr-frontend:latest
+    container_name: bit-dr-frontend
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${DR_API_BASE_URL:-http://localhost:8081}
+      NEXT_PUBLIC_AI_FEATURES_ENABLED: "false"
+    ports:
+      - "3001:3000"
+    depends_on:
+      spring-boot:
+        condition: service_started
+    # /api/health 는 자기 자신만 검사한다(상류를 보지 않는다).
+    # 전체 스택 compose 의 frontend 에는 헬스체크가 없어 `Up` 만 찍히는데,
+    # DR 은 사람이 브라우저로 확인하고 있지 않을 때 세우는 것이라 여기서는
+    # 오케스트레이터가 스스로 판단할 수 있어야 한다.
+    healthcheck:
+      # node 로 검사한다. 이 이미지에는 wget 도 curl 도 없다 -
+      # node:*-slim 베이스라 셸 도구가 최소한만 들어 있다. wget 을 쓰면
+      # 엔드포인트가 200 을 내는데도 헬스체크만 실패해, 애플리케이션은
+      # 정상인데 오케스트레이터가 고장으로 읽는 상태가 된다.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  # 전체 스택 볼륨과 이름이 다르다. DR 검증이 실서비스 데이터를 건드리면 안 된다.
+  dr-mysql-data:
