@@ -18,13 +18,12 @@ flowchart TB
     CF["CloudFront<br/>WAF · TLS · 정적 캐시"]
   end
 
-  subgraph vpc["VPC"]
-    subgraph pub["public subnet"]
-      NAT["NAT Gateway"]
-      BAS["bastion EC2<br/>SSM Session Manager"]
-    end
+  subgraph vpc["VPC — public 서브넷 없음"]
+    IGW["IGW<br/>부착만. 라우팅에 쓰지 않는다"]
+    NAT["Regional NAT<br/>서브넷에 속하지 않는다"]
 
     subgraph priv["private subnet"]
+      BAS["bastion<br/>SSM Session Manager"]
       ALB["ALB<br/>Gateway API 가 생성"]
 
       subgraph eks["EKS (private endpoint)"]
@@ -79,8 +78,45 @@ flowchart TB
 **진입점은 CloudFront 하나다.** 프론트와 API 가 같은 오리진 아래 있어 CORS·SameSite
 재설계가 필요 없다 — 인증이 쿠키 기반이라 이 이득이 크다.
 
-**노드와 ALB 는 전부 private subnet 에 있다.** CloudFront VPC origin 이 사설 ALB 에
-직접 닿는다. public subnet 에는 NAT 와 bastion 만 남는다.
+**public 서브넷이 없다.** 공인 IP 를 가진 자원이 하나도 없다.
+
+```
+ALB       private   CloudFront VPC origin 이 직접 닿는다
+bastion   private   SSM Session Manager — 인바운드도 공인 IP 도 불필요
+NAT       서브넷 밖  Regional NAT 은 리전 단위 자원이다
+IGW       VPC 에 부착만  라우팅에 쓰이지 않는다
+```
+
+**IGW 는 두 기능이 요구해서 붙인다** — Regional NAT 과 CloudFront VPC origin 이
+각각 "이 VPC 가 인터넷과 통할 수 있다"는 표시로 IGW 를 요구한다. 라우팅 테이블에는
+넣지 않는다.
+
+### 1.1 CloudFront VPC origin 요구사항
+
+**`ap-northeast-2` 는 지원된다.** AWS 지원 리전 표에 있고 **AZ 예외도 없다** —
+도쿄·버지니아 등은 특정 AZ 가 제외돼 있는데 서울은 깨끗하다.
+
+```
+IGW      VPC 에 부착돼 있어야 한다        Regional NAT 도 요구하므로 어차피 있다
+ALB SG   보안 그룹이 붙어 있어야 한다
+NACL     인바운드는 평가되지 않는다        아웃바운드가 ephemeral(1024-65535)을 허용해야 한다
+```
+
+SG 인바운드는 둘 중 하나로 연다.
+
+| | 방법 | 시점 |
+|---|---|---|
+| A | CloudFront 관리형 프리픽스 리스트 | 오리진 생성 **전에도** 가능 |
+| B | 서비스 관리형 SG `CloudFront-VPCOrigins-Service-SG` | 오리진 생성 **후에만** |
+
+**B 가 더 좁다** — 우리 배포에서 오는 트래픽으로만 제한된다. 다만 오리진을 만든
+뒤에야 존재하므로 적용 순서가 한 단계 늘어난다.
+
+> 이름이 `CloudFront-VPCOrigins-Service-SG` 로 시작하는 SG 를 직접 만들지 않는다.
+> AWS 예약 패턴이다.
+
+> gRPC 와 Lambda@Edge 오리진 트리거는 VPC origin 에서 지원되지 않는다. 둘 다
+> 우리와 무관하다.
 
 **클러스터 밖으로 나가는 트래픽은 둘뿐이다** — 상류 LLM 호출(NAT 경유)과 S3·ECR
 같은 AWS 서비스(VPC 엔드포인트 경유).
@@ -119,12 +155,14 @@ CloudFront 가 대신하고 이 라우트는 사라진다(§4.3).
 
 ```
 prod  10.0.0.0/16
-  public    10.0.0.0/24   (a)   10.0.1.0/24   (b)   10.0.2.0/24   (c)   ALB · NAT · bastion
-  private   10.0.10.0/24  (a)   10.0.11.0/24  (b)   10.0.12.0/24  (c)   EKS 노드 · 파드
+  private   10.0.10.0/24  (a)   10.0.11.0/24  (b)   10.0.12.0/24  (c)   ALB · EKS 노드 · 파드 · bastion
   data      10.0.20.0/24  (a)   10.0.21.0/24  (b)   10.0.22.0/24  (c)   RDS · ElastiCache · AmazonMQ · EFS
 
 dev   10.1.0.0/16   (동일 배치)
 ```
+
+**public 서브넷이 없다**(§1). `10.0.0.0/24`~`10.0.9.0/24` 를 비워 두어 나중에
+필요하면 추가할 수 있다 — 서브넷은 **늘릴 수 있고 크기만 못 바꾼다.**
 
 **데이터 계층을 별도 서브넷으로 뺀 이유가 `/24` 때문이다.** VPC CNI 는 **파드마다
 VPC IP 를 할당**한다 — IP 를 먹는 것은 노드 수가 아니라 파드 수다. RDS·ElastiCache
@@ -142,13 +180,26 @@ VPC IP 를 할당**한다 — IP 를 먹는 것은 노드 수가 아니라 파�
 
 ArangoDB 가용성은 AZ 개수와 무관하다 — **EBS 는 몇 개를 두든 단일 AZ 에 묶인다.**
 
-> **NAT 를 몇 개 둘지는 따로 정해야 한다.** AZ 마다 하나면 3개이고, 하나를 공유하면
-> 그 AZ 가 죽을 때 나머지 노드가 egress 를 잃는다. `dev` 는 1개, `prod` 는 비용과
-> 가용성을 보고 정한다.
+**NAT 는 Regional NAT 하나다.** 2025-11 에 나온 리전 단위 자원으로, **하나가 모든
+AZ 를 덮고** 워크로드 분포에 따라 자동 확장한다. 서브넷에 속하지 않으므로
+"AZ 마다 하나씩 둘까"라는 질문 자체가 없어진다.
+
+```
+자동 모드   스케일 다운·재확장 때 egress IP 가 바뀐다
+고정 IP     외부가 우리 IP 를 허용목록에 넣어야 할 때만 필요
+확장 시간   최대 60분. 그동안 교차 AZ 트래픽이 생길 수 있다
+```
+
+지금 밖으로 나가는 곳은 **상류 LLM 과 GHCR 뿐이고 둘 다 허용목록이 없으므로 자동
+모드로 충분하다.**
 
 > **인스턴스 타입의 AZ 별 가용성을 먼저 확인한다.** `c6i.xlarge` 가 `a`·`b`·`c`
 > 전부에 있는지 봐야 한다 — 없는 AZ 가 있으면 노드그룹 생성이 실패한다. 그때는 그
 > 노드그룹의 서브넷만 좁힌다.
+>
+> ```bash
+> aws ec2 describe-instance-type-offerings --location-type availability-zone >   --filters Name=instance-type,Values=c6i.xlarge --region ap-northeast-2 >   --query 'InstanceTypeOfferings[].Location' --output text
+> ```
 
 > **환경 둘은 비용이 두 배다.** 클러스터·RDS·NAT 가 각각 하나씩 더 든다.
 > `dev` 는 NAT 하나 공유·RDS 단일 AZ·작은 노드로 줄이는 것을 권한다.
@@ -161,7 +212,7 @@ ArangoDB 가용성은 AZ 개수와 무관하다 — **EBS 는 몇 개를 두든 
 | 노드 `ai` | `c6i.xlarge` × **1~2** | xraygraph 파드 하나뿐이라 최소 1 |
 | RDS | `db.t3.medium` | 질의가 산발적이라 버스터블이 맞다 |
 | ElastiCache | `cache.t3.medium` | 세션·캐시 전용 |
-| AmazonMQ | **클러스터 배포** | 노드 3개 × 3 AZ. 인스턴스 클래스 확인 필요 |
+| AmazonMQ | `mq.m7g.medium` × **3** | 클러스터 최소 사양. RabbitMQ **4.2** |
 | 백업 | **7일** | RDS 자동 백업, ArangoDB EBS 스냅샷 |
 
 **`ai` 노드그룹만 c 계열인 이유가 둘이다.**
@@ -372,7 +423,7 @@ flowchart LR
 | **RDS MySQL** | 마스터 코드 + 환자·진료 이력 | 엑셀 → Job | 관리형 |
 | **ArangoDB** (인클러스터+EBS) | 처방 그래프, X-ray 그래프 | 엑셀·CheXpert → Job | **AWS 관리형 등가물 없음** |
 | **ElastiCache** | 세션·캐시 | — | 관리형 |
-| **AmazonMQ** | 검증 job 큐 | — | 관리형 |
+| **AmazonMQ** | 검증 job 큐 | — | `mq.m7g.medium` ×3, RabbitMQ 4.2 |
 | **EFS** | 진료 업로드 원본 + flask 오버레이 | 운영 중 상시 | **RWX 필요** (§4.2) |
 | **S3 · X-ray** | CheXpert 사례 산출물 + 질의 히트맵 | 적재 시 / 추론마다 | 무한 증가분을 라이프사이클로 만료 (§4.3) |
 | **S3 · 로그** | 컨테이너 로그 | 상시 | 가장 쌈 |
@@ -731,23 +782,26 @@ K8s 에서 ConfigMap 과 코드 기본값 사이에 같은 함정이 재발한�
 ## 8. 아직 열린 것
 
 ```
-1. CloudFront VPC origin 이 ap-northeast-2 의 ALB 를 지원하는지
-2. AmazonMQ 클러스터 배포의 최소 인스턴스 클래스
-3. c6i.xlarge 가 a·b·c 전부에 있는지
-4. NAT 개수 — prod 를 AZ 마다 둘지, 하나로 공유할지
-5. AmazonMQ 엔진 버전 (지금 rabbitmq:3-management)
+1. c6i.xlarge 가 a·b·c 전부에 있는지 — 계정에서 CLI 로 확인 (§2.0)
+2. ArangoDB EBS 스냅샷을 누가 언제 뜨는지 — CronJob vs AWS Backup
 ```
 
-**1번은 대안이 이미 설계돼 있다** — 안 되면 인터넷 페이싱 ALB + CloudFront 관리형
-프리픽스 리스트로 내려온다(§1.2). 그때도 나머지 구조는 그대로다.
+**웹으로 확인해 닫은 것 넷.**
 
-**2번이 비용에 크게 걸린다.** 클러스터 배포는 브로커 3대이고, `mq.t3.micro` 를
-지원하지 않는 것으로 안다. 이 프로젝트 부하(사용자 클릭당 job 하나)에는 단일
-인스턴스로도 충분하다 — 비용을 보고 되돌릴 수 있는 결정이다.
+| 항목 | 결과 |
+|---|---|
+| CloudFront VPC origin 의 서울 지원 | **지원됨.** AZ 예외 없음 (§1.1) |
+| AmazonMQ 클러스터 최소 사양 | `mq.m7g.medium` × 3 |
+| AmazonMQ 엔진 버전 | **4.2** — `m7g` 에서만 지원. 3.13 은 t3/m5/m7g |
+| NAT 개수 | **질문이 사라졌다.** Regional NAT 은 리전 단위라 하나면 된다 |
 
-**해소된 것:** 리전·CIDR·AZ·환경(§2.0), 사이징·노드 개수·백업(§2.1), SQUID 가중치
-전달(§4.4), 레지스트리·태그 갱신(§5), 시크릿 주입 기제(§5.2), ArgoCD
-부트스트랩(§5.3), RDS 소유권(§2).
+`mq.t3.micro` 는 이미 **신규 생성이 막혔고 지원 종료가 2026-10-01** 이다. 클러스터도
+지원하지 않으므로 선택지에 없다.
+
+**해소된 것:** 리전·CIDR·AZ·환경(§2.0), 사이징·노드 개수·백업(§2.1), NAT(§2.0),
+CloudFront VPC origin(§1.1), SQUID 가중치 전달(§4.4), 레지스트리·태그 갱신(§5),
+시크릿 주입 기제(§5.2), ArgoCD 부트스트랩(§5.3), RDS 소유권(§2),
+public 서브넷 제거(§1).
 
 **범위에서 뺀 것:** 모니터링·알람·옵저버빌리티(§2.2). 로그 수집용 S3 는 만들되
 파이프라인은 나중이다.

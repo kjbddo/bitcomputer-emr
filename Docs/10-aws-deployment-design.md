@@ -59,16 +59,19 @@ CloudFront VPC origin 을 쓰면 ALB 가 private subnet 에 있어도 CloudFront
 그 이름은 Gateway 가 ALB 를 만들어야 정해지고(임의 접미사), Route53 이 범위 밖이라
 별칭으로 우회할 수도 없다. 그러면 VPC origin 쪽이 추가 비용 없이 더 안전하다.
 
-> 리전 지원 여부를 먼저 확인한다. 안 되면 인터넷 페이싱 + CloudFront 관리형
-> 프리픽스 리스트(`com.amazonaws.global.cloudfront.origin-facing`)로 내려온다.
-> 그때도 나머지 구조는 그대로다.
+**확인 결과 `ap-northeast-2` 는 지원된다.** AZ 예외도 없다. 요구사항과 SG 구성은
+[11 §1.1](11-target-architecture.md) 을 본다.
+
+**그리고 이 결정이 public 서브넷 자체를 없앴다.** ALB 가 사설이고 bastion 은 SSM 을
+쓰며 Regional NAT 은 서브넷에 속하지 않으므로, **공인 IP 를 가진 자원이 하나도
+없다**(11 §1).
 
 ---
 
 ## 2. 도구 경계
 
 ```
-테라폼    VPC, 서브넷(EKS 태그 포함), RT, IGW, NAT, VPC 엔드포인트
+테라폼    VPC, 서브넷(EKS 태그 포함), RT, IGW, Regional NAT, VPC 엔드포인트
           SG, S3 ×2, RDS, ElastiCache, AmazonMQ, bastion
           CloudFront + WAF + VPC origin        ← ALB 생성 후 2차 적용
 
@@ -170,7 +173,7 @@ ALB 가 살아 있는 채로 서브넷을 지우려 하면 테라폼이 오래 �
 
 ```
 00-bootstrap   state 버킷, GH Actions OIDC 역할     ← 로컬 state 로 만들고 마이그레이션
-10-network     VPC, subnet, RT, IGW, NAT, 엔드포인트
+10-network     VPC, subnet(private·data 만), RT, IGW, Regional NAT, 엔드포인트
 20-security    SG, WAF, IAM
 30-data        RDS, ElastiCache, AmazonMQ, S3 ×2, EFS
 40-edge        CloudFront + VPC origin              ← 3단계 이후에만 적용 가능
@@ -449,7 +452,7 @@ GCP Database Migration Service 로 RDS 를 외부 소스로 두고 연속 CDC �
 ```
 진입점            CloudFront (WAF 는 여기에만)
 프론트            컨테이너로 클러스터, 정적 export 안 함
-ALB              private subnet + CloudFront VPC origin (리전 지원 확인 후)
+ALB              private subnet + CloudFront VPC origin (서울 지원 확인됨)
 라우팅            Gateway API (Ingress 아님)
 EKS              eksctl, 테라폼 밖
 MySQL            RDS
@@ -464,13 +467,13 @@ GCP DR           AI 전면 배제, Cloud SQL 하나
 ### 열림
 
 ```
-1. 이미지 저장소 GHCR vs ECR        프라이빗 클러스터면 ECR 이 유리(NAT 회피, IRSA 인증)
+1. ~~이미지 저장소~~               GHCR private 로 확정 (11 §5)
 2. ArgoCD 태그 갱신                 CI 커밋 vs Image Updater
 3. ~~프론트 헬스 엔드포인트~~        완료 — `/api/health` 추가, compose 헬스체크도 함께
 4. 노드 그룹 분리 여부               AI 워크로드 격리
 5. AmazonMQ 엔진 버전 / 단일 vs 클러스터
 6. 로그 수집 경로                   Fluent Bit → S3 직접 vs CloudWatch 경유
-7. CloudFront VPC origin 리전 지원 확인 (`ap-northeast-2`)
+7. ~~CloudFront VPC origin 리전 지원~~   `ap-northeast-2` 지원 확인됨 (11 §1.1)
 ```
 
 ### 코드 수정이 필요한 것
