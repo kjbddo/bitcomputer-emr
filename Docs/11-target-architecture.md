@@ -113,20 +113,17 @@ CloudFront 가 대신하고 이 라우트는 사라진다(§4.3).
 |---|---|
 | 리전 | `ap-northeast-2` (서울) |
 | 보조 리전 | `us-east-1` — **CloudFront 용 WAF·ACM 전용.** 프로바이더 alias 로만 쓴다 |
-| AZ | `a`, `c` — 2개 |
+| AZ | `a`, `b`, `c` — 3개 |
 | 환경 | `dev`, `prod` — **VPC 부터 분리** |
 | 서브넷 | `/24` |
 
 ```
 prod  10.0.0.0/16
-  public    10.0.0.0/24   (a)    10.0.1.0/24   (c)    ALB · NAT · bastion
-  private   10.0.10.0/24  (a)    10.0.11.0/24  (c)    EKS 노드 · 파드
-  data      10.0.20.0/24  (a)    10.0.21.0/24  (c)    RDS · ElastiCache · AmazonMQ · EFS
+  public    10.0.0.0/24   (a)   10.0.1.0/24   (b)   10.0.2.0/24   (c)   ALB · NAT · bastion
+  private   10.0.10.0/24  (a)   10.0.11.0/24  (b)   10.0.12.0/24  (c)   EKS 노드 · 파드
+  data      10.0.20.0/24  (a)   10.0.21.0/24  (b)   10.0.22.0/24  (c)   RDS · ElastiCache · AmazonMQ · EFS
 
-dev   10.1.0.0/16
-  public    10.1.0.0/24   (a)    10.1.1.0/24   (c)
-  private   10.1.10.0/24  (a)    10.1.11.0/24  (c)
-  data      10.1.20.0/24  (a)    10.1.21.0/24  (c)
+dev   10.1.0.0/16   (동일 배치)
 ```
 
 **데이터 계층을 별도 서브넷으로 뺀 이유가 `/24` 때문이다.** VPC CNI 는 **파드마다
@@ -140,9 +137,18 @@ VPC IP 를 할당**한다 — IP 를 먹는 것은 노드 수가 아니라 파�
 > **VPC CNI prefix delegation 을 켜면 얘기가 달라진다.** ENI 마다 `/28`(16개)을
 > 통째로 잡아 IP 소모가 급증한다. `/24` 에서는 켜지 않는다.
 
-**AZ 2개로 두는 것의 뜻:** EKS 최소 요건(2)은 만족하고 NAT·노드 비용이 3개보다
-싸다. ArangoDB 가용성은 AZ 개수와 무관하다 — **EBS 는 몇 개를 두든 단일 AZ 에
-묶인다.**
+**AZ 를 3개로 둔 이유는 AmazonMQ 다.** RabbitMQ 클러스터 배포는 **노드 3개를 서로
+다른 AZ 3곳에** 둔다. EKS 자체는 2개면 되지만 MQ 가 3개를 요구한다.
+
+ArangoDB 가용성은 AZ 개수와 무관하다 — **EBS 는 몇 개를 두든 단일 AZ 에 묶인다.**
+
+> **NAT 를 몇 개 둘지는 따로 정해야 한다.** AZ 마다 하나면 3개이고, 하나를 공유하면
+> 그 AZ 가 죽을 때 나머지 노드가 egress 를 잃는다. `dev` 는 1개, `prod` 는 비용과
+> 가용성을 보고 정한다.
+
+> **인스턴스 타입의 AZ 별 가용성을 먼저 확인한다.** `c6i.xlarge` 가 `a`·`b`·`c`
+> 전부에 있는지 봐야 한다 — 없는 AZ 가 있으면 노드그룹 생성이 실패한다. 그때는 그
+> 노드그룹의 서브넷만 좁힌다.
 
 > **환경 둘은 비용이 두 배다.** 클러스터·RDS·NAT 가 각각 하나씩 더 든다.
 > `dev` 는 NAT 하나 공유·RDS 단일 AZ·작은 노드로 줄이는 것을 권한다.
@@ -151,10 +157,11 @@ VPC IP 를 할당**한다 — IP 를 먹는 것은 노드 수가 아니라 파�
 
 | 대상 | 타입 | 근거 |
 |---|---|---|
-| 노드 `general` | `t3.medium` | frontend·spring·경량 API 4개·ArangoDB. 각 60~650MB |
-| 노드 `ai` | `c6i.xlarge` | **버스터블을 쓰면 안 된다** (아래) |
+| 노드 `general` | `t3.medium` × **2~4** | frontend·spring·경량 API 4개·ArangoDB |
+| 노드 `ai` | `c6i.xlarge` × **1~2** | xraygraph 파드 하나뿐이라 최소 1 |
 | RDS | `db.t3.medium` | 질의가 산발적이라 버스터블이 맞다 |
 | ElastiCache | `cache.t3.medium` | 세션·캐시 전용 |
+| AmazonMQ | **클러스터 배포** | 노드 3개 × 3 AZ. 인스턴스 클래스 확인 필요 |
 | 백업 | **7일** | RDS 자동 백업, ArangoDB EBS 스냅샷 |
 
 **`ai` 노드그룹만 c 계열인 이유가 둘이다.**
@@ -564,6 +571,17 @@ latest        만들지 않는다
 **불변 태그를 쓰면 `Docs/08` 의 낡은 이미지 판별이 필요 없어진다** — 태그가 곧
 커밋이다.
 
+**태그 갱신은 CI 커밋으로 한다.** Argo Image Updater 가 아니라 앱 CI 가 매니페스트
+레포에 `kustomize edit set image` 결과를 커밋한다.
+
+```
+장점   git 이력이 곧 배포 이력이다. 누가 언제 무엇을 올렸는지 남는다
+대가   앱 CI 가 매니페스트 레포 write 권한을 갖는다 (fine-grained PAT, 그 레포 한정)
+```
+
+`dev` 오버레이만 자동 bump 하고 **`prod` 는 PR 로 프로모션**한다. 그러면 ArgoCD
+자동 동기화를 켜 두어도 `prod` 가 멋대로 바뀌지 않는다.
+
 ### 데이터 적재도 GitOps 로 돈다
 
 **CI 에 클러스터 크리덴셜을 주지 않으면서** 엑셀 변경을 반영하는 방법이다.
@@ -581,17 +599,32 @@ flowchart LR
 **Job 이름에 sha 를 넣는다.** 그래야 데이터가 바뀔 때만 새 Job 객체가 생기고
 ArgoCD 가 한 번만 실행한다. `ttlSecondsAfterFinished` 로 오래된 Job 을 정리한다.
 
-### 레지스트리 — GHCR vs ECR
+### 레지스트리 — GHCR (private)
 
-| | GHCR | ECR |
-|---|---|---|
-| 인증 | imagePullSecret + PAT 만료 관리 | **IRSA, 만료 없음** |
-| 네트워크 | **NAT 를 반드시 탄다** | VPC 엔드포인트로 NAT 회피 |
-| 멀티클라우드 | 하나로 양쪽 공급 | 클라우드별 분리 |
+**AWS 와 GCP 가 같은 이미지를 당겨간다.** ECR 을 쓰면 클라우드마다 레지스트리를
+두고 미러링해야 하는데, DR 형상이 살아 있는 한 그 비용이 계속 든다.
 
-**GCP DR 이 프론트·Spring 둘뿐이라 "하나로 양쪽" 이득이 작다.** 반면 프라이빗
-클러스터에서 NAT 비용과 PAT 만료는 매번 치른다. **DR 을 상시 띄울 거면 GHCR,
-아니면 ECR** 이 유리하다. 아직 열린 항목이다.
+대가를 적어 둔다.
+
+```
+NAT 필수          ghcr.io 는 VPC 엔드포인트가 없다. 노드가 NAT 를 탄다
+imagePullSecret   private 이므로 이미지를 당기는 네임스페이스마다 필요
+토큰 만료          PAT 를 쓰면 만료 관리가 따라온다
+```
+
+**뒤의 둘은 ESO 가 줄여 준다.** 토큰을 Secrets Manager 에 한 벌 두고 ESO 가
+각 네임스페이스에 `kubernetes.io/dockerconfigjson` 타입 Secret 으로 뿌리면,
+**회전할 자리가 한 곳**이 된다.
+
+```
+Secrets Manager  ghcr-token
+      │  ExternalSecret (네임스페이스마다)
+      ▼
+ imagePullSecret
+```
+
+> 만료 없는 자격증명이 필요하면 PAT 대신 **GitHub App** 을 쓴다. 팀 프로젝트
+> 기간에는 fine-grained PAT 로 충분하다.
 
 ### 5.1 CI 쪽 시크릿
 
@@ -698,15 +731,23 @@ K8s 에서 ConfigMap 과 코드 기본값 사이에 같은 함정이 재발한�
 ## 8. 아직 열린 것
 
 ```
-1. 레지스트리 GHCR vs ECR              DR 운용 빈도에 달림
-2. ArgoCD 태그 갱신                    CI 커밋 vs Image Updater
-3. AmazonMQ 엔진 버전 / 단일 vs 클러스터
-4. 노드 개수 (타입은 §2.1 에서 확정)
-5. CloudFront VPC origin 이 ap-northeast-2 에서 되는지
+1. CloudFront VPC origin 이 ap-northeast-2 의 ALB 를 지원하는지
+2. AmazonMQ 클러스터 배포의 최소 인스턴스 클래스
+3. c6i.xlarge 가 a·b·c 전부에 있는지
+4. NAT 개수 — prod 를 AZ 마다 둘지, 하나로 공유할지
+5. AmazonMQ 엔진 버전 (지금 rabbitmq:3-management)
 ```
 
-**해소된 것:** 리전·CIDR·AZ·환경(§2.0), 사이징·백업(§2.1), 시크릿 주입 기제(§5.2),
-ArgoCD 부트스트랩(§5.3), SQUID 가중치 전달(§4.4), RDS 소유권(§2).
+**1번은 대안이 이미 설계돼 있다** — 안 되면 인터넷 페이싱 ALB + CloudFront 관리형
+프리픽스 리스트로 내려온다(§1.2). 그때도 나머지 구조는 그대로다.
+
+**2번이 비용에 크게 걸린다.** 클러스터 배포는 브로커 3대이고, `mq.t3.micro` 를
+지원하지 않는 것으로 안다. 이 프로젝트 부하(사용자 클릭당 job 하나)에는 단일
+인스턴스로도 충분하다 — 비용을 보고 되돌릴 수 있는 결정이다.
+
+**해소된 것:** 리전·CIDR·AZ·환경(§2.0), 사이징·노드 개수·백업(§2.1), SQUID 가중치
+전달(§4.4), 레지스트리·태그 갱신(§5), 시크릿 주입 기제(§5.2), ArgoCD
+부트스트랩(§5.3), RDS 소유권(§2).
 
 **범위에서 뺀 것:** 모니터링·알람·옵저버빌리티(§2.2). 로그 수집용 S3 는 만들되
 파이프라인은 나중이다.
