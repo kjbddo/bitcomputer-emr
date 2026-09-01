@@ -9,7 +9,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -17,11 +16,6 @@ import java.time.ZoneId;
 import java.util.Map;
 
 @Slf4j
-/**
- * AI 가 켜져 있을 때만 구성한다. 이 소비자가 살아 있으면 {@code @RabbitListener}
- * 가 브로커에 연결을 시도하는데, DR 구성에는 RabbitMQ 가 없다.
- */
-@ConditionalOnProperty(name = "features.ai.enabled", havingValue = "true", matchIfMissing = true)
 @Service
 public class ValidationJobResultConsumer {
     private static final ZoneId SEOUL_ZONE = ZoneId.of("Asia/Seoul");

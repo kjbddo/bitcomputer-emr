@@ -23,7 +23,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.extern.slf4j.Slf4j;
-import com.example.bitcomputer.config.AiFeatures;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -50,7 +49,6 @@ public class AgentServiceImpl implements AgentService {
     private final ValidationJobRepository validationJobRepository;
     private final PrescriptionAgentClient prescriptionAgentClient;
     private final RabbitTemplate rabbitTemplate;
-    private final AiFeatures aiFeatures;
     private final ObjectMapper objectMapper;
 
     @Value("${validation.rabbitmq.request-queue:validation.prescription.request}")
@@ -66,8 +64,7 @@ public class AgentServiceImpl implements AgentService {
             ValidationJobRepository validationJobRepository,
             ObjectMapper objectMapper,
             PrescriptionAgentClient prescriptionAgentClient,
-            RabbitTemplate rabbitTemplate,
-            AiFeatures aiFeatures) {
+            RabbitTemplate rabbitTemplate) {
         this.historyDiagnoseRepository = historyDiagnoseRepository;
         this.historyRepository = historyRepository;
         this.historyDiseaseRepository = historyDiseaseRepository;
@@ -78,14 +75,10 @@ public class AgentServiceImpl implements AgentService {
         this.objectMapper = objectMapper;
         this.prescriptionAgentClient = prescriptionAgentClient;
         this.rabbitTemplate = rabbitTemplate;
-        this.aiFeatures = aiFeatures;
     }
 
     @Override
     public ValidationJobStartResponseDTO recommendPrescription(PrescriptionRecommendRequestDTO request) {
-        // DR 구성에는 RabbitMQ 도 검증 에이전트도 없다. job 을 저장한 뒤 발행에
-        // 실패하면 PENDING 이 영원히 남으므로, 그 앞에서 끊는다.
-        aiFeatures.requireEnabled();
         History currentHistory = resolveCurrentHistory(request);
         Patient patient = patientRepository.findById(currentHistory.getPatientId())
                 .orElseThrow(() -> new EntityNotFoundException(

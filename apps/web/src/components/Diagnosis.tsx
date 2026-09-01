@@ -27,7 +27,6 @@ import {
   type RenalGate,
 } from "@/utils/renalGateNotice";
 import { llmStatusNotice } from "@/utils/llmStatus";
-import { AI_DISABLED_NOTICE, isAiEnabled } from "@/services/aiFeatures";
 import {
   itemVerificationOutcome,
   responseVerificationOutcome,
@@ -758,7 +757,6 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
         title="처방"
         actions={
           <>
-            {isAiEnabled() ? (
             <Button
               type="button"
               variant="secondary"
@@ -769,10 +767,6 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
             >
               AI 처방 추천
             </Button>
-            ) : (
-              // DR 구성에는 검증 에이전트도 처방 RAG 도 없다.
-              <span role="note">{AI_DISABLED_NOTICE}</span>
-            )}
             <Button
               type="button"
               variant="primary"

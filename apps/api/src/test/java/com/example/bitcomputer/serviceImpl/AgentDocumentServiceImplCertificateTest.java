@@ -1,6 +1,5 @@
 package com.example.bitcomputer.serviceImpl;
 
-import com.example.bitcomputer.config.AiFeatures;
 import com.example.bitcomputer.Repository.EmployeeRepository;
 import com.example.bitcomputer.Repository.HistoryDiagnoseRepository;
 import com.example.bitcomputer.Repository.HistoryDiseaseRepository;
@@ -87,8 +86,7 @@ class AgentDocumentServiceImplCertificateTest {
         return new AgentDocumentServiceImpl(
                 historyRepository, patientRepository, employeeRepository, null,
                 historyDiseaseRepository, historyDiagnoseRepository, null,
-                jwtTokenProvider, certificateAgentClient,
-                AiFeatures.forTest(true));
+                jwtTokenProvider, certificateAgentClient);
     }
 
     private MedicalCertificateRepository medicalCertificateRepository;
@@ -104,8 +102,7 @@ class AgentDocumentServiceImplCertificateTest {
         return new AgentDocumentServiceImpl(
                 historyRepository, patientRepository, employeeRepository, null,
                 historyDiseaseRepository, historyDiagnoseRepository, medicalCertificateRepository,
-                jwtTokenProvider, certificateAgentClient,
-                AiFeatures.forTest(true));
+                jwtTokenProvider, certificateAgentClient);
     }
 
     private AgentDocumentServiceImpl newServiceForGenerateTestCertificate() {
@@ -119,8 +116,7 @@ class AgentDocumentServiceImplCertificateTest {
 
         return new AgentDocumentServiceImpl(
                 null, null, employeeRepository, null, null, null, null,
-                jwtTokenProvider, certificateAgentClient,
-                AiFeatures.forTest(true));
+                jwtTokenProvider, certificateAgentClient);
     }
 
     @Nested
