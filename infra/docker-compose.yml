@@ -295,6 +295,9 @@ services:
   spring-boot:
     build:
       context: ../apps/api
+    # docker-compose.dr.yml 이 같은 이름을 참조한다. DR 과의 차이는
+    # SPRING_PROFILES_ACTIVE 뿐이고 이미지는 하나다.
+    image: bitcomputer-spring-boot:local
     container_name: bit-spring-boot
     environment:
       # 감사 로그는 LocalDateTime(UTC-naive)으로 저장되고 변환은 클라이언트가 한다.
@@ -357,18 +360,27 @@ services:
   frontend:
     build:
       context: ../apps/web
-      args:
-        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8080}
+    # docker-compose.dr.yml 이 같은 이름을 참조한다. 프로젝트 이름이 달라도 이미지는
+    # 하나여야 한다는 사실을 이름으로 못박는다.
+    image: bitcomputer-frontend:local
     container_name: bit-frontend
-    environment:
-      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8080}
+    # 환경변수도 빌드 인자도 없다. 이 이미지는 AWS·GCP(DR)·로컬 어디서든 같다.
+    #
+    # 브라우저는 API 를 상대 경로로 부르고, Next 가 `/api/*` 를 `http://spring-boot:8080`
+    # 으로 넘긴다(next.config.ts). 그 목적지는 빌드에 구워져 있다 - `rewrites()` 는
+    # `next build` 때 평가돼 routes-manifest 에 박히므로 기동 값으로는 못 바꾼다.
+    # 아래 서비스 이름을 `spring-boot` 에서 바꾸면 next.config.ts 도 함께 바꿔야 한다.
     ports:
       - "3000:3000"
     # 쿠버네티스 readinessProbe 가 쓸 경로를 로컬에서도 같은 것으로 검증한다.
     # 여기서만 확인하지 않으면 "compose 에서는 되는데 클러스터에서 안 된다" 가
     # 배포 당일에 드러난다.
+    #
+    # `/api` 밖에 둔다. `/api/*` 는 배포에서 ALB 가 Spring 으로 보내므로, 그 아래에
+    # 두면 공개 URL 로 물었을 때 프론트가 아니라 Spring 이 답한다 - 프론트 상태를
+    # 묻는데 다른 답이 오고, 그것이 정상으로 보인다.
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:3000/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:3000/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
       interval: 10s
       timeout: 5s
       retries: 5

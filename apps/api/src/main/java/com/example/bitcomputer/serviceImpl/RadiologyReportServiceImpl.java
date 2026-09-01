@@ -1,5 +1,6 @@
 package com.example.bitcomputer.serviceImpl;
 
+import com.example.bitcomputer.config.AiFeatures;
 import com.example.bitcomputer.Repository.RadiologyReportRepository;
 import com.example.bitcomputer.entity.RadiologyReport;
 import com.example.bitcomputer.model.RadiologyAnalysisResponseDTO;
@@ -28,6 +29,7 @@ public class RadiologyReportServiceImpl implements RadiologyReportService {
     private final RadiologyReportRepository radiologyReportRepository;
     private final RestTemplate restTemplate;
     private final XrayGraphRagClient xrayGraphRagClient;
+    private final AiFeatures aiFeatures;
     private final ObjectMapper objectMapper;
 
     @Value("${ai.api.base-url:http://localhost:5000}")
@@ -43,11 +45,13 @@ public class RadiologyReportServiceImpl implements RadiologyReportService {
             RadiologyReportRepository radiologyReportRepository,
             RestTemplate restTemplate,
             XrayGraphRagClient xrayGraphRagClient,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            AiFeatures aiFeatures) {
         this.radiologyReportRepository = radiologyReportRepository;
         this.restTemplate = restTemplate;
         this.xrayGraphRagClient = xrayGraphRagClient;
         this.objectMapper = objectMapper;
+        this.aiFeatures = aiFeatures;
     }
 
     @Override
@@ -120,6 +124,19 @@ public class RadiologyReportServiceImpl implements RadiologyReportService {
                     HttpStatus.INTERNAL_SERVER_ERROR,
                     "AI API와 통신 중 오류가 발생했습니다: " + e.getMessage()
             );
+        } catch (ResponseStatusException e) {
+            // 상태 코드를 이미 정한 예외는 그대로 올려보낸다.
+            //
+            // **이것이 없으면 아래 generic catch 가 잡아 전부 500 으로 만든다.**
+            // ResponseStatusException 도 RuntimeException 이라 걸린다. 특히
+            // AiFeatures.requireEnabled() 의 503 이 그렇게 500 으로 바뀌었다 —
+            // 문구는 문자열 안에 남아 살아남지만 상태 코드는 죽는다.
+            //
+            // 500 은 "고장" 이고 503 은 "이 배포에 그 기능이 없다" 다. AiFeatures 가
+            // 404 대신 503 을 고른 이유가 그 구분인데, 여기서 뒤집히면 DR 구성이
+            // 장애와 구별되지 않는다. 컨트롤러에 ResponseStatusException 분기가
+            // 있는데도 이 catch 앞에서 삼켜져 닿지 못했다.
+            throw e;
         } catch (Exception e) {
             log.error("영상 판독 처리 중 예상치 못한 오류 발생: {}", e.getMessage(), e);
             String errorMsg = "영상 판독 처리 중 오류가 발생했습니다: " + e.getMessage();
@@ -156,6 +173,15 @@ public class RadiologyReportServiceImpl implements RadiologyReportService {
     }
 
     private AnalysisResult callConfiguredEngine(RadiologyReportRequestDTO request) {
+        // DR 구성에는 xraygraph 도 flask-radiology 도 없다.
+        //
+        // **이 자리만으로는 부족하다.** 예전 주석은 여기가 "진입점" 이라 pending 이
+        // 남지 않는다고 적혀 있었는데, upload-and-analyze 는 이 메서드에 오기 전에
+        // 이미 판독 요청을 저장하고 이미지를 쓴다. 그래서 그 컨트롤러는 자기 첫
+        // 줄에서 따로 끊는다(RadiologyReportController.uploadAndAnalyze).
+        //
+        // 여기는 앞선 쓰기가 없는 다른 진입점(POST /report)을 위해 남긴다.
+        aiFeatures.requireEnabled();
         if ("flask".equalsIgnoreCase(radiologyEngine)) {
             return callFlaskRadiology(request);
         }

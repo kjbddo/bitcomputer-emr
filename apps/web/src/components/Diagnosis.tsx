@@ -757,6 +757,12 @@ export default function Diagnosis({ clinicVisit, ensureHistory, employeeId, onHi
         title="처방"
         actions={
           <>
+            {/*
+              DR 구성에도 남는다. 누르면 서버가 503 과 함께 무슨 배포인지 문구로
+              답하고(config/AiFeatures.java), handleGenerateByAI 의 catch 가 그
+              문구를 alert 에 붙인다. 프론트가 배포 종류를 알게 하려면 그 값을
+              번들에 박아야 하고, 그러면 DR 프론트가 별도 이미지가 된다.
+            */}
             <Button
               type="button"
               variant="secondary"

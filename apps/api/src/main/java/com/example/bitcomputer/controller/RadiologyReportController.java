@@ -1,5 +1,6 @@
 package com.example.bitcomputer.controller;
 
+import com.example.bitcomputer.config.AiFeatures;
 import com.example.bitcomputer.model.RadiologyAnalysisResponseDTO;
 import com.example.bitcomputer.model.RadiologyReportRequestDTO;
 import com.example.bitcomputer.service.RadiologyReportService;
@@ -20,12 +21,15 @@ public class RadiologyReportController {
 
     private final RadiologyReportService radiologyReportService;
     private final ImageStorageUtil imageStorageUtil;
+    private final AiFeatures aiFeatures;
 
     public RadiologyReportController(
             RadiologyReportService radiologyReportService,
-            ImageStorageUtil imageStorageUtil) {
+            ImageStorageUtil imageStorageUtil,
+            AiFeatures aiFeatures) {
         this.radiologyReportService = radiologyReportService;
         this.imageStorageUtil = imageStorageUtil;
+        this.aiFeatures = aiFeatures;
     }
 
     @PostMapping("/report")
@@ -63,6 +67,19 @@ public class RadiologyReportController {
             @RequestParam(value = "view", required = false) String view,
             @RequestParam("entryDate") @DateTimeFormat(pattern = "yyyy-MM-dd") LocalDate entryDate) {
         
+        // AI 없는 배포(DR)면 아무것도 하기 전에 끊는다.
+        //
+        // **여기여야 한다.** 이 메서드는 아래에서 순서대로 (2) 판독 요청을 DB 에
+        // 저장하고 (3) 업로드 이미지를 디스크에 쓴 뒤 (6) 에서야 엔진을 부른다.
+        // 게이트가 엔진 쪽에만 있으면 그 둘이 이미 일어난 뒤에 503 이 나가, DR 에서
+        // 버튼을 누를 때마다 고아 `pending` 레코드와 이미지가 쌓인다. 실제로 그렇게
+        // 쌓이는 것을 확인했다(2026-09-01 DR 스택 검증).
+        //
+        // 엔진 쪽 게이트(RadiologyReportServiceImpl.callConfiguredEngine)는 그대로
+        // 둔다. 다른 진입점(POST /report)이 그 경로를 직접 쓰고, 그쪽은 앞선 쓰기가
+        // 없어 그 자리가 맞다.
+        aiFeatures.requireEnabled();
+
         try {
             // 1. 이미지 파일 검증
             if (file == null || file.isEmpty()) {

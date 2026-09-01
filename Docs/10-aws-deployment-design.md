@@ -59,16 +59,19 @@ CloudFront VPC origin 을 쓰면 ALB 가 private subnet 에 있어도 CloudFront
 그 이름은 Gateway 가 ALB 를 만들어야 정해지고(임의 접미사), Route53 이 범위 밖이라
 별칭으로 우회할 수도 없다. 그러면 VPC origin 쪽이 추가 비용 없이 더 안전하다.
 
-> 리전 지원 여부를 먼저 확인한다. 안 되면 인터넷 페이싱 + CloudFront 관리형
-> 프리픽스 리스트(`com.amazonaws.global.cloudfront.origin-facing`)로 내려온다.
-> 그때도 나머지 구조는 그대로다.
+**확인 결과 `ap-northeast-2` 는 지원된다.** AZ 예외도 없다. 요구사항과 SG 구성은
+[11 §1.1](11-target-architecture.md) 을 본다.
+
+**그리고 이 결정이 public 서브넷 자체를 없앴다.** ALB 가 사설이고 bastion 은 SSM 을
+쓰며 Regional NAT 은 서브넷에 속하지 않으므로, **공인 IP 를 가진 자원이 하나도
+없다**(11 §1).
 
 ---
 
 ## 2. 도구 경계
 
 ```
-테라폼    VPC, 서브넷(EKS 태그 포함), RT, IGW, NAT, VPC 엔드포인트
+테라폼    VPC, 서브넷(EKS 태그 포함), RT, IGW, Regional NAT, VPC 엔드포인트
           SG, S3 ×2, RDS, ElastiCache, AmazonMQ, bastion
           CloudFront + WAF + VPC origin        ← ALB 생성 후 2차 적용
 
@@ -85,7 +88,7 @@ eksctl    클러스터, 노드그룹, OIDC, IRSA, 애드온
 | EKS | eksctl 이 IRSA·애드온을 훨씬 적은 코드로 처리한다 |
 | ALB / 리스너 / 리스너룰 / TG | Gateway API 컨트롤러가 만들고 소유한다 |
 | ASG | EKS 관리형 노드그룹이 ASG 를 직접 만든다 |
-| RDS | 상태 자원이라 손으로 만든다. 단 **서브넷 그룹·파라미터 그룹·SG 는 테라폼** |
+| ~~RDS~~ | **철회.** 테라폼이 만든다 — `deletion_protection` + `prevent_destroy` 로 잠근다 |
 | Route53 / VPN | 나중 단계 |
 | 정적 콘텐츠 S3 | 프론트가 컨테이너로 가면서 할 일이 없어졌다 |
 
@@ -170,9 +173,9 @@ ALB 가 살아 있는 채로 서브넷을 지우려 하면 테라폼이 오래 �
 
 ```
 00-bootstrap   state 버킷, GH Actions OIDC 역할     ← 로컬 state 로 만들고 마이그레이션
-10-network     VPC, subnet, RT, IGW, NAT, 엔드포인트
+10-network     VPC, subnet(private·data 만), RT, IGW, Regional NAT, 엔드포인트
 20-security    SG, WAF, IAM
-30-data        RDS 부속, ElastiCache, AmazonMQ, S3 ×2
+30-data        RDS, ElastiCache, AmazonMQ, S3 ×2, EFS
 40-edge        CloudFront + VPC origin              ← 3단계 이후에만 적용 가능
 
 키: s3://<bucket>/<env>/<layer>/terraform.tfstate
@@ -198,7 +201,7 @@ workspace 는 지금 어느 환경인지가 명령에 드러나지 않아, 프�
 
 | 지금 | AWS | 비고 |
 |---|---|---|
-| `mysql` 컨테이너 | **RDS MySQL 8.0** | 서브넷 그룹·파라미터 그룹·SG 는 테라폼 |
+| `mysql` 컨테이너 | **RDS MySQL 8.0** | 인스턴스·부속 전부 테라폼 |
 | `redis` 컨테이너 | **ElastiCache** | |
 | `rabbitmq` 컨테이너 | **AmazonMQ** | 엔진 버전 확인 필요 |
 | `arangodb` 컨테이너 | **인클러스터 + EBS** | 관리형 등가물 없음 |
@@ -296,7 +299,11 @@ xraygraph:
 ```
 
 없으면 `engineStatus` 가 `real` → `mock` 으로 떨어진다. K8s 에는 이런 마운트가
-없으므로 **이미지에 굽거나 S3 + initContainer** 로 넣는다.
+없다.
+
+**S3 + initContainer 로 간다**(11 §4.4). 이미지에 굽지 않는 이유는 가중치가 코드와
+다른 주기로 바뀌고, 구우면 `xraygraph`·`flask-radiology` 두 이미지에 같은 파일이
+중복되기 때문이다.
 
 `flask-radiology` 를 안 띄우더라도 **이 디렉터리는 지울 수 없다.**
 
@@ -325,7 +332,7 @@ xraygraph:
 | 자격증명 | `LLM_API_KEY`, DB 비밀번호, `JWT_SECRET` | Secrets Manager |
 | 접속 정보 | `*_BASE_URL`, 엔드포인트 | Parameter Store (테라폼 출력) |
 | 동작 토글 | `USE_PSPNET_ROI`, `USE_TORCH_*`, `LLM_PROVIDER` | ConfigMap |
-| 빌드 시점 | `NEXT_PUBLIC_API_BASE_URL` | 이미지에 굽힘 |
+| 빌드 시점 | **없다** | 프론트 빌드 인자를 전부 없앴다 (§7.2) |
 
 ### 7.1 토글 기본값이 두 곳에 있으면 조용히 어긋난다
 
@@ -339,13 +346,29 @@ healthy, 시더 "202건 적재 성공", 검색도 결과를 냄.
 **K8s 에서 ConfigMap 과 코드 기본값 사이에 같은 함정이 재발한다.** 적재 Job 과
 런타임 파드가 **같은 ConfigMap 을 참조**하도록 배선한다.
 
-### 7.2 `NEXT_PUBLIC_API_BASE_URL`
+### 7.2 프론트 빌드 인자를 없앴다 (완료)
 
-단일 오리진이므로 빈 값 + 상대 경로로 두면 **도메인이 바뀌어도 재빌드가 필요
-없다.** 나중에 Route53 을 붙일 때 이득이다.
+빌드 인자가 둘 있었다. `NEXT_PUBLIC_` 값은 번들에 박혀 기동 환경변수로 바뀌지
+않으므로, **값이 다른 만큼 이미지가 갈렸다** — 도메인마다 하나, DR 용으로 또 하나.
 
-`apps/web/src/services/http/client.ts` 가 빈 값이면 `http://localhost:8080` 으로
-폴백하므로 **한 줄 수정이 필요하다.**
+```
+NEXT_PUBLIC_API_BASE_URL          상대 경로로 대체        client.ts
+NEXT_PUBLIC_AI_FEATURES_ENABLED   서버 503 문구로 대체    AiFeatures.java
+```
+
+**이제 프론트 이미지가 하나다.** AWS·GCP(DR)·로컬이 같은 것을 쓴다.
+
+전제는 **프론트와 API 가 같은 호스트명 아래 있는 것**이다. AWS 는 CloudFront 가
+그 조건을 만들고, 로컬은 `next.config.ts` 의 rewrite 가 대신한다.
+
+> **`rewrites()` 는 `next build` 때 평가돼 `routes-manifest.json` 에 구워진다.**
+> `next start` 는 다시 읽지 않으므로 기동 환경변수로 켜고 끌 수 없다. 그래서
+> 목적지를 `http://spring-boot:8080` 으로 고정했다 — compose 서비스 이름과 K8s
+> Service 이름을 양쪽 다 그렇게 두면 어느 환경에서나 같은 값이 된다.
+
+프론트 자신의 엔드포인트는 `/api` 밖에 둔다. 헬스는 `/healthz` 다 — `/api/health`
+로 두면 배포에서 ALB 가 그 요청을 Spring 으로 보내, 프론트 상태를 묻는데 Spring 이
+답한다.
 
 ---
 
@@ -402,19 +425,30 @@ AI 관련 API 를 **전부 배제**하고 EMR 코어만 가져간다.
 ArangoDB(처방 그래프 전용)와 RabbitMQ/AmazonMQ(검증 job 전용)는 AI 를 걷어내면
 소비자가 없어 함께 빠진다. **결과적으로 DR 상태 저장소는 Cloud SQL 하나**다.
 
-### 10.1 별도 이미지를 만들지 않는다
+### 10.1 별도 이미지를 만들지 않는다 (완료)
 
-`LLM_PROVIDER=stub` 이라는 seam 이 이미 있고 CI 의 `compose e2e` 가 매번 그 형상으로
-돈다. 이미지를 갈래로 나누면 빌드·테스트 표면이 두 배가 되고 **두 갈래가 조용히
-어긋난다.** 같은 이미지, 다른 배포 프로파일로 간다.
+**프론트도 Spring 도 전체 스택과 같은 이미지를 쓴다.**
 
-### 10.2 먼저 재야 할 것
+```
+spring-boot   SPRING_PROFILES_ACTIVE=docker,dr    기동 값
+frontend      설정 없음                            AI 유무는 서버 503 이 알린다
+```
 
-**Spring 이 AI 서비스 없이 정상 동작하는지 확인된 바 없다.** 화면이 깨지는지, 빈
-상태로 뜨는지, 예외를 던지는지 모른다.
+Spring 쪽은 원래 빌드 인자가 없어 내용이 같았는데 이름만 `bitcomputer-dr-*` 로
+갈려 있었다. 레지스트리에 올리면 그만큼 빌드가 두 배가 되고 두 태그가 어긋날
+자리가 생기므로 이름을 합쳤다.
 
-이건 DR 뿐 아니라 **AWS 배포 순서**에도 걸린다 — 코어부터 올리고 AI 를 나중에
-붙일 수 있는지가 그 답에 달려 있다.
+프론트는 진짜로 달랐다. 빌드 인자 둘을 없애 하나로 만들었다(§7.2).
+
+**이미지 7개, Deployment 8개다.** DR 이 추가하는 이미지는 0이다.
+
+### 10.2 Spring 이 AI 없이 도는가 (확인됨)
+
+`features.ai.enabled=false` 로 RabbitMQ·ArangoDB 배선이 함께 빠지고 AI 엔드포인트는
+503 을 낸다. CI 의 `dr stack` 잡이 매번 그 형상으로 스택을 세워 검증한다.
+
+**404 가 아니라 503 인 이유**는 "이 배포에 그 기능이 없다" 와 "주소를 잘못 불렀다"
+를 구별하기 위해서다. 문구까지 실어 보내므로 화면에서도 갈린다.
 
 ### 10.3 동기화
 
@@ -445,7 +479,7 @@ GCP Database Migration Service 로 RDS 를 외부 소스로 두고 연속 CDC �
 ```
 진입점            CloudFront (WAF 는 여기에만)
 프론트            컨테이너로 클러스터, 정적 export 안 함
-ALB              private subnet + CloudFront VPC origin (리전 지원 확인 후)
+ALB              private subnet + CloudFront VPC origin (서울 지원 확인됨)
 라우팅            Gateway API (Ingress 아님)
 EKS              eksctl, 테라폼 밖
 MySQL            RDS
@@ -453,20 +487,20 @@ RabbitMQ         AmazonMQ
 Redis            ElastiCache
 ArangoDB         인클러스터 + EBS 동적 프로비저닝
 images-storage   1단계 EFS (코드 수정 0, 용량 100MB 대라 단가 차이 무의미), 2단계 S3
-테라폼 제외       EKS, ALB/리스너/TG/ASG, RDS 본체, Route53, VPN, 정적 콘텐츠 S3
+테라폼 제외       EKS, ALB/리스너/TG/ASG, Route53, VPN, 정적 콘텐츠 S3
 GCP DR           AI 전면 배제, Cloud SQL 하나
 ```
 
 ### 열림
 
 ```
-1. 이미지 저장소 GHCR vs ECR        프라이빗 클러스터면 ECR 이 유리(NAT 회피, IRSA 인증)
+1. ~~이미지 저장소~~               GHCR private 로 확정 (11 §5)
 2. ArgoCD 태그 갱신                 CI 커밋 vs Image Updater
-3. ~~프론트 헬스 엔드포인트~~        완료 — `/api/health` 추가, compose 헬스체크도 함께
+3. ~~프론트 헬스 엔드포인트~~        완료 — `/healthz` 추가, compose 헬스체크도 함께
 4. 노드 그룹 분리 여부               AI 워크로드 격리
 5. AmazonMQ 엔진 버전 / 단일 vs 클러스터
 6. 로그 수집 경로                   Fluent Bit → S3 직접 vs CloudWatch 경유
-7. CloudFront VPC origin 리전 지원 확인
+7. ~~CloudFront VPC origin 리전 지원~~   `ap-northeast-2` 지원 확인됨 (11 §1.1)
 ```
 
 ### 코드 수정이 필요한 것
@@ -474,13 +508,13 @@ GCP DR           AI 전면 배제, Cloud SQL 하나
 ```
 1. ImageStorageUtil / WebMvcConfig 경로 탐색 → 프로퍼티 준수      (이전 전 필수)
 2. http/client.ts 빈 baseURL → 상대 경로                        (한 줄)
-3. SQUID 가중치 전달 경로 (이미지에 굽기 vs S3+initContainer)
+3. SQUID 가중치를 S3 에 올리고 initContainer 로 받게 한다 (11 §4.4)
 ```
 
 완료:
 
 ```
-프론트 /api/health   force-dynamic, 상류를 확인하지 않음. compose 헬스체크 연동
+프론트 /healthz   force-dynamic, 상류를 확인하지 않음. compose 헬스체크 연동
                      -> frontend 가 처음으로 (healthy) 를 찍는다
 ```
 

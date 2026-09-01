@@ -4,7 +4,7 @@ import { GET, dynamic } from "../route";
 
 // 이 라우트는 쿠버네티스 readinessProbe 가 부를 자리다. 지켜야 할 성질이 셋이고,
 // 셋 다 "없어도 겉보기에는 멀쩡한" 종류라 테스트가 아니면 드러나지 않는다.
-describe("GET /api/health", () => {
+describe("GET /healthz", () => {
   it("200 과 상태 본문을 돌려준다", async () => {
     const response = GET();
 

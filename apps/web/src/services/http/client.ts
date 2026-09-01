@@ -6,12 +6,19 @@ let sharedInstance: AxiosInstance | null = null;
 let interceptorsAttached = false;
 
 function createInstance(options?: HttpClientOptions): AxiosInstance {
-  const defaultBaseUrl =
-    process.env.NEXT_PUBLIC_API_BASE_URL && process.env.NEXT_PUBLIC_API_BASE_URL.trim().length > 0
-      ? process.env.NEXT_PUBLIC_API_BASE_URL
-      : "http://localhost:8080";
-
-  const baseURL = options?.baseURL ?? defaultBaseUrl;
+  // 상대 경로다. 절대 주소를 쓰지 않는다.
+  //
+  // 예전에는 `NEXT_PUBLIC_API_BASE_URL` 로 API 주소를 받았다. 그 값은
+  // **빌드 시점에 번들에 박히므로** 도메인마다 프론트 이미지를 따로 구워야 했다 —
+  // AWS 용, DR 용, 로컬용이 각각 다른 이미지가 된다.
+  //
+  // 빈 baseURL 은 요청을 현재 오리진으로 보낸다. 프론트와 API 를 같은 호스트명
+  // 아래 두는 것이 그 전제이고, 배포에서는 CloudFront 가(`/*` 프론트, `/api/*`
+  // Spring), 로컬에서는 next.config 의 rewrite 가 그 조건을 만든다.
+  //
+  // **GCP DR 도 같은 조건을 지켜야 한다.** 프론트와 API 를 다른 호스트에 두면
+  // 이 한 줄 때문에 프론트 이미지가 다시 갈라진다.
+  const baseURL = options?.baseURL ?? "";
   const timeout = options?.timeoutMs ?? 15000;
 
   const instance = axios.create({
